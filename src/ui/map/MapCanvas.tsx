@@ -131,9 +131,10 @@ export function MapCanvas() {
         }
         ctx2d.closePath();
         ctx2d.fill();
-        // 中心線
-        ctx2d.strokeStyle = 'rgba(255, 90, 60, 0.9)';
+        // 中心線(破線 — 海流の流線と見分けるため)
+        ctx2d.strokeStyle = 'rgba(255, 150, 40, 0.9)';
         ctx2d.lineWidth = 2;
+        ctx2d.setLineDash([8, 6]);
         ctx2d.beginPath();
         for (let col = 0; col < W; col++) {
           const x = (col + 0.5) * cellW;
@@ -142,6 +143,7 @@ export function MapCanvas() {
           else ctx2d.lineTo(x, y);
         }
         ctx2d.stroke();
+        ctx2d.setLineDash([]);
       }
     }
 
