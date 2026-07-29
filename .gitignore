@@ -1,0 +1,10 @@
+node_modules/
+dist/
+out/
+test-results/
+playwright-report/
+*.tsbuildinfo
+.DS_Store
+
+# 第三者著作物(参照専用、公開しない)
+docs/参考-ExoClim2/動画要約/
