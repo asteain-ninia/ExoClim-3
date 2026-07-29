@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { latDegOfRow, lonDegOfCol } from '@/domain/grid';
 import { KOPPEN_CLASSES } from '@/domain/koppen';
 import type { PipelineResult } from '@/sim/types';
+import { smoothForDrawing } from '@/domain/polyline';
 import { useResultsStore } from '@/store/results';
 import { useUiStore } from '@/store/ui';
 import {
@@ -147,52 +148,43 @@ export function MapCanvas() {
       }
     }
 
-    // 海流オーバーレイ: 環流の流線(赤 = 暖、青 = 寒、白 = 中立。矢印 = 流向)
+    // 海流オーバーレイ: 環流の流線(赤 = 暖、青 = 寒、白 = 中立。矢印 = 流向)。
+    // 月選択で季節版(WL#28 の夏冬マップの一般化)。描画前に Chaikin 平滑化。
     if (overlay === 'currents') {
       const colors = { warm: '#ff6a50', cold: '#58b0ff', neutral: '#e8e8e8' } as const;
       const xOf = (lon: number) => ((lon + 180) / 360) * CANVAS_W;
       const yOf = (lat: number) => ((90 - lat) / 180) * CANVAS_H;
-      for (const sl of result.ocean.streamlines) {
+      const lines =
+        month >= 0 ? (result.ocean.monthlyStreamlines[month] ?? result.ocean.streamlines) : result.ocean.streamlines;
+      for (const sl of lines) {
         ctx2d.strokeStyle = colors[sl.kind];
         ctx2d.fillStyle = colors[sl.kind];
-        ctx2d.lineWidth = 2;
-        const pts = sl.points;
-        // 経度ラップで分割しながら折線を描く(教訓 §5)
-        ctx2d.beginPath();
-        let started = false;
-        for (let k = 0; k + 1 < pts.length; k += 2) {
-          const x = xOf(pts[k + 1] ?? 0);
-          const y = yOf(pts[k] ?? 0);
-          if (!started) {
-            ctx2d.moveTo(x, y);
-            started = true;
-          } else {
-            const px = xOf(pts[k - 1] ?? 0);
-            if (Math.abs(x - px) > CANVAS_W / 2) {
-              ctx2d.stroke();
-              ctx2d.beginPath();
-              ctx2d.moveTo(x, y);
-            } else {
-              ctx2d.lineTo(x, y);
-            }
-          }
-        }
-        ctx2d.stroke();
-        // 矢印(点列の並び = 流向)。5 点ごと + 終端
-        const nPts = pts.length / 2;
-        for (let k = 2; k < nPts; k += 5) {
-          const x1 = xOf(pts[k * 2 + 1] ?? 0);
-          const y1 = yOf(pts[k * 2] ?? 0);
-          const x0 = xOf(pts[(k - 1) * 2 + 1] ?? 0);
-          const y0 = yOf(pts[(k - 1) * 2] ?? 0);
-          if (Math.abs(x1 - x0) > CANVAS_W / 2) continue;
-          const ang = Math.atan2(y1 - y0, x1 - x0);
+        ctx2d.lineWidth = 2.2;
+        ctx2d.lineJoin = 'round';
+        for (const pts of smoothForDrawing(sl.points, 2)) {
           ctx2d.beginPath();
-          ctx2d.moveTo(x1, y1);
-          ctx2d.lineTo(x1 - 7 * Math.cos(ang - 0.42), y1 - 7 * Math.sin(ang - 0.42));
-          ctx2d.lineTo(x1 - 7 * Math.cos(ang + 0.42), y1 - 7 * Math.sin(ang + 0.42));
-          ctx2d.closePath();
-          ctx2d.fill();
+          for (let k = 0; k + 1 < pts.length; k += 2) {
+            const x = xOf(pts[k + 1] ?? 0);
+            const y = yOf(pts[k] ?? 0);
+            if (k === 0) ctx2d.moveTo(x, y);
+            else ctx2d.lineTo(x, y);
+          }
+          ctx2d.stroke();
+          // 矢印(点列の並び = 流向)。平滑化後の点で 12 点ごと + 終端
+          const nPts = pts.length / 2;
+          for (let k = 6; k < nPts; k += 12) {
+            const x1 = xOf(pts[k * 2 + 1] ?? 0);
+            const y1 = yOf(pts[k * 2] ?? 0);
+            const x0 = xOf(pts[(k - 1) * 2 + 1] ?? 0);
+            const y0 = yOf(pts[(k - 1) * 2] ?? 0);
+            const ang = Math.atan2(y1 - y0, x1 - x0);
+            ctx2d.beginPath();
+            ctx2d.moveTo(x1, y1);
+            ctx2d.lineTo(x1 - 7 * Math.cos(ang - 0.42), y1 - 7 * Math.sin(ang - 0.42));
+            ctx2d.lineTo(x1 - 7 * Math.cos(ang + 0.42), y1 - 7 * Math.sin(ang + 0.42));
+            ctx2d.closePath();
+            ctx2d.fill();
+          }
         }
       }
     }

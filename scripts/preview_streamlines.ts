@@ -10,6 +10,7 @@ import { buildSimContext } from '../src/sim/context';
 import { computeItcz } from '../src/sim/step01_itcz';
 import { computeWindBelt } from '../src/sim/step02_windbelt';
 import { computeOceanCurrent } from '../src/sim/step03_ocean';
+import { smoothForDrawing } from '../src/domain/polyline';
 
 const OUT_DIR = path.join(process.cwd(), 'out', 'preview');
 fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -63,11 +64,12 @@ function drawLine(
   }
 }
 
-function preview(name: string, params: PlanetParams): void {
+function preview(name: string, params: PlanetParams, month = -1): void {
   const ctx = buildSimContext(params);
   const itcz = computeItcz(ctx);
   const wind = computeWindBelt(ctx, itcz);
-  const ocean = computeOceanCurrent(ctx, wind);
+  const ocean = computeOceanCurrent(ctx, itcz, wind);
+  const lines = month >= 0 ? (ocean.monthlyStreamlines[month] ?? []) : ocean.streamlines;
   const { grid, terrain } = ctx;
   const W = grid.widthCells;
   const H = grid.heightCells;
@@ -91,9 +93,9 @@ function preview(name: string, params: PlanetParams): void {
   const xOf = (lon: number) => Math.round(((lon + 180) / 360) * png.width);
   const yOf = (lat: number) => Math.round(((90 - lat) / 180) * png.height);
   let landHits = 0;
-  for (const sl of ocean.streamlines) {
+  for (const sl of lines) {
     const rgb = COLORS[sl.kind];
-    const pts = sl.points;
+    for (const pts of smoothForDrawing(sl.points, 2)) {
     for (let k = 2; k + 1 < pts.length; k += 2) {
       const x0 = xOf(pts[k - 1] ?? 0);
       const y0 = yOf(pts[k - 2] ?? 0);
@@ -113,15 +115,20 @@ function preview(name: string, params: PlanetParams): void {
         if (rr >= 0 && rr < H && terrain.landMask[rr * W + ((cc + W) % W)]) landHits++;
       }
     }
+    }
   }
   fs.writeFileSync(path.join(OUT_DIR, `streamlines_${name}.png`), PNG.sync.write(png));
-  console.log(`${name}: 流線 ${ocean.streamlines.length} 本, 陸横断サンプル ${landHits} 件`);
+  console.log(`${name}: 流線 ${lines.length} 本, 陸横断サンプル ${landHits} 件`);
 }
 
-const presets: TerrainPresetName[] = ['earth', 'idealized_continent', 'two_continents', 'aquaplanet'];
+const presets: TerrainPresetName[] = ['idealized_continent', 'two_continents', 'aquaplanet'];
 for (const p of presets) {
   preview(p, { ...EARTH_PARAMS, gridResolutionDeg: 2, terrain: { kind: 'preset', preset: p } });
 }
+// 実在地球は 1° で年平均 + 夏(7月) + 冬(1月)
+preview('earth', { ...EARTH_PARAMS, gridResolutionDeg: 1 });
+preview('earth_jul', { ...EARTH_PARAMS, gridResolutionDeg: 1 }, 6);
+preview('earth_jan', { ...EARTH_PARAMS, gridResolutionDeg: 1 }, 0);
 preview('procedural42', {
   ...EARTH_PARAMS,
   gridResolutionDeg: 2,

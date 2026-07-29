@@ -1,17 +1,37 @@
-// Step 3: 海流。docs/spec/03_海流.md
-// (a) 海盆のトポロジー(緯度行ごとの連続海域)から境界流・高緯度吹送流・
-//     赤道湧昇を判定し、海面温度偏差(°C)として定量化する。
-// (b) Artifexian / Pasta WL#28 の演繹手順(docs/動画書き起こし/)どおりに
-//     環流の流線を構築する: 貿易風帯で西向き → 大陸棚で分割(赤道側は反流、
-//     極側は境界流)→ フェレルセル中程で東向き → 分割で環流を閉じる →
-//     極東風帯で西向き → 開いた極海には周極流。赤 = 暖、青 = 寒、黒 = 中立。
-// 地理決め打ちはしない。逆行自転では東西が鏡像になる。
+// Step 3: 海流。docs/spec/01-04_循環.md
+// (a) 海盆のトポロジーから境界流・高緯度吹送流・赤道湧昇を判定し、
+//     海面温度偏差(°C)として定量化する(気温 EBM への Q フラックス源)。
+// (b) Worldbuilder's Log #28 の手順を月別に忠実トレースして環流の流線を作る。
+//     字幕全文と動画フレーム(docs/動画書き起こし/)に基づく:
+//     - まず ITCZ に沿う赤道反流(東向き・中立)。陸棚で U ターンし、
+//       ITCZ から 5〜10° 離れた西向きの赤道流(中立)を返す
+//     - 赤道流が陸棚に当たると分割: 極向き = 暖(赤)、赤道向き = 寒(青)
+//     - 海流は海岸を数百 km 沖でなぞり、小さな湾・沿岸海は無視する
+//       (実装: 陸を膨張させたブロックマスク上を壁伝いに這行)
+//     - 夏半球は ~50°、冬半球は ~40° で偏西風が東へ転回させ、横断中も
+//       極向きに傾く(まだ熱を運ぶので赤のまま)
+//     - 極向きの暖流は夏 ~78° / 冬 ~70° まで(海氷が陸棚と同様にブロック)、
+//       そこで極東風が西向きに返す(スラントつき)。青が環流を閉じる
+//     - 閉ループは強制しない。訪問済み状態への到達 = 合流で停止
+//     - 陸のない緯度帯は風帯ごとの周極流(全海惑星は木星型バンド)
+// 地理決め打ちはしない。逆行自転では帯風の反転だけで全て鏡像になる。
 
-import { latDegOfRow, lonDegOfCol, rowOfLatDeg, cellWidthKm, wrapCol } from '@/domain/grid';
+import { latDegOfRow, lonDegOfCol, rowOfLatDeg, cellHeightKm, cellWidthKm, wrapCol } from '@/domain/grid';
+import { MONTHS_PER_YEAR } from '@/domain/insolation';
 import { MODEL_CONSTANTS as K } from './constants';
-import type { OceanCurrentResult, OceanStreamline, SimContext, WindBeltResult } from './types';
+import type {
+  ItczResult,
+  OceanCurrentResult,
+  OceanStreamline,
+  SimContext,
+  WindBeltResult,
+} from './types';
 
-export function computeOceanCurrent(ctx: SimContext, windBelt: WindBeltResult): OceanCurrentResult {
+export function computeOceanCurrent(
+  ctx: SimContext,
+  itcz: ItczResult,
+  windBelt: WindBeltResult,
+): OceanCurrentResult {
   const { grid, params, terrain } = ctx;
   const W = grid.widthCells;
   const H = grid.heightCells;
@@ -21,10 +41,18 @@ export function computeOceanCurrent(ctx: SimContext, windBelt: WindBeltResult): 
   const sstAnomalyC = new Float32Array(grid.cellCount);
   const currentClass = new Int8Array(grid.cellCount);
 
+  // SST 偏差の帯域も惑星固有の風帯から導出(地球でそれぞれ ~8/38/68° に一致)
+  const meanOf = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
+  const ridgeMean = Math.abs(meanOf(windBelt.monthlyRidgeLatNDeg));
+  const pfMean = Math.abs(meanOf(windBelt.monthlyPolarFrontLatNDeg));
+  const eccMean = Math.min(8, Math.max(4, ridgeMean * 0.22));
+  const separationLat = ridgeMean + 0.25 * (pfMean - ridgeMean); // 境界流の分離緯度
+  const driftHiLat = Math.min(84, pfMean + 8);
+
   for (let row = 0; row < H; row++) {
     const lat = latDegOfRow(grid, row);
     const absLat = Math.abs(lat);
-    if (absLat > 72) continue;
+    if (absLat > driftHiLat + 4) continue;
     const kmPerCell = cellWidthKm(grid, row, params.body.radiusKm);
 
     for (let col = 0; col < W; col++) {
@@ -53,10 +81,10 @@ export function computeOceanCurrent(ctx: SimContext, windBelt: WindBeltResult): 
 
       let anomaly = 0;
       // 亜熱帯: 西岸境界流(暖・極向き)と東岸境界流(寒・赤道向き)。
-      // 暖流は ~40° で海盆内へ分離する(実物の黒潮・メキシコ湾流の分離緯度。
-      // これより極側の海盆西縁は亜寒帯循環の寒流: ラブラドル/親潮/フォークランド)
-      if (absLat >= 8 && absLat <= 40) {
-        const bandW = bellBand(absLat, 8, 40, 4);
+      // 暖流は分離緯度(リッジ + フェレルセル幅×0.25。地球 ≈ 38°)で海盆内へ
+      // 分離する。これより極側の海盆西縁は亜寒帯循環の寒流(ラブラドル/親潮)
+      if (absLat >= eccMean && absLat <= separationLat) {
+        const bandW = bellBand(absLat, eccMean, separationLat, 4);
         if (nearWestBoundaryKm < K.boundaryCurrentReachKm) {
           anomaly +=
             K.warmBoundaryCurrentC * (1 - nearWestBoundaryKm / K.boundaryCurrentReachKm) * bandW;
@@ -67,8 +95,8 @@ export function computeOceanCurrent(ctx: SimContext, windBelt: WindBeltResult): 
         }
       }
       // 中高緯度: 暖流吹送域(海盆東側ほど暖かい)と海盆西縁の寒流帰還
-      if (absLat >= 40 && absLat <= 68) {
-        const bandW = bellBand(absLat, 40, 68, 6);
+      if (absLat >= separationLat && absLat <= driftHiLat) {
+        const bandW = bellBand(absLat, separationLat, driftHiLat, 6);
         const widthFactor = Math.min(1, basinWidthDeg / 55); // 狭い海では発達しない
         anomaly += K.warmDriftC * Math.pow(pos, 1.4) * bandW * widthFactor;
         if (pos < 0.35) {
@@ -76,16 +104,22 @@ export function computeOceanCurrent(ctx: SimContext, windBelt: WindBeltResult): 
         }
       }
       // 赤道湧昇(海盆東側の寒水舌)
-      if (absLat < 7 && pos > 0.5 && basinWidthDeg > 40) {
-        anomaly += K.equatorialUpwellingC * ((pos - 0.5) / 0.5) * (1 - absLat / 7);
+      if (absLat < eccMean && pos > 0.5 && basinWidthDeg > 40) {
+        anomaly += K.equatorialUpwellingC * ((pos - 0.5) / 0.5) * (1 - absLat / eccMean);
       }
 
       sstAnomalyC[i] = anomaly;
       currentClass[i] = anomaly > 0.5 ? 1 : anomaly < -0.5 ? -1 : 0;
     }
   }
-  const streamlines = buildStreamlines(ctx, windBelt);
-  return { sstAnomalyC, currentClass, streamlines };
+
+  // ---- 流線: 月別トレース + 年平均(帯の年平均値でトレース) ----
+  const monthlyStreamlines: OceanStreamline[][] = [];
+  for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+    monthlyStreamlines.push(traceStreamlines(ctx, itcz, windBelt, m));
+  }
+  const streamlines = traceStreamlines(ctx, itcz, windBelt, -1);
+  return { sstAnomalyC, currentClass, streamlines, monthlyStreamlines };
 }
 
 /** 帯 [lo, hi] 内で 1、外側へ幅 edge の余韻で減衰 */
@@ -96,68 +130,7 @@ function bellBand(x: number, lo: number, hi: number, edge: number): number {
 }
 
 // ---------------------------------------------------------------------------
-// 環流の流線構築(Artifexian / Pasta WL#28 の演繹手順)
-// ---------------------------------------------------------------------------
-
-/** 循環区間: cols s .. s+len-1 (mod W) が海 */
-interface OceanRun {
-  s: number;
-  len: number;
-}
-
-function oceanRunsAtRow(ctx: SimContext, row: number): OceanRun[] {
-  const { grid, terrain } = ctx;
-  const W = grid.widthCells;
-  const land = terrain.landMask;
-  const base = row * W;
-  // 陸が全く無い行は 1 本の全周ラン
-  let anyLand = false;
-  for (let c = 0; c < W; c++) {
-    if (land[base + c]) {
-      anyLand = true;
-      break;
-    }
-  }
-  if (!anyLand) return [{ s: 0, len: W }];
-  const runs: OceanRun[] = [];
-  // 陸セルの直後から走査開始(ラップ跨ぎのランを一体で拾う)
-  let start = -1;
-  for (let c = 0; c < W; c++) {
-    if (land[base + c]) {
-      start = c;
-      break;
-    }
-  }
-  let cur = -1;
-  for (let k = 1; k <= W; k++) {
-    const c = (start + k) % W;
-    if (!land[base + c]) {
-      if (cur < 0) cur = c;
-    } else if (cur >= 0) {
-      runs.push({ s: cur, len: (c - cur + W) % W });
-      cur = -1;
-    }
-  }
-  if (cur >= 0) runs.push({ s: cur, len: (start + 1 - cur + W) % W || W });
-  return runs;
-}
-// ---------------------------------------------------------------------------
-// 環流の流線: Worldbuilder's Log #28 / Artifexian の手順の忠実なトレース
-// (docs/動画書き起こし/ の字幕原文に基づく。docs/spec/01-04_循環.md 参照)
-//
-//   1. 貿易風帯で西向きの流れを出発させる(順行時。逆行は全て鏡像)
-//   2. 陸(大陸棚)に当たったら分割: 極向き = 暖流(赤)、赤道向き = 寒流(青)
-//   3. 分割された流れは沿岸を壁伝いに這行し、その緯度の帯風が離岸方向を
-//      向いたときに離岸して帯状の流れ(中立)になる:
-//        - 東岸: フェレルセル中程以上で偏西風が東へ引き剥がす
-//        - 西岸: 貿易風・極東風が西へ引き剥がす
-//        - 赤道近傍: 赤道反流として東へ戻る
-//   4. 帯状の流れが再び陸に当たれば再分割 — の連鎖で環流が「結果として」生じる。
-//      閉ループは強制しない(手順に従うと必ずしも全てが閉じない)。
-//   5. 訪問済みの状態に到達したら合流とみなして停止する。
-//      陸のない緯度帯は風帯ごとの周極流(全海惑星では木星型バンド)。
-//
-// 流れはセル単位で海のみを移動するため、陸横断は構造的に起こらない。
+// WL#28 手順の流れ追跡
 // ---------------------------------------------------------------------------
 
 /** 進行方位: 0=北, 1=東, 2=南, 3=西(row0 = 北端の格子) */
@@ -166,26 +139,22 @@ const DROW = [-1, 0, 1, 0] as const;
 const DCOL = [0, 1, 0, -1] as const;
 
 function rotate(h: Heading, quarterTurns: number): Heading {
-  return (((h + quarterTurns) % 4) + 4) % 4 as Heading;
+  return ((((h + quarterTurns) % 4) + 4) % 4) as Heading;
 }
 
-interface TraceBands {
+interface SeasonBands {
+  /** 反流帯の半幅(この範囲は ITCZ 系の東向き) */
   eccDeg: number;
-  ridgeDeg: number;
-  pfDeg: number;
-  westerlyReleaseDeg: number;
-  polarReleaseDeg: number;
-  tradeDirEast: boolean; // 貿易風の流す向き(順行 = 西 = false)
-}
-
-/** その緯度で帯風が流れを運ぶ向き(東 = true)。離岸判定にも使う。null = 遷移帯 */
-function bandCarryDirEast(bands: TraceBands, latDeg: number): boolean | null {
-  const a = Math.abs(latDeg);
-  if (a <= bands.eccDeg) return !bands.tradeDirEast; // 赤道反流
-  if (a < bands.ridgeDeg) return bands.tradeDirEast;
-  if (a >= bands.westerlyReleaseDeg && a < bands.pfDeg) return !bands.tradeDirEast; // 偏西風
-  if (a >= bands.polarReleaseDeg) return bands.tradeDirEast; // 極東風
-  return null; // リッジ直上・極前線の遷移帯では離岸しない
+  /** 貿易風帯の外縁(リッジ)。N/S 別 */
+  ridgeN: number;
+  ridgeS: number;
+  /** 偏西風が東へ転回させる緯度(夏 ~50 / 冬 ~40)。N/S 別 */
+  turnN: number;
+  turnS: number;
+  /** 暖流の極側到達 = 海氷縁(夏 ~78 / 冬 ~70)。N/S 別 */
+  polarN: number;
+  polarS: number;
+  tradeDirEast: boolean;
 }
 
 interface ZonalThread {
@@ -193,37 +162,101 @@ interface ZonalThread {
   row: number;
   col: number;
   dirEast: boolean;
+  kind: 'neutral' | 'warm';
+  /** 横断中の極向きスラント(-1 = 北へ、+1 = 南へ、0 = なし) */
+  slantRowDir: -1 | 0 | 1;
 }
 interface CoastThread {
   phase: 'coast';
   row: number;
   col: number;
   heading: Heading;
-  /** 陸が進行方向のどちら側か: +1 = 右、-1 = 左 */
   wallSide: 1 | -1;
   kind: 'warm' | 'cold';
 }
 type Thread = ZonalThread | CoastThread;
 
-export function buildStreamlines(ctx: SimContext, windBelt: WindBeltResult): OceanStreamline[] {
+/**
+ * month = 0..11 で月別、-1 で年平均の帯を使ってトレースする。
+ */
+function traceStreamlines(
+  ctx: SimContext,
+  itcz: ItczResult,
+  windBelt: WindBeltResult,
+  month: number,
+): OceanStreamline[] {
   const { grid, params, terrain } = ctx;
   const W = grid.widthCells;
   const H = grid.heightCells;
-  const land = terrain.landMask;
   const prograde = params.body.rotationDirection >= 0;
-  const isOcean = (row: number, col: number): boolean =>
-    row >= 0 && row < H && !land[row * W + wrapCol(grid, col)];
-
   const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
-  const ridgeDeg = Math.max(12, Math.abs(mean(windBelt.monthlyRidgeLatNDeg)));
-  const pfDeg = Math.max(ridgeDeg + 8, Math.abs(mean(windBelt.monthlyPolarFrontLatNDeg)));
-  const bands: TraceBands = {
-    eccDeg: Math.min(7, ridgeDeg * 0.25),
-    ridgeDeg,
-    pfDeg,
-    westerlyReleaseDeg: ridgeDeg + (pfDeg - ridgeDeg) * 0.35, // 「フェレルセル中程」(WL#28)
-    polarReleaseDeg: pfDeg + 3,
+
+  // ---- 季節の帯(月別 or 年平均) ----
+  const ridgeNRaw = month >= 0 ? (windBelt.monthlyRidgeLatNDeg[month] ?? 31) : mean(windBelt.monthlyRidgeLatNDeg);
+  const ridgeSRaw = month >= 0 ? (windBelt.monthlyRidgeLatSDeg[month] ?? -31) : mean(windBelt.monthlyRidgeLatSDeg);
+  const decl = month >= 0 ? (ctx.insolation.monthlyDeclinationDeg[month] ?? 0) : 0;
+  const tilt = Math.max(params.body.axialTiltDeg, 1e-6);
+  const declNorm = Math.max(-1, Math.min(1, decl / tilt));
+  // 夏度(0 = 冬、1 = 夏)。年平均は 0.5
+  const summerN = month >= 0 ? (declNorm + 1) / 2 : 0.5;
+  const summerS = 1 - summerN;
+  // 帯の位置は惑星固有の風帯構造(リッジ・極前線)からの相対値で導出する。
+  // 動画の「40-50°」「70-80°」は CRETÁK の値であり定数にしない:
+  //  - 転回緯度 = 「フェレルセルの中程」(WL#28 原文) = リッジ + セル幅 ×(0.40〜0.65)
+  //  - 極側到達 = 海氷縁 ≈ 極前線 + 10〜18°(夏ほど極側。地球で 70〜78° に一致)
+  const pfN = Math.abs(month >= 0 ? (windBelt.monthlyPolarFrontLatNDeg[month] ?? 60) : mean(windBelt.monthlyPolarFrontLatNDeg));
+  const pfS = Math.abs(month >= 0 ? (windBelt.monthlyPolarFrontLatSDeg[month] ?? -60) : mean(windBelt.monthlyPolarFrontLatSDeg));
+  const ridgeNAbs = Math.abs(ridgeNRaw);
+  const ridgeSAbs = Math.abs(ridgeSRaw);
+  const bands: SeasonBands = {
+    eccDeg: Math.min(8, Math.max(4, ridgeNAbs * 0.22)),
+    ridgeN: ridgeNAbs,
+    ridgeS: ridgeSAbs,
+    turnN: ridgeNAbs + (pfN - ridgeNAbs) * (0.4 + 0.25 * summerN),
+    turnS: ridgeSAbs + (pfS - ridgeSAbs) * (0.4 + 0.25 * summerS),
+    polarN: Math.min(86, pfN + 10 + 8 * summerN),
+    polarS: Math.min(86, pfS + 10 + 8 * summerS),
     tradeDirEast: !prograde,
+  };
+
+  // ---- ブロックマスク: 膨張させた陸(沖合スタンドオフ + 小湾バイパス)+ 季節海氷 ----
+  const cellKm = cellHeightKm(grid, params.body.radiusKm);
+  const standoffCells = Math.max(1, Math.round(250 / cellKm));
+  const blocked = new Uint8Array(grid.cellCount);
+  for (let row = 0; row < H; row++) {
+    for (let col = 0; col < W; col++) {
+      if (!terrain.landMask[row * W + col]) continue;
+      for (let dr = -standoffCells; dr <= standoffCells; dr++) {
+        const r = row + dr;
+        if (r < 0 || r >= H) continue;
+        for (let dc = -standoffCells; dc <= standoffCells; dc++) {
+          blocked[r * W + wrapCol(grid, col + dc)] = 1;
+        }
+      }
+    }
+  }
+  for (let row = 0; row < H; row++) {
+    const lat = latDegOfRow(grid, row);
+    if (lat > bands.polarN || lat < -bands.polarS) {
+      for (let col = 0; col < W; col++) blocked[row * W + col] = 1;
+    }
+  }
+  const isOpen = (row: number, col: number): boolean =>
+    row >= 0 && row < H && !blocked[row * W + wrapCol(grid, col)];
+
+  // ---- 帯風の運ぶ向き(離岸判定)。N/S の季節差を反映 ----
+  // 貿易風帯での離岸は赤道流レーン(ITCZ ± 5〜10°)の近傍のみ:
+  // 寒流は西岸をレーンまで這い降りてから西向きに合流する(WL#28)。
+  const carryDirEast = (latDeg: number): boolean | null => {
+    const a = Math.abs(latDeg);
+    const north = latDeg >= 0;
+    const turn = north ? bands.turnN : bands.turnS;
+    const polar = north ? bands.polarN : bands.polarS;
+    if (a <= bands.eccDeg) return !bands.tradeDirEast; // 反流帯
+    if (a <= bands.eccDeg + 4) return bands.tradeDirEast; // 赤道流レーン
+    if (a >= turn && a < polar - 2) return !bands.tradeDirEast; // 偏西風の転回帯
+    if (a >= polar - 2) return bands.tradeDirEast; // 極東風
+    return null; // それ以外は沿岸を這い続ける
   };
 
   const out: OceanStreamline[] = [];
@@ -231,55 +264,124 @@ export function buildStreamlines(ctx: SimContext, windBelt: WindBeltResult): Oce
   const zonalVisited = new Set<number>();
   const coastVisited = new Set<number>();
   let totalSegments = 0;
-
   const pushSegment = (kind: OceanStreamline['kind'], points: number[]) => {
-    if (points.length >= 6 && totalSegments < 160) {
-      out.push({ kind, points });
-      totalSegments++;
+    if (points.length < 6 || totalSegments >= 170) return;
+    // 微小ループ(孤立した膨張セルの周回など)は捨てる
+    let latMin = 90;
+    let latMax = -90;
+    let lonMin = 360;
+    let lonMax = -360;
+    for (let k = 0; k + 1 < points.length; k += 2) {
+      const lat = points[k] ?? 0;
+      const lon = points[k + 1] ?? 0;
+      if (lat < latMin) latMin = lat;
+      if (lat > latMax) latMax = lat;
+      if (lon < lonMin) lonMin = lon;
+      if (lon > lonMax) lonMax = lon;
     }
+    if (latMax - latMin < 7 && lonMax - lonMin < 7) return;
+    out.push({ kind, points });
+    totalSegments++;
   };
 
-  /** 陸に衝突した流れを分割する(極向き = 暖、赤道向き = 寒) */
   const spawnSplit = (row: number, col: number, landDirEast: boolean) => {
     const landHeading: Heading = landDirEast ? 1 : 3;
     for (const poleward of [true, false]) {
       const north = latDegOfRow(grid, row) >= 0;
       const heading: Heading = (poleward ? (north ? 0 : 2) : north ? 2 : 0) as Heading;
-      // 陸方位が進行方向の右なら wallSide=+1
       const wallSide: 1 | -1 = rotate(heading, 1) === landHeading ? 1 : -1;
       queue.push({ phase: 'coast', row, col, heading, wallSide, kind: poleward ? 'warm' : 'cold' });
     }
   };
 
-  // ---- 種まき: 貿易風帯の中央で各海盆に 1 本 + 陸なし帯の周極流 ----
-  for (const sign of [1, -1]) {
-    const seedRow = rowOfLatDeg(grid, ridgeDeg * 0.5 * sign);
-    for (const run of oceanRunsAtRow(ctx, seedRow)) {
-      if (run.len < 4) continue;
-      const startCol = wrapCol(grid, run.s + (bands.tradeDirEast ? 2 : run.len - 3));
-      queue.push({ phase: 'zonal', row: seedRow, col: startCol, dirEast: bands.tradeDirEast });
-    }
-  }
+  // ---- 種まき 1: ITCZ に沿う赤道反流(東向き・中立)。陸で分断される区間ごと ----
+  const centers =
+    month >= 0
+      ? itcz.monthlyCenterLatDegByCol[month]
+      : itcz.monthlyCenterLatDegByCol[Math.floor(MONTHS_PER_YEAR / 2)];
   {
-    // 陸のない緯度帯: 帯風の向きの周極流(帯中心が帯域内にあればその緯度)
-    const centers: Array<{ lat: number; east: boolean }> = [];
+    const eccOffsetDeg = bands.eccDeg + 3; // 反流の U ターン先(赤道流の緯度)
+    let seg: number[] = [];
+    let segStartCol = -1;
+    const flushSeg = (endCol: number) => {
+      if (seg.length >= 6) {
+        // 走査順が反流の流向(貿易風の逆)なので並びはそのまま = 流向
+        pushSegment('neutral', seg);
+        // U ターン: 反流の終端から両半球の赤道流(貿易風向き)を返す。
+        // 生成点が膨張海岸にかかっていたらレーン方向へ数セル逃がす
+        for (const sign of [1, -1]) {
+          const lat = (centers?.[endCol] ?? 0) + eccOffsetDeg * sign;
+          const row = rowOfLatDeg(grid, lat);
+          const dc = bands.tradeDirEast ? 1 : -1;
+          for (let back = 0; back <= 8; back++) {
+            const col = wrapCol(grid, endCol + dc * back);
+            if (isOpen(row, col)) {
+              queue.push({
+                phase: 'zonal',
+                row,
+                col,
+                dirEast: bands.tradeDirEast,
+                kind: 'neutral',
+                slantRowDir: 0,
+              });
+              break;
+            }
+          }
+        }
+      }
+      seg = [];
+      segStartCol = -1;
+    };
+    const colOrder = [...Array(W).keys()];
+    for (const c of colOrder) {
+      const col = bands.tradeDirEast ? W - 1 - c : c; // 反流の進行方向(貿易風の逆)順に走査
+      const row = rowOfLatDeg(grid, centers?.[col] ?? 0);
+      if (isOpen(row, col)) {
+        if (segStartCol < 0) segStartCol = col;
+        seg.push(latDegOfRow(grid, row), lonDegOfCol(grid, col));
+      } else if (segStartCol >= 0) {
+        flushSeg(wrapCol(grid, col + (bands.tradeDirEast ? 1 : -1)));
+      }
+    }
+    if (segStartCol >= 0) flushSeg(bands.tradeDirEast ? 0 : W - 1);
+  }
+
+  // ---- 種まき 2: 陸のない緯度帯の周極流(帯風の向き) ----
+  {
+    const centersBand: Array<{ lat: number; east: boolean }> = [];
     for (const sign of [1, -1]) {
-      centers.push({ lat: (ridgeDeg / 2) * sign, east: bands.tradeDirEast });
-      centers.push({ lat: ((ridgeDeg + pfDeg) / 2) * sign, east: !bands.tradeDirEast });
-      centers.push({ lat: Math.min(84, pfDeg + 10) * sign, east: bands.tradeDirEast });
+      const ridge = sign > 0 ? bands.ridgeN : bands.ridgeS;
+      const turn = sign > 0 ? bands.turnN : bands.turnS;
+      centersBand.push({ lat: (ridge / 2) * sign, east: bands.tradeDirEast });
+      centersBand.push({ lat: ((turn + (sign > 0 ? bands.polarN : bands.polarS)) / 2) * sign, east: !bands.tradeDirEast });
     }
     let groupStart = -1;
     for (let row = 0; row <= H; row++) {
-      const isChannel = row < H && oceanRunsAtRow(ctx, row).some((r) => r.len >= W);
-      if (isChannel && groupStart < 0) groupStart = row;
-      if (!isChannel && groupStart >= 0) {
+      let rowOpen = row < H;
+      if (rowOpen) {
+        for (let col = 0; col < W; col++) {
+          if (!isOpen(row, col)) {
+            rowOpen = false;
+            break;
+          }
+        }
+      }
+      if (rowOpen && groupStart < 0) groupStart = row;
+      if (!rowOpen && groupStart >= 0) {
         const latHi = latDegOfRow(grid, groupStart);
         const latLo = latDegOfRow(grid, row - 1);
         if (row - 1 - groupStart >= 2 / grid.resolutionDeg) {
-          const hits = centers.filter((b) => b.lat <= latHi && b.lat >= latLo);
+          const hits = centersBand.filter((b) => b.lat <= latHi && b.lat >= latLo);
           const lines = hits.length > 0 ? hits : [{ lat: (latHi + latLo) / 2, east: bands.tradeDirEast }];
           for (const line of lines) {
-            queue.push({ phase: 'zonal', row: rowOfLatDeg(grid, line.lat), col: 0, dirEast: line.east });
+            queue.push({
+              phase: 'zonal',
+              row: rowOfLatDeg(grid, line.lat),
+              col: 0,
+              dirEast: line.east,
+              kind: 'neutral',
+              slantRowDir: 0,
+            });
           }
         }
         groupStart = -1;
@@ -289,63 +391,81 @@ export function buildStreamlines(ctx: SimContext, windBelt: WindBeltResult): Oce
 
   // ---- トレース本体 ----
   let processed = 0;
-  while (queue.length > 0 && processed < 500) {
+  while (queue.length > 0 && processed < 600) {
     const t = queue.shift();
     if (!t) break;
     processed++;
 
     if (t.phase === 'zonal') {
-      // 近接緯度(±2 行)の同方向の流れは 1 本に合流させる(離岸のたびに
-      // 平行線が量産されて縞になるのを防ぐ)
       const zkey = (row: number, col: number) => (row * W + wrapCol(grid, col)) * 2 + (t.dirEast ? 1 : 0);
       if (zonalVisited.has(zkey(t.row, t.col))) continue;
       const dc = t.dirEast ? 1 : -1;
       const points: number[] = [];
+      let row = t.row;
       let col = t.col;
-      let steps = 0;
-      if (!isOcean(t.row, col)) continue;
-      for (; steps <= W; steps++) {
-        if (steps > 0 && zonalVisited.has(zkey(t.row, col))) break; // 既存の流れに合流
-        for (let dr = -2; dr <= 2; dr++) {
-          if (t.row + dr >= 0 && t.row + dr < H) zonalVisited.add(zkey(t.row + dr, col));
+      let slantAcc = 0;
+      if (!isOpen(row, col)) continue;
+      for (let steps = 0; steps <= W + H; steps++) {
+        if (steps > 0 && zonalVisited.has(zkey(row, col))) break; // 合流
+        for (let dr = -3; dr <= 3; dr++) {
+          if (row + dr >= 0 && row + dr < H) zonalVisited.add(zkey(row + dr, col));
         }
-        if (steps % 2 === 0) points.push(latDegOfRow(grid, t.row), lonDegOfCol(grid, wrapCol(grid, col)));
-        if (!isOcean(t.row, col + dc)) {
-          // 大陸棚に衝突 → 分割
-          points.push(latDegOfRow(grid, t.row), lonDegOfCol(grid, wrapCol(grid, col)));
-          spawnSplit(t.row, wrapCol(grid, col), t.dirEast);
+        if (steps % 2 === 0) points.push(latDegOfRow(grid, row), lonDegOfCol(grid, wrapCol(grid, col)));
+        // スラント(横断しながら極向きへ 8°/90° 程度)
+        if (t.slantRowDir !== 0) {
+          slantAcc += 0.09;
+          if (slantAcc >= 1) {
+            slantAcc = 0;
+            if (isOpen(row + t.slantRowDir, col)) row += t.slantRowDir;
+          }
+        }
+        if (!isOpen(row, col + dc)) {
+          points.push(latDegOfRow(grid, row), lonDegOfCol(grid, wrapCol(grid, col)));
+          spawnSplit(row, wrapCol(grid, col), t.dirEast);
           break;
         }
         col += dc;
       }
-      pushSegment('neutral', points);
+      pushSegment(t.kind, points);
       continue;
     }
 
-    // ---- 沿岸這行(壁伝い) ----
+    // ---- 沿岸這行(膨張マスク上の壁伝い = 数百 km 沖 + 小湾バイパス) ----
     let { row, col, heading } = t;
     const { wallSide, kind } = t;
     const points: number[] = [];
-    if (!isOcean(row, col)) continue;
+    if (!isOpen(row, col)) continue;
     for (let steps = 0; steps < 3 * (W + H); steps++) {
       const key = ((row * W + wrapCol(grid, col)) * 4 + heading) * 2 + (wallSide > 0 ? 1 : 0);
       if (coastVisited.has(key)) break; // 合流
       coastVisited.add(key);
       points.push(latDegOfRow(grid, row), lonDegOfCol(grid, wrapCol(grid, col)));
 
-      // 離岸判定: 壁(陸)の反対方向が東西で、その緯度の帯風がその向きに運ぶ
+      // 離岸判定: 壁の反対方向が東西で、その緯度の帯風がその向きに運ぶ
       const wallDir = rotate(heading, wallSide);
       if (wallDir === 1 || wallDir === 3) {
-        const offshoreEast = wallDir === 3; // 陸が西なら離岸方向は東
+        const offshoreEast = wallDir === 3;
         const lat = latDegOfRow(grid, row);
-        const carry = bandCarryDirEast(bands, lat);
+        const carry = carryDirEast(lat);
         if (carry !== null && carry === offshoreEast && steps > 2) {
-          queue.push({ phase: 'zonal', row, col: wrapCol(grid, col), dirEast: offshoreEast });
+          // 転回帯の横断は熱を運び続けるので暖(赤)。極東風帯・貿易風帯は中立
+          const a = Math.abs(lat);
+          const north = lat >= 0;
+          const inWesterly = a >= (north ? bands.turnN : bands.turnS) && a < (north ? bands.polarN : bands.polarS) - 2;
+          const slant: -1 | 0 | 1 = inWesterly || a >= (north ? bands.polarN : bands.polarS) - 2 ? (north ? -1 : 1) : 0;
+          queue.push({
+            phase: 'zonal',
+            row,
+            col: wrapCol(grid, col),
+            dirEast: offshoreEast,
+            kind: inWesterly && kind === 'warm' ? 'warm' : 'neutral',
+            slantRowDir: slant,
+          });
           break;
         }
       }
 
-      // 壁伝いの次の一歩: 壁側 → 直進 → 反壁側 → 後退 の順で海を探す
+      // 壁伝いの次の一歩: 壁側 → 直進 → 反壁側 → 後退
       const tryHeadings: Heading[] = [
         rotate(heading, wallSide),
         heading,
@@ -356,7 +476,7 @@ export function buildStreamlines(ctx: SimContext, windBelt: WindBeltResult): Oce
       for (const h of tryHeadings) {
         const nr = row + DROW[h];
         const nc = col + DCOL[h];
-        if (isOcean(nr, nc)) {
+        if (isOpen(nr, nc)) {
           row = nr;
           col = wrapCol(grid, nc);
           heading = h;

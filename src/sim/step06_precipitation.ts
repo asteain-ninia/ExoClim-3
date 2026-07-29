@@ -54,7 +54,8 @@ export function computePrecipitation(
           eastOceanKm[i] = 0;
           continue;
         }
-        for (let d = 1; d <= 40; d++) {
+        const maxScan = Math.max(10, Math.round(4400 / dxKm)); // 距離基準(解像度非依存)
+        for (let d = 1; d <= maxScan; d++) {
           const j = row * W + wrapCol(grid, col + dir * d);
           if (!terrain.landMask[j]) {
             eastOceanKm[i] = d * dxKm;

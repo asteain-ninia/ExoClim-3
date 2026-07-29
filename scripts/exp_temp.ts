@@ -26,7 +26,7 @@ const t0 = Date.now();
 const ctx = buildSimContext(EARTH_PARAMS);
 const itcz = computeItcz(ctx);
 const wind = computeWindBelt(ctx, itcz);
-const ocean = computeOceanCurrent(ctx, wind);
+const ocean = computeOceanCurrent(ctx, itcz, wind);
 const temp = computeTemperature(ctx, itcz, wind, ocean);
 console.log('気温まで', ((Date.now() - t0) / 1000).toFixed(1), 's');
 

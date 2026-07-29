@@ -52,8 +52,10 @@ export interface OceanCurrentResult {
   sstAnomalyC: Float32Array;
   /** [cell] 表示用分類: 1 = 暖流域、-1 = 寒流域、0 = 中立/陸 */
   currentClass: Int8Array;
-  /** 環流の流線(表示用)。docs/spec/01-04_循環.md 参照 */
+  /** 環流の流線(年平均の帯でトレース)。docs/spec/01-04_循環.md 参照 */
   streamlines: OceanStreamline[];
+  /** [month] 月別の流線(季節の転回緯度・海氷縁・ITCZ でトレース。WL#28 の夏冬版の一般化) */
+  monthlyStreamlines: OceanStreamline[][];
 }
 
 export interface AirflowResult {

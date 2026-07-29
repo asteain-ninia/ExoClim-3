@@ -207,14 +207,13 @@ export function ParamsPanel() {
       <details>
         <summary>計算設定</summary>
         <div className="preset-row">
-          {[2, 1].map((deg) => (
+          {[2, 1, 0.5].map((deg) => (
             <button
               key={deg}
               className={params.gridResolutionDeg === deg ? 'preset preset--active' : 'preset'}
               onClick={() => setGridResolution(deg)}
             >
-              {deg}°(
-              {deg === 2 ? '高速' : '高精細'})
+              {deg}°({deg === 2 ? '高速' : deg === 1 ? '標準' : '最高精細・数十秒'})
             </button>
           ))}
         </div>

@@ -15,8 +15,8 @@ interface ParamsState {
   reset: () => void;
 }
 
-/** UI 既定は 2°(応答性優先)。検証ハーネスは 1° を使う。 */
-const DEFAULT_PARAMS: PlanetParams = { ...EARTH_PARAMS, gridResolutionDeg: 2 };
+/** UI 既定は 1°(検証ハーネスと同じ)。0.5° は最高精細(数十秒)。 */
+const DEFAULT_PARAMS: PlanetParams = { ...EARTH_PARAMS, gridResolutionDeg: 1 };
 
 export const useParamsStore = create<ParamsState>((set) => ({
   params: DEFAULT_PARAMS,
