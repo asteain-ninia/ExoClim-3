@@ -54,8 +54,9 @@ export function Legend() {
       <div className="legend">
         <span className="legend-gradient legend-gradient--currents" />
         <span className="legend-caption">
-          海面温度偏差 −3.5 〜 +3.5°C(青 = 寒流、赤 = 暖流。海盆の西縁 = 暖流、東縁 = 寒流、
-          高緯度東側 = 暖流吹送域)
+          流線 = 環流の演繹(矢印 = 流向): 赤 = 暖流(低緯度 → 高緯度)、青 = 寒流
+          (高緯度 → 低緯度)、白 = 中立(緯度方向)。背景色 = 海面温度偏差 −3.5 〜
+          +3.5°C。貿易風帯で西向き → 大陸棚で分割 → 偏西風帯で東向き → 環流を閉じる
         </span>
       </div>
     );

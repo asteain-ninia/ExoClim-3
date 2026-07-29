@@ -31,7 +31,7 @@ export function runPipeline(params: PlanetParams): PipelineResult {
   mark('step2_windbelt', t0);
 
   t0 = performance.now();
-  const ocean = computeOceanCurrent(context);
+  const ocean = computeOceanCurrent(context, windBelt);
   mark('step3_ocean', t0);
 
   t0 = performance.now();

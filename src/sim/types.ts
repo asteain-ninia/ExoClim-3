@@ -36,11 +36,24 @@ export interface WindBeltResult {
   monthlyPressureAnomalyHpa: Float32Array[];
 }
 
+/**
+ * 海流の流線。points は [lat, lon, lat, lon, …] のフラット配列で、
+ * **並び順が流向**(矢印は並び順から描く)。kind は Artifexian/Pasta の
+ * 三色区分(赤 = 暖流: 低緯度→高緯度、青 = 寒流: 高緯度→低緯度、
+ * 黒 = 中立: 緯度方向でほぼ熱輸送なし)。
+ */
+export interface OceanStreamline {
+  kind: 'warm' | 'cold' | 'neutral';
+  points: number[];
+}
+
 export interface OceanCurrentResult {
   /** [cell] 海面温度偏差 °C(海流による恒常成分。陸セルは 0) */
   sstAnomalyC: Float32Array;
   /** [cell] 表示用分類: 1 = 暖流域、-1 = 寒流域、0 = 中立/陸 */
   currentClass: Int8Array;
+  /** 環流の流線(表示用)。docs/spec/01-04_循環.md 参照 */
+  streamlines: OceanStreamline[];
 }
 
 export interface AirflowResult {
