@@ -131,10 +131,11 @@ function traceMoistureSupply(
       let attenuation = 1;
       let supply = 0;
       // 供給は経路の線積分(ステップ距離で重み付け。解像度に依存させない。
-      // 基準は 1° の南北セル寸法 ≈ 111km)
+      // 基準は 1° の南北セル寸法 ≈ 111km)。ステップ数上限も距離基準
       const stepWeight = dyKm / 111;
+      const maxSteps = Math.min(200, Math.ceil(K.moistureTraceMaxKm / dyKm) + 4);
       // 自セルが海なら足元の蒸発をまず拾う
-      for (let step = 0; step < 60; step++) {
+      for (let step = 0; step < maxSteps; step++) {
         const r = Math.min(H - 1, Math.max(0, Math.floor(fr)));
         const c = wrapCol(grid, Math.floor(fc));
         const i = r * W + c;
