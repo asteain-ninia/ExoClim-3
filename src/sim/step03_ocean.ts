@@ -221,7 +221,7 @@ function traceStreamlines(
 
   // ---- ブロックマスク: 膨張させた陸(沖合スタンドオフ + 小湾バイパス)+ 季節海氷 ----
   const cellKm = cellHeightKm(grid, params.body.radiusKm);
-  const standoffCells = Math.max(1, Math.round(250 / cellKm));
+  const standoffCells = Math.max(1, Math.round(140 / cellKm));
   const blocked = new Uint8Array(grid.cellCount);
   for (let row = 0; row < H; row++) {
     for (let col = 0; col < W; col++) {
@@ -284,12 +284,23 @@ function traceStreamlines(
     totalSegments++;
   };
 
+  const debugOn = !!process.env.TRACE_DEBUG && month === 0;
+  const dbg = (msg: string, row: number, col: number) => {
+    if (!debugOn) return;
+    const lat = latDegOfRow(grid, row);
+    const lon = lonDegOfCol(grid, wrapCol(grid, col));
+    if (lat > -10 && lat < 65 && lon > -100 && lon < 10) {
+      console.log(`[trace] ${msg} @(${lat.toFixed(0)},${lon.toFixed(0)})`);
+    }
+  };
+
   const spawnSplit = (row: number, col: number, landDirEast: boolean) => {
     const landHeading: Heading = landDirEast ? 1 : 3;
     for (const poleward of [true, false]) {
       const north = latDegOfRow(grid, row) >= 0;
       const heading: Heading = (poleward ? (north ? 0 : 2) : north ? 2 : 0) as Heading;
       const wallSide: 1 | -1 = rotate(heading, 1) === landHeading ? 1 : -1;
+      dbg(`split ${poleward ? 'warm' : 'cold'} h=${heading} s=${wallSide}`, row, col);
       queue.push({ phase: 'coast', row, col, heading, wallSide, kind: poleward ? 'warm' : 'cold' });
     }
   };
@@ -308,12 +319,15 @@ function traceStreamlines(
         // 走査順が反流の流向(貿易風の逆)なので並びはそのまま = 流向
         pushSegment('neutral', seg);
         // U ターン: 反流の終端から両半球の赤道流(貿易風向き)を返す。
-        // 生成点が膨張海岸にかかっていたらレーン方向へ数セル逃がす
+        // レーンは各半球側に最低 ±4° を保証する(ITCZ が季節で反対半球へ
+        // 移動しても、両半球の環流は年中維持される — WL#28 の冬版と同じ)。
+        // 生成点が膨張海岸にかかっていたらレーン方向へ逃がす
         for (const sign of [1, -1]) {
-          const lat = (centers?.[endCol] ?? 0) + eccOffsetDeg * sign;
+          const raw = (centers?.[endCol] ?? 0) + eccOffsetDeg * sign;
+          const lat = sign > 0 ? Math.max(raw, 4) : Math.min(raw, -4);
           const row = rowOfLatDeg(grid, lat);
           const dc = bands.tradeDirEast ? 1 : -1;
-          for (let back = 0; back <= 8; back++) {
+          for (let back = 0; back <= Math.floor(W / 8); back++) {
             const col = wrapCol(grid, endCol + dc * back);
             if (isOpen(row, col)) {
               queue.push({
@@ -435,9 +449,28 @@ function traceStreamlines(
     const { wallSide, kind } = t;
     const points: number[] = [];
     if (!isOpen(row, col)) continue;
+    // 周回停止則: 出発緯度より逆方向へ 3° 以上戻ったら「海の反対側で止まった」
+    // とみなす(WL#28「陸が邪魔なら海岸沿いに進み、海の反対側で止める」の近似。
+    // これがないと大陸を一周するリングになる)
+    const startLat = latDegOfRow(grid, row);
+    const northSide = startLat >= 0;
+    const polewardSign = northSide ? 1 : -1; // 緯度が増える向きが極向きか
     for (let steps = 0; steps < 3 * (W + H); steps++) {
+      const latHere = latDegOfRow(grid, row);
+      const progress = (latHere - startLat) * polewardSign; // 正 = 極向きに進んだ
+      if (kind === 'warm' && progress < -5) {
+        dbg(`coast warm end=wraparound steps=${steps}`, row, col);
+        break;
+      }
+      if (kind === 'cold' && progress > 5 && Math.abs(latHere) > 12) {
+        dbg(`coast cold end=wraparound steps=${steps}`, row, col);
+        break;
+      }
       const key = ((row * W + wrapCol(grid, col)) * 4 + heading) * 2 + (wallSide > 0 ? 1 : 0);
-      if (coastVisited.has(key)) break; // 合流
+      if (coastVisited.has(key)) {
+        dbg(`coast ${kind} end=visited steps=${steps}`, row, col);
+        break; // 合流
+      }
       coastVisited.add(key);
       points.push(latDegOfRow(grid, row), lonDegOfCol(grid, wrapCol(grid, col)));
 
@@ -484,7 +517,10 @@ function traceStreamlines(
           break;
         }
       }
-      if (!moved) break; // 袋小路(閉じた内海など)
+      if (!moved) {
+        dbg(`coast ${kind} end=deadend steps=${steps}`, row, col);
+        break; // 袋小路(閉じた内海など)
+      }
     }
     pushSegment(kind, points);
   }
