@@ -18,6 +18,8 @@ import { createGrid, latDegOfRow } from '@/domain/grid';
 import type { Grid } from '@/domain/grid';
 import { computeInsolation, MONTHS_PER_YEAR } from '@/domain/insolation';
 import { orbitalPeriodYears } from '@/domain/planetParams';
+import { resolveTerrain } from '@/domain/terrain';
+import type { TerrainField } from '@/domain/terrain';
 import { MODEL_CONSTANTS as K } from './constants';
 import type {
   ItczResult,
@@ -49,7 +51,14 @@ export function computeTemperature(
   const CH = cg.heightCells;
   const N = cg.cellCount;
 
-  const coarse = aggregateToCoarse(ctx, ocean, cg);
+  // 陸率・標高の集約は常に固定 1° 地形から行う(表示解像度に物理を依存させない。
+  // 表示 = EBM 格子だと landFrac が二値になり沿岸の熱容量混合が消える)
+  const refGrid = createGrid(Math.min(1, params.gridResolutionDeg));
+  const refTerrain =
+    refGrid.resolutionDeg === ctx.grid.resolutionDeg
+      ? ctx.terrain
+      : resolveTerrain(refGrid, params.terrain);
+  const coarse = aggregateToCoarse(ctx, refGrid, refTerrain, ocean, cg);
   const insolation = computeInsolation(cg, params.orbital, params.body.axialTiltDeg);
 
   // 周極海峡: ほぼ陸に遮られない緯度行(地衡流水路 = 南北隔離 + 深い鉛直混合)
@@ -343,28 +352,44 @@ export function computeTemperature(
   return downscale(ctx, cg, pass2.monthAccum, pass2.monthCount, gamma);
 }
 
-function aggregateToCoarse(ctx: SimContext, ocean: OceanCurrentResult, cg: Grid): CoarseCell[] {
-  const { grid, terrain } = ctx;
-  const f = Math.round(cg.resolutionDeg / grid.resolutionDeg);
+function aggregateToCoarse(
+  ctx: SimContext,
+  refGrid: Grid,
+  refTerrain: TerrainField,
+  ocean: OceanCurrentResult,
+  cg: Grid,
+): CoarseCell[] {
+  const f = Math.round(cg.resolutionDeg / refGrid.resolutionDeg);
+  const fSst = Math.round(cg.resolutionDeg / ctx.grid.resolutionDeg);
   const out: CoarseCell[] = new Array(cg.cellCount);
   for (let row = 0; row < cg.heightCells; row++) {
     for (let col = 0; col < cg.widthCells; col++) {
       let n = 0;
       let landN = 0;
       let landElevSum = 0;
-      let sstSum = 0;
-      let oceanN = 0;
       for (let dr = 0; dr < f; dr++) {
         for (let dc = 0; dc < f; dc++) {
           const fr = row * f + dr;
           const fc = col * f + dc;
-          if (fr >= grid.heightCells || fc >= grid.widthCells) continue;
-          const i = fr * grid.widthCells + fc;
+          if (fr >= refGrid.heightCells || fc >= refGrid.widthCells) continue;
+          const i = fr * refGrid.widthCells + fc;
           n++;
-          if (terrain.landMask[i]) {
+          if (refTerrain.landMask[i]) {
             landN++;
-            landElevSum += terrain.elevationMeters[i] ?? 0;
-          } else {
+            landElevSum += refTerrain.elevationMeters[i] ?? 0;
+          }
+        }
+      }
+      // SST 偏差は表示格子(Step 3 の出力)から集約
+      let sstSum = 0;
+      let oceanN = 0;
+      for (let dr = 0; dr < fSst; dr++) {
+        for (let dc = 0; dc < fSst; dc++) {
+          const fr = row * fSst + dr;
+          const fc = col * fSst + dc;
+          if (fr >= ctx.grid.heightCells || fc >= ctx.grid.widthCells) continue;
+          const i = fr * ctx.grid.widthCells + fc;
+          if (!ctx.terrain.landMask[i]) {
             oceanN++;
             sstSum += ocean.sstAnomalyC[i] ?? 0;
           }

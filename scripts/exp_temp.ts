@@ -9,7 +9,7 @@ import { computeItcz } from '../src/sim/step01_itcz';
 import { computeWindBelt } from '../src/sim/step02_windbelt';
 import { computeOceanCurrent } from '../src/sim/step03_ocean';
 import { computeTemperature } from '../src/sim/step05_temperature';
-import { latDegOfRow, areaWeightedMean } from '../src/domain/grid';
+import { areaWeightedMean } from '../src/domain/grid';
 
 interface ClimateFixture {
   widthCells: number;

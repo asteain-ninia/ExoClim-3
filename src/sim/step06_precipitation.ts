@@ -129,6 +129,9 @@ function traceMoistureSupply(
       let traveledKm = 0;
       let attenuation = 1;
       let supply = 0;
+      // 供給は経路の線積分(ステップ距離で重み付け。解像度に依存させない。
+      // 基準は 1° の南北セル寸法 ≈ 111km)
+      const stepWeight = dyKm / 111;
       // 自セルが海なら足元の蒸発をまず拾う
       for (let step = 0; step < 60; step++) {
         const r = Math.min(H - 1, Math.max(0, Math.floor(fr)));
@@ -137,9 +140,9 @@ function traceMoistureSupply(
         const tHere = tField[i] ?? 0;
         const qRel = saturationVaporPressureHpa(tHere) / q0;
         if (!terrain.landMask[i]) {
-          supply += attenuation * qRel;
+          supply += attenuation * qRel * stepWeight;
         } else if (landSource) {
-          supply += attenuation * qRel * (landSource[i] ?? 0);
+          supply += attenuation * qRel * (landSource[i] ?? 0) * stepWeight;
         }
         if (traveledKm >= K.moistureTraceMaxKm) break;
         // 風上へ 1 セルぶん移動(風が弱い所は打ち切り)
