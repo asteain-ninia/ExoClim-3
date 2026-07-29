@@ -85,8 +85,8 @@ export const MODEL_CONSTANTS = {
   /**
    * 帯状移流の地表結合(W/m²/K、基準風速 4 m/s 時)。大気が上流の温度を運び、
    * 地表と有限の強さで熱交換する表現。セル熱容量に移流を掛けると海面が風速で
-   * 流される誤физになる(較正ログ 2026-07-29)。到達距離 ≈ 結合/(B+Dk²) 換算で
-   * 1500〜2500 km 相当。
+   * 流される誤った物理になる(較正ログ 2026-07-29)。到達距離 ≈ 結合/(B+Dk²)
+   * 換算で 1500〜2500 km 相当。
    */
   zonalAdvectionCouplingWm2PerK: 40,
   /** EBM 積分年数と 1 年のステップ数 */
@@ -125,6 +125,8 @@ export const MODEL_CONSTANTS = {
   continentalThermalHpa: 9,
   /** ITCZ トラフの深さ(hPa) */
   itczTroughHpa: 5,
+  /** モンスーントラフの増深: 経度列の熱帯陸割合 1.0 でトラフを +この倍率 */
+  monsoonTroughDeepening: 0,
 
   // ---- Step 3 海流 (docs/spec/03_海流.md) ----
   /** 西岸境界流(大陸東岸沖)の暖偏差(°C) */
@@ -179,7 +181,9 @@ export const MODEL_CONSTANTS = {
   eastCoastSubsidenceRelief: 0.8,
   eastCoastSubsidenceDecayKm: 900,
   /** 寒候期でも残る前線性の最低水蒸気(qRel の下限。弱い前線雪の表現) */
-  stormMinQRel: 0.15,
+  stormMinQRel: 0.3,
+  /** 高温湿潤の陸での対流性増幅(T≥22°C かつ供給豊富で最大 +この倍率) */
+  warmHumidConvectiveBoost: 0,
   /** 夏半球の偏西風移流の弱化率(ジェットの季節弱化) */
   summerAdvectionFactor: 0.42,
   /**
@@ -188,7 +192,7 @@ export const MODEL_CONSTANTS = {
    * 中緯度の冬雨・内陸湿潤が出ない」への対応。
    */
   stormMoistureSupply: 0.8,
-  stormMoistureDecayKm: 1300,
+  stormMoistureDecayKm: 1400,
   /** 風上山脈による遮蔽: この比高(m)以上で最大遮蔽、遮蔽時の残存率 */
   upwindBlockReliefM: 1200,
   upwindBlockScanKm: 900,

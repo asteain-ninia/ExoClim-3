@@ -30,6 +30,40 @@ export function precipitationColor(mmPerYear: number, isLand: boolean): Rgb {
   ];
 }
 
+/** 海流: SST 偏差の発散配色(暖流 = 赤系、寒流 = 青系)。陸は薄い中立色 */
+export function currentColor(sstAnomalyC: number, isLand: boolean): Rgb {
+  if (isLand) return [52, 62, 74];
+  const x = Math.max(-3.5, Math.min(3.5, sstAnomalyC)) / 3.5;
+  if (x >= 0) {
+    return [
+      Math.round(40 + 205 * x),
+      Math.round(60 + 30 * (1 - x)),
+      Math.round(90 - 40 * x),
+    ];
+  }
+  return [Math.round(30 + 10 * (1 + x)), Math.round(70 + 60 * -x), Math.round(120 + 110 * -x)];
+}
+
+/** 気圧偏差: 低圧 = 暖色、高圧 = 寒色(天気図の L/R 直感に合わせる) */
+export function pressureColor(anomalyHpa: number, isLand: boolean): Rgb {
+  const x = Math.max(-8, Math.min(8, anomalyHpa)) / 8;
+  const base = isLand ? 30 : 0;
+  if (x >= 0) {
+    // 高圧: 青
+    return [
+      Math.round(90 + base - 40 * x),
+      Math.round(120 + base + 20 * x),
+      Math.round(150 + 100 * x),
+    ];
+  }
+  // 低圧: 橙赤
+  return [
+    Math.round(90 + base + 150 * -x),
+    Math.round(120 + base - 30 * -x),
+    Math.round(150 - 110 * -x),
+  ];
+}
+
 export function terrainColor(elevationM: number, isLand: boolean): Rgb {
   if (!isLand) {
     const d = Math.min(1, Math.max(0, -elevationM / 6000));

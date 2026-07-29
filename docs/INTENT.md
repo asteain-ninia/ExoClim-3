@@ -1,8 +1,24 @@
-# 一次資料の索引 — Worldbuilding Pasta
+# 一次資料の索引 — 手描き気候地図の系譜と Worldbuilding Pasta
 
-ExoClim-3 の段階構成・用語・可視化は Worldbuilding Pasta の手法を踏襲する。
-物理モデルや判定ロジックの実装・修正時は、まず該当パートを確認すること。
-動画は AI から視聴できないため、ブログ記事(テキスト)と手元要約を優先する。
+ExoClim は「動画チュートリアルで紹介される**手描きの気候地図作成手順**を
+模倣・自動化する」プロジェクトである。この手法には系譜がある:
+
+1. **Geoff's Climate Cookbook**(テキスト、最古の体系化) — 海流 → 気圧・風 →
+   気温・降水 → 気候帯、の順にレイヤーを重ねる原型。
+2. **Artifexian**(YouTube) — Cookbook 系手順の動画化で最も普及した解説。
+   海流(環流テンプレート)→ 1 月/7 月の気圧配置 → 風 → ケッペン当てはめ。
+3. **Madeline James Writes**(ブログ) — 気圧・降水の実践的な整理。
+4. **Worldbuilding Pasta**(ブログ + Worldbuilder's Log) — 最も精緻。
+   ExoClim の段階構成・用語・可視化はこれを一次参照とする。
+
+ExoClim-3 の役割: 各ステップの中間地図(海流・気圧と風帯・気温・降水)を
+自動生成して表示する = **手描き派にとっては「下絵と答え合わせ」、
+自動化派にとっては完成図**、の両対応。UI のタブは作図手順の順序に並ぶ。
+
+> **注意**: AI エージェントは動画を視聴できない。ブログ記事(テキスト)と
+> 手元要約を優先する。Artifexian の動画固有の細部(数値・例外則)を仕様へ
+> 取り込みたい場合は、Pasta のときと同様にユーザーによる要約・転記を
+> `docs/参考-ExoClim2/動画要約/` 方式で追加してほしい。
 
 ## ブログ: "An Apple Pie from Scratch"
 
@@ -29,6 +45,15 @@ ExoClim-3 の段階構成・用語・可視化は Worldbuilding Pasta の手法�
 - Part VIb Step 7 Climate Zones の本文転記
 - ExoClim-2 版の物理仕様書(spec 7 本) — **前世代の実装判断を含むため
   参照時は注意**。一次資料と食い違う場合は一次資料を優先する。
+
+## 手描き手順の系譜資料(テキスト)
+
+- **Geoff's Climate Cookbook の解説**(Worldbuilding Workshop)
+  <https://worldbuildingworkshop.com/2015/11/27/climate/>
+- **Madeline James Writes: Temperature and Precipitation**
+  <https://www.madelinejameswrites.com/blog/temperature-and-precipitation>
+- **Artifexian**(YouTube チャンネル。動画のため直接参照不可、要約歓迎)
+  <https://www.youtube.com/@Artifexian>
 
 ## 定量物理の補助資料(Pasta が定量を示さない箇所の標準手法)
 

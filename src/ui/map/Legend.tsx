@@ -49,5 +49,27 @@ export function Legend() {
       </div>
     );
   }
+  if (overlay === 'currents') {
+    return (
+      <div className="legend">
+        <span className="legend-gradient legend-gradient--currents" />
+        <span className="legend-caption">
+          海面温度偏差 −3.5 〜 +3.5°C(青 = 寒流、赤 = 暖流。海盆の西縁 = 暖流、東縁 = 寒流、
+          高緯度東側 = 暖流吹送域)
+        </span>
+      </div>
+    );
+  }
+  if (overlay === 'pressure') {
+    return (
+      <div className="legend">
+        <span className="legend-gradient legend-gradient--pressure" />
+        <span className="legend-caption">
+          気圧偏差 −8(橙 = 低圧)〜 +8 hPa(青 = 高圧)・ H/L = 高低気圧中心 ・
+          水色破線 = 亜熱帯高圧帯(ハドレー端)・ 紫破線 = 極前線 ・「風」で地表風を重畳
+        </span>
+      </div>
+    );
+  }
   return null;
 }

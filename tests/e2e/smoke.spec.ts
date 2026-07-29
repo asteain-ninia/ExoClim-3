@@ -26,6 +26,21 @@ test('起動 → 計算完了 → 気候区分マップが描画される', asyn
   await page.screenshot({ path: 'test-results/app-koppen.png', fullPage: true });
 });
 
+test('手順オーバーレイ(海流・気圧)が描画される', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('computing-indicator')).toBeHidden({ timeout: 60_000 });
+  await page.getByTestId('overlay-currents').click();
+  await page.screenshot({ path: 'test-results/app-currents.png', fullPage: false });
+  await page.getByTestId('overlay-pressure').click();
+  await page.getByTestId('month-0').click();
+  await page.locator('.toggle-inline', { hasText: '風' }).locator('input').check();
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: 'test-results/app-pressure-jan.png', fullPage: false });
+  await page.getByTestId('month-6').click();
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: 'test-results/app-pressure-jul.png', fullPage: false });
+});
+
 test('オーバーレイと月の切替でマップが変化する', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByTestId('computing-indicator')).toBeHidden({ timeout: 60_000 });

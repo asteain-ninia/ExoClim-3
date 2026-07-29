@@ -8,11 +8,14 @@ import { MapCanvas } from './map/MapCanvas';
 import { Legend } from './map/Legend';
 import { ParamsPanel } from './parameters/ParamsPanel';
 
-const OVERLAYS: Array<{ id: OverlayKind; label: string }> = [
-  { id: 'koppen', label: '気候区分' },
-  { id: 'temperature', label: '気温' },
-  { id: 'precipitation', label: '降水' },
-  { id: 'terrain', label: '地形' },
+// 作図手順の順序(Cookbook/Artifexian/Pasta 共通の手描きレイヤー順)
+const OVERLAYS: Array<{ id: OverlayKind; label: string; step: string }> = [
+  { id: 'terrain', label: '地形', step: '0' },
+  { id: 'currents', label: '海流', step: '3' },
+  { id: 'pressure', label: '気圧・風帯', step: '2·4' },
+  { id: 'temperature', label: '気温', step: '5' },
+  { id: 'precipitation', label: '降水', step: '6' },
+  { id: 'koppen', label: '気候区分', step: '7' },
 ];
 
 const MONTH_LABELS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'];
@@ -51,7 +54,9 @@ export function App() {
                 className={overlay === o.id ? 'tab tab--active' : 'tab'}
                 onClick={() => setOverlay(o.id)}
                 data-testid={`overlay-${o.id}`}
+                title={`手順 ${o.step}`}
               >
+                <span className="tab-step">{o.step}</span>
                 {o.label}
               </button>
             ))}

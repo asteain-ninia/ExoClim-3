@@ -21,6 +21,7 @@ import { orbitalPeriodYears } from '@/domain/planetParams';
 import { resolveTerrain } from '@/domain/terrain';
 import type { TerrainField } from '@/domain/terrain';
 import { MODEL_CONSTANTS as K } from './constants';
+import { chamferDistanceCells } from './context';
 import type {
   ItczResult,
   OceanCurrentResult,
@@ -187,6 +188,16 @@ export function computeTemperature(
     const c = coarse[i];
     diffFactor[i] = 1 + (K.oceanDiffusionBoost - 1) * (1 - (c?.landFrac ?? 0));
   }
+  // 内陸度(0 = 海岸/海、1 = ~1500km 以上内陸)。冬の接地逆転層は内陸で強い
+  // (海沿いの陸は冬も海風で暖まる: 西欧型。内陸は遮断される: シベリア型)
+  const interior01 = new Float64Array(N);
+  {
+    const distToOceanCells = chamferDistanceCells(cg, (i) => (coarse[i]?.landFrac ?? 0) < 0.5);
+    const cellKm = (Math.PI * params.body.radiusKm) / CH;
+    for (let i = 0; i < N; i++) {
+      interior01[i] = Math.min(1, ((distToOceanCells[i] ?? 0) * cellKm) / 1500);
+    }
+  }
   const uAdvByMonthRow = buildZonalAdvection(cg, windBelt, params.body.rotationDirection);
 
   const yearSeconds = orbitalPeriodYears(params.orbital) * SECONDS_PER_EARTH_YEAR;
@@ -258,9 +269,8 @@ export function computeTemperature(
           const isWinterRow = (insolation.monthlyByRow[m0]?.[row] ?? 0) < (insolation.annualMeanByRow[row] ?? 0);
           for (let col = 0; col < CW; col++) {
             const i = row * CW + col;
-            const landF = coarse[i]?.landFrac ?? 0;
             const advC = isWinterRow
-              ? advCBase * (1 - (1 - K.winterInversionAdvectionFactor) * landF)
+              ? advCBase * (1 - (1 - K.winterInversionAdvectionFactor) * (interior01[i] ?? 0))
               : advCBase;
             const cOverDt = ((heatCap[i] ?? 1) * capScale) / dt;
             const df = diffFactor[i] ?? 1;

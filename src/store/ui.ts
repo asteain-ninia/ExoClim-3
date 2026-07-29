@@ -2,7 +2,13 @@
 
 import { create } from 'zustand';
 
-export type OverlayKind = 'koppen' | 'temperature' | 'precipitation' | 'terrain' | 'wind';
+export type OverlayKind =
+  | 'terrain'
+  | 'currents'
+  | 'pressure'
+  | 'temperature'
+  | 'precipitation'
+  | 'koppen';
 
 /** -1 = 年平均、0-11 = 月 */
 export type MonthSelection = number;

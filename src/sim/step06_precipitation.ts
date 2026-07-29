@@ -255,14 +255,24 @@ function convertToPrecip(
       const subs = descW * (1 - K.subsidenceItczProtection * gI) * (1 - eastRelief);
       lift *= 1 - K.subsidenceSuppression * subs;
 
-      // 寒流沿岸の安定化(亜熱帯の海岸砂漠: 沿岸〜300km)
-      if (terrain.landMask[i] && aLat > 10 && aLat < 42) {
+      // 寒流沿岸の安定化(亜熱帯〜中緯度の海岸乾燥: 沿岸〜300km。
+      // フォークランド型の寒流帰還域まで含めるため上限 50°)
+      if (terrain.landMask[i] && aLat > 10 && aLat < 50) {
         const coastKm = ctx.landDistToCoastKm[i] ?? 1e9;
         if (coastKm < 300) {
           const cold = nearestOceanAnomaly(ctx, ocean, row, col);
           if (cold < -0.8) {
             lift *= 1 - K.coldCoastSuppression * Math.min(1, -cold / 2.5);
           }
+        }
+      }
+
+      // 高温湿潤の陸での対流性増幅(夏の東岸・熱帯の午後対流)
+      if (terrain.landMask[i]) {
+        const warmth = Math.min(1, Math.max(0, ((_tField[i] ?? 0) - 22) / 8));
+        if (warmth > 0) {
+          const supplyNorm = Math.min(1, (supply[i] ?? 0) / 1.2);
+          lift *= 1 + K.warmHumidConvectiveBoost * warmth * supplyNorm;
         }
       }
 

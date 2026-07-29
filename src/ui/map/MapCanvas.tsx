@@ -8,7 +8,15 @@ import { KOPPEN_CLASSES } from '@/domain/koppen';
 import type { PipelineResult } from '@/sim/types';
 import { useResultsStore } from '@/store/results';
 import { useUiStore } from '@/store/ui';
-import { koppenColor, precipitationColor, temperatureColor, terrainColor, OCEAN_COLOR } from './colorScales';
+import {
+  currentColor,
+  koppenColor,
+  precipitationColor,
+  pressureColor,
+  temperatureColor,
+  terrainColor,
+  OCEAN_COLOR,
+} from './colorScales';
 
 const CANVAS_W = 1080;
 const CANVAS_H = 540;
@@ -58,9 +66,23 @@ export function MapCanvas() {
           break;
         }
         case 'terrain':
-        case 'wind':
           rgb = terrainColor(terrain.elevationMeters[i] ?? 0, isLand);
           break;
+        case 'currents':
+          rgb = currentColor(result.ocean.sstAnomalyC[i] ?? 0, isLand);
+          break;
+        case 'pressure': {
+          let p: number;
+          if (month < 0) {
+            let sum = 0;
+            for (let m = 0; m < 12; m++) sum += result.windBelt.monthlyPressureAnomalyHpa[m]?.[i] ?? 0;
+            p = sum / 12;
+          } else {
+            p = result.windBelt.monthlyPressureAnomalyHpa[month]?.[i] ?? 0;
+          }
+          rgb = pressureColor(p, isLand);
+          break;
+        }
       }
       img.data[i * 4] = rgb[0];
       img.data[i * 4 + 1] = rgb[1];
@@ -93,17 +115,95 @@ export function MapCanvas() {
     if (showItczLine) {
       const centers = result.itcz.monthlyCenterLatDegByCol[m];
       if (centers) {
+        const hw = result.itcz.halfWidthDeg;
+        const yOf = (lat: number) => ((90 - lat) / 180) * CANVAS_H;
+        // 影響帯(半透明の帯)
+        ctx2d.fillStyle = 'rgba(255, 120, 60, 0.14)';
+        ctx2d.beginPath();
+        for (let col = 0; col < W; col++) {
+          const x = (col + 0.5) * cellW;
+          const y = yOf((centers[col] ?? 0) + hw);
+          if (col === 0) ctx2d.moveTo(x, y);
+          else ctx2d.lineTo(x, y);
+        }
+        for (let col = W - 1; col >= 0; col--) {
+          ctx2d.lineTo((col + 0.5) * cellW, yOf((centers[col] ?? 0) - hw));
+        }
+        ctx2d.closePath();
+        ctx2d.fill();
+        // 中心線
         ctx2d.strokeStyle = 'rgba(255, 90, 60, 0.9)';
         ctx2d.lineWidth = 2;
         ctx2d.beginPath();
         for (let col = 0; col < W; col++) {
-          const lat = centers[col] ?? 0;
           const x = (col + 0.5) * cellW;
-          const y = ((90 - lat) / 180) * CANVAS_H;
+          const y = yOf(centers[col] ?? 0);
           if (col === 0) ctx2d.moveTo(x, y);
           else ctx2d.lineTo(x, y);
         }
         ctx2d.stroke();
+      }
+    }
+
+    // 気圧オーバーレイ: 風帯境界(リッジ・極前線)の破線と高低気圧マーカー
+    if (overlay === 'pressure') {
+      const yOfLat = (lat: number) => ((90 - lat) / 180) * CANVAS_H;
+      const beltLines: Array<[number, string]> = [
+        [result.windBelt.monthlyRidgeLatNDeg[m] ?? 31, 'rgba(120,200,255,0.8)'],
+        [result.windBelt.monthlyRidgeLatSDeg[m] ?? -31, 'rgba(120,200,255,0.8)'],
+        [result.windBelt.monthlyPolarFrontLatNDeg[m] ?? 60, 'rgba(190,160,255,0.8)'],
+        [result.windBelt.monthlyPolarFrontLatSDeg[m] ?? -60, 'rgba(190,160,255,0.8)'],
+      ];
+      ctx2d.setLineDash([7, 5]);
+      ctx2d.lineWidth = 1.5;
+      for (const [lat, color] of beltLines) {
+        ctx2d.strokeStyle = color;
+        ctx2d.beginPath();
+        ctx2d.moveTo(0, yOfLat(lat));
+        ctx2d.lineTo(CANVAS_W, yOfLat(lat));
+        ctx2d.stroke();
+      }
+      ctx2d.setLineDash([]);
+
+      // 高低気圧の中心マーカー(近傍 6 セルで極値 かつ |偏差| > 2.5 hPa)
+      const field = new Float32Array(W * H);
+      for (let i = 0; i < W * H; i++) {
+        if (month < 0) {
+          let sum = 0;
+          for (let mm = 0; mm < 12; mm++) sum += result.windBelt.monthlyPressureAnomalyHpa[mm]?.[i] ?? 0;
+          field[i] = sum / 12;
+        } else {
+          field[i] = result.windBelt.monthlyPressureAnomalyHpa[m]?.[i] ?? 0;
+        }
+      }
+      const R = 6;
+      const markers: Array<{ row: number; col: number; high: boolean }> = [];
+      for (let row = R; row < H - R; row += 2) {
+        for (let col = 0; col < W; col += 2) {
+          const v = field[row * W + col] ?? 0;
+          if (Math.abs(v) < 2.5) continue;
+          let isMax = true;
+          let isMin = true;
+          for (let dr = -R; dr <= R && (isMax || isMin); dr += 2) {
+            for (let dc = -R; dc <= R; dc += 2) {
+              const nb = field[(row + dr) * W + ((col + dc + W) % W)] ?? 0;
+              if (nb > v) isMax = false;
+              if (nb < v) isMin = false;
+            }
+          }
+          if ((isMax && v > 0) || (isMin && v < 0)) {
+            if (!markers.some((k) => Math.abs(k.row - row) < 10 && Math.abs(k.col - col) < 14)) {
+              markers.push({ row, col, high: v > 0 });
+            }
+          }
+        }
+      }
+      ctx2d.font = 'bold 17px sans-serif';
+      ctx2d.textAlign = 'center';
+      ctx2d.textBaseline = 'middle';
+      for (const k of markers) {
+        ctx2d.fillStyle = k.high ? '#7ec4ff' : '#ff8a66';
+        ctx2d.fillText(k.high ? 'H' : 'L', (k.col + 0.5) * cellW, (k.row + 0.5) * cellH);
       }
     }
 

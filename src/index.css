@@ -234,6 +234,23 @@ body {
   background: linear-gradient(to right, #faf7e6, #2380be);
 }
 
+.legend-gradient--currents {
+  background: linear-gradient(to right, #1e82e6, #28425a 50%, #f53c32);
+}
+
+.legend-gradient--pressure {
+  background: linear-gradient(to right, #f05a28, #96a0b4 50%, #5a96fa);
+}
+
+.tab-step {
+  display: inline-block;
+  font-size: 10px;
+  color: inherit;
+  opacity: 0.65;
+  margin-right: 5px;
+  font-variant-numeric: tabular-nums;
+}
+
 .legend-caption {
   color: var(--text-dim);
 }

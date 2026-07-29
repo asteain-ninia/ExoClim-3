@@ -30,6 +30,22 @@ export function computeWindBelt(ctx: SimContext, itcz: ItczResult): WindBeltResu
     interiorness[i] = terrain.landMask[i] ? Math.min(1, (landDistToCoastKm[i] ?? 0) / 1500) : 0;
   }
 
+  // 経度列ごとの熱帯陸割合(|lat|≤30°)。陸上のモンスーントラフは海上 ITCZ より深い
+  const troughLandFrac = new Float64Array(W);
+  {
+    const rowN30 = Math.max(0, Math.round((90 - 30) / grid.resolutionDeg) - 1);
+    const rowS30 = Math.min(H - 1, Math.round((90 + 30) / grid.resolutionDeg));
+    for (let col = 0; col < W; col++) {
+      let n = 0;
+      let nLand = 0;
+      for (let row = rowN30; row <= rowS30; row++) {
+        n++;
+        if (terrain.landMask[row * W + col]) nLand++;
+      }
+      troughLandFrac[col] = n > 0 ? nLand / n : 0;
+    }
+  }
+
   for (let m = 0; m < MONTHS_PER_YEAR; m++) {
     const decl = insolation.monthlyDeclinationDeg[m] ?? 0;
     const declNorm = Math.max(-1.5, Math.min(1.5, decl / tilt)); // -1..1(高離心率で ±1.5)
@@ -59,10 +75,11 @@ export function computeWindBelt(ctx: SimContext, itcz: ItczResult): WindBeltResu
         v += K.subtropicalHighHpa * oceanW * (Math.exp(-dN * dN) + Math.exp(-dS * dS));
         // 大陸の熱的高低気圧: 夏に低圧・冬に高圧(内陸ほど強い)
         v += -K.continentalThermalHpa * (interiorness[i] ?? 0) * seasonalHeating;
-        // ITCZ トラフ
+        // ITCZ トラフ(陸の多い経度では深いモンスーントラフになる)
         const c = centers?.[col] ?? 0;
         const dI = (lat - c) / (itcz.halfWidthDeg * 1.2);
-        v += -K.itczTroughHpa * Math.exp(-dI * dI);
+        const troughDepth = K.itczTroughHpa * (1 + K.monsoonTroughDeepening * (troughLandFrac[col] ?? 0));
+        v += -troughDepth * Math.exp(-dI * dI);
         // 極域の弱い高気圧
         if (Math.abs(lat) > 75) v += 2 * ((Math.abs(lat) - 75) / 15);
         p[i] = v;

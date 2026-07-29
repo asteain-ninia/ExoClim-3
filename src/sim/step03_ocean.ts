@@ -48,9 +48,11 @@ export function computeOceanCurrent(ctx: SimContext): OceanCurrentResult {
       const pos = prograde ? basinPos : 1 - basinPos;
 
       let anomaly = 0;
-      // 亜熱帯: 西岸境界流(暖・極向き)と東岸境界流(寒・赤道向き)
-      if (absLat >= 8 && absLat <= 45) {
-        const bandW = bellBand(absLat, 8, 45, 6);
+      // 亜熱帯: 西岸境界流(暖・極向き)と東岸境界流(寒・赤道向き)。
+      // 暖流は ~40° で海盆内へ分離する(実物の黒潮・メキシコ湾流の分離緯度。
+      // これより極側の海盆西縁は亜寒帯循環の寒流: ラブラドル/親潮/フォークランド)
+      if (absLat >= 8 && absLat <= 40) {
+        const bandW = bellBand(absLat, 8, 40, 4);
         if (nearWestBoundaryKm < K.boundaryCurrentReachKm) {
           anomaly +=
             K.warmBoundaryCurrentC * (1 - nearWestBoundaryKm / K.boundaryCurrentReachKm) * bandW;
@@ -60,9 +62,9 @@ export function computeOceanCurrent(ctx: SimContext): OceanCurrentResult {
             K.coldBoundaryCurrentC * (1 - nearEastBoundaryKm / K.boundaryCurrentReachKm) * bandW;
         }
       }
-      // 中高緯度: 暖流吹送域(海盆東側ほど暖かい: 北大西洋海流の相当物)
-      if (absLat >= 42 && absLat <= 68) {
-        const bandW = bellBand(absLat, 42, 68, 7);
+      // 中高緯度: 暖流吹送域(海盆東側ほど暖かい)と海盆西縁の寒流帰還
+      if (absLat >= 40 && absLat <= 68) {
+        const bandW = bellBand(absLat, 40, 68, 6);
         const widthFactor = Math.min(1, basinWidthDeg / 55); // 狭い海では発達しない
         anomaly += K.warmDriftC * Math.pow(pos, 1.4) * bandW * widthFactor;
         if (pos < 0.35) {
