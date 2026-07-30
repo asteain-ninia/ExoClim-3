@@ -184,11 +184,11 @@ export const MODEL_CONSTANTS = {
 
   // ---- Step 6 降水 (docs/spec/06_降水.md) ----
   /** 水蒸気供給の海上減衰距離(km) */
-  moistureDecayOceanKm: 3000,
+  moistureDecayOceanKm: 2200,
   /** 陸上減衰距離(km、再循環なしの素の値) */
-  moistureDecayLandKm: 1400,
+  moistureDecayLandKm: 1700,
   /** 陸面再蒸発の強さ(0〜1、二回目のパスで局所降水に比例) */
-  landRecyclingStrength: 0.75,
+  landRecyclingStrength: 0.9,
   /** 風上追跡の最大距離(km) */
   moistureTraceMaxKm: 5200,
   /**
@@ -199,10 +199,15 @@ export const MODEL_CONSTANTS = {
   fetchOpenOceanCapKm: 2000,
   /** ITCZ 収束の降水増幅(中心で ×(1+この値)) */
   itczLiftBoost: 2.2,
+  /**
+   * ITCZ 傘の海洋性ゲート: 供給(無次元)がこの値で傘が全開。乾燥内陸の
+   * トラフ直下(アラビア型)では傘が開かず、湿潤収束(ベンガル型)では開く
+   */
+  itczLiftSupplyNorm: 1.1,
   /** ストームトラック(温帯低気圧帯)の増幅 */
-  stormTrackBoost: 1.1,
+  stormTrackBoost: 0.7,
   /** 寒候期のストームトラック追加増幅 */
-  stormTrackWinterBoost: 0.5,
+  stormTrackWinterBoost: 0.35,
   /** 地形性上昇の増幅(基準勾配あたり) */
   orographicBoost: 1.6,
   /** 風下雨陰の最大抑制(0〜1 が残存率の下限) */
@@ -218,7 +223,7 @@ export const MODEL_CONSTANTS = {
   eastCoastSubsidenceRelief: 0.8,
   eastCoastSubsidenceDecayKm: 900,
   /** 寒候期でも残る前線性の最低水蒸気(qRel の下限。弱い前線雪の表現) */
-  stormMinQRel: 0.3,
+  stormMinQRel: 0.4,
   /** 高温湿潤の陸での対流性増幅(T≥22°C かつ供給豊富で最大 +この倍率) */
   warmHumidConvectiveBoost: 0,
   /** 夏半球の偏西風移流の弱化率(ジェットの季節弱化) */
@@ -228,12 +233,18 @@ export const MODEL_CONSTANTS = {
    * 混合を表す)。海岸距離の減衰長と強度。derle 教訓 §8.2「月平均風だけでは
    * 中緯度の冬雨・内陸湿潤が出ない」への対応。
    */
-  stormMoistureSupply: 0.8,
+  stormMoistureSupply: 1.6,
   stormMoistureDecayKm: 1400,
+  /**
+   * 経路上昇の脱水スケール(m)。風上追跡の前方経路で空気がこの高度を上るごとに
+   * 水蒸気が e 分の 1 に減る(風上斜面で雨として落ちた分。パタゴニア・チベット
+   * 風下の雨陰の主機構 — 2026-07-30 レビュー P1)
+   */
+  orographicDepletionM: 1600,
   /** 風上山脈による遮蔽: この比高(m)以上で最大遮蔽、遮蔽時の残存率 */
   upwindBlockReliefM: 1200,
   upwindBlockScanKm: 900,
-  upwindBlockFloor: 0.3,
+  upwindBlockFloor: 0.15,
   /** 寒流沿岸の追加抑制率 */
   coldCoastSuppression: 0.45,
   /** 全球スケール係数(供給×持ち上げ → mm/月) */

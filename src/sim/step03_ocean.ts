@@ -128,6 +128,10 @@ export function computeOceanCurrent(
         anomaly += K.equatorialUpwellingC * ((pos - 0.5) / 0.5) * (1 - absLat / eccMean);
       }
 
+      // 注: 貿易風帯の「陸が極側」湧昇(ソマリ型)は帯規則ではベンガル湾北岸
+      // (モンスーンの主供給源)と区別できず実装見送り(2026-07-30 検討)。
+      // 季節風向を持つ将来の月別 SST 化の際に再訪する。
+
       sstAnomalyC[i] = anomaly;
       currentClass[i] = anomaly > 0.5 ? 1 : anomaly < -0.5 ? -1 : 0;
     }

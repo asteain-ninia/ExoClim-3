@@ -87,7 +87,7 @@ export function computePrecipitation(
     const landSource = new Float32Array(grid.cellCount);
     for (let i = 0; i < grid.cellCount; i++) {
       if (!terrain.landMask[i]) continue;
-      const wetness = Math.min(1, (precip1[i] ?? 0) / 70); // 70mm/月で飽和
+      const wetness = Math.min(1, (precip1[i] ?? 0) / 40); // 40mm/月で飽和(寒冷地は少雨でも湿る)
       landSource[i] = K.landRecyclingStrength * wetness;
     }
     const supply2 = traceMoistureSupply(ctx, smallWater, tField, u, v, landSource);
@@ -202,13 +202,23 @@ function traceMoistureSupply(
         pendingSupply = 0;
         bodyFetchKm = 0;
       };
-      // 自セルが海なら足元の蒸発をまず拾う
+      // 自セルが海なら足元の蒸発をまず拾う。
+      // 経路障壁の脱水(2026-07-30 レビュー P1): 供給源と対象の間の最高障壁を
+      // 越える際、障壁が両端より高い分だけ水蒸気が風上斜面の雨として失われる。
+      // 逐次の複利にすると丘陵の起伏が累積して全球が乾く(実測)ため、
+      // 「これまでの最高標高」1 本で判定する
+      const targetElev = Math.max(0, terrain.elevationMeters[i0] ?? 0);
+      let maxBarrierM = targetElev;
       for (let step = 0; step < maxSteps; step++) {
         const r = Math.min(H - 1, Math.max(0, Math.floor(fr)));
         const c = wrapCol(grid, Math.floor(fc));
         const i = r * W + c;
+        const eHere = Math.max(0, terrain.elevationMeters[i] ?? 0);
+        if (eHere > maxBarrierM) maxBarrierM = eHere;
+        const barrierOver = Math.max(0, maxBarrierM - Math.max(eHere, targetElev));
+        const barrierFactor = Math.max(0.25, Math.exp(-barrierOver / K.orographicDepletionM));
         const tHere = tField[i] ?? 0;
-        const qRel = saturationVaporPressureHpa(tHere) / q0;
+        const qRel = (saturationVaporPressureHpa(tHere) / q0) * barrierFactor;
         if (!terrain.landMask[i]) {
           if (smallWater[i]) {
             if (!inWater) {
@@ -294,9 +304,12 @@ function convertToPrecip(
       const i = row * W + col;
       let lift = 1;
 
-      // ITCZ 収束
+      // ITCZ 収束。傘は「湿潤収束が海洋起源のときだけ開く」— 供給の乏しい
+      // 乾燥内陸ではトラフ直下でも雨にならない(実物のアラビア熱低は乾いた
+      // 低気圧 — 2026-07-30 レビュー A1)
       const gI = itczInfluenceAt(itcz, month, col, lat);
-      lift *= 1 + K.itczLiftBoost * gI;
+      const marineW = Math.min(1, (supply[i] ?? 0) / K.itczLiftSupplyNorm);
+      lift *= 1 + K.itczLiftBoost * gI * marineW;
 
       // ストームトラック(リッジの極側〜極前線先の台形プラトー、寒候期に増強)
       const stLo = Math.abs(ridge) + 4;
@@ -345,7 +358,7 @@ function convertToPrecip(
       // 亜熱帯高気圧の西翼(自転方向の東に海が近い)では沈降が緩む
       const eastRelief =
         K.eastCoastSubsidenceRelief * Math.exp(-(eastOceanKm[i] ?? 1e9) / K.eastCoastSubsidenceDecayKm);
-      const subs = descW * (1 - K.subsidenceItczProtection * gI) * (1 - eastRelief);
+      const subs = descW * (1 - K.subsidenceItczProtection * gI * marineW) * (1 - eastRelief);
       lift *= 1 - K.subsidenceSuppression * subs;
 
       // 寒流沿岸の安定化(亜熱帯〜中緯度の海岸乾燥: 沿岸〜300km。
@@ -370,16 +383,45 @@ function convertToPrecip(
       }
 
       // ストームトラック帯の渦供給: 移動性低気圧が近傍の海から水蒸気を混合する
-      // (月平均風の追跡では表現できない成分。海岸距離で減衰、風上山脈で遮蔽)
+      // (月平均風の追跡では表現できない成分。海岸距離で減衰、風上山脈で遮蔽)。
+      // 供給帯はリッジ +1° から(持ち上げ帯 +4° より広く — 晩秋の東岸の断絶対策)。
+      // 水蒸気量は局所の陸気温ではなく近傍で最も暖かい海面の気温を基準にする
+      // (冬の東岸の低気圧は暖流から汲む — 湾流・黒潮型。レビュー H1)
       let stormSupply = 0;
-      if (stormW > 0 && terrain.landMask[i]) {
+      const stSupplyLo = Math.abs(ridge) + 1;
+      if (aLat > stSupplyLo && aLat < stHi && terrain.landMask[i]) {
+        const supplyW = Math.min(
+          Math.min(1, (aLat - stSupplyLo) / 5),
+          Math.min(1, (stHi - aLat) / 10),
+        );
         const coastKm = ctx.landDistToCoastKm[i] ?? 1e9;
+        const oceanT = nearestOceanTempC(ctx, _tField, row, col);
+        const qBaseT = oceanT !== null ? Math.max(oceanT, (_tField[i] ?? 0)) : (_tField[i] ?? 0);
         const qRel = Math.max(
           K.stormMinQRel,
-          saturationVaporPressureHpa((_tField[i] ?? 0) + 3) / saturationVaporPressureHpa(20),
+          saturationVaporPressureHpa(qBaseT + 3) / saturationVaporPressureHpa(20),
         );
+        // WL#31: 前線圏の湿気の到達は onshore 2,000km / offshore 1,000km。
+        // 短い風上ウォーク(~500km)の海率で on/off を連続判定し減衰長に反映
+        let oceanSteps = 0;
+        {
+          let fr = row + 0.5;
+          let fc = col + 0.5;
+          const uu2 = u[i] ?? 0;
+          const vv2 = v[i] ?? 0;
+          const sp = Math.max(0.5, Math.hypot(uu2, vv2));
+          for (let s = 0; s < 5; s++) {
+            fc -= (uu2 / sp) * (100 / dxKm);
+            fr += (vv2 / sp) * (100 / dyKm);
+            const rr = Math.min(H - 1, Math.max(0, Math.floor(fr)));
+            const cc2 = wrapCol(grid, Math.floor(fc));
+            if (!terrain.landMask[rr * W + cc2]) oceanSteps++;
+          }
+        }
+        const onshore01 = oceanSteps / 5;
+        const decayKm = K.stormMoistureDecayKm * (0.5 + 0.5 * onshore01);
         stormSupply =
-          K.stormMoistureSupply * stormW * qRel * Math.exp(-coastKm / K.stormMoistureDecayKm) * (isWinter ? 1.4 : 1);
+          K.stormMoistureSupply * supplyW * qRel * Math.exp(-coastKm / decayKm) * (isWinter ? 1.4 : 1);
       }
 
       // 供給 × 持ち上げ × 遮蔽 → mm/月(気圧が低い惑星は降水効率も下がる)
@@ -439,6 +481,33 @@ function upwindMountainFactor(
 }
 
 /** 近傍(半径 3 セル)の海セル SST 偏差の最小値(寒流検出用) */
+/**
+ * 近傍(±6 セル)で最も暖かい海セルの気温(°C)。渦供給の水蒸気量の基準。
+ * 冬の東岸の移動性低気圧は局所の陸気温ではなく暖流の海面から水蒸気を汲む
+ * (湾流・黒潮の冬の東岸降水 — 2026-07-30 レビュー H1)
+ */
+function nearestOceanTempC(
+  ctx: SimContext,
+  tField: Float32Array,
+  row: number,
+  col: number,
+): number | null {
+  const { grid, terrain } = ctx;
+  const W = grid.widthCells;
+  let best: number | null = null;
+  for (let dr = -6; dr <= 6; dr++) {
+    const r = row + dr;
+    if (r < 0 || r >= grid.heightCells) continue;
+    for (let dc = -6; dc <= 6; dc++) {
+      const i = r * W + wrapCol(grid, col + dc);
+      if (terrain.landMask[i]) continue;
+      const t = tField[i] ?? 0;
+      if (best === null || t > best) best = t;
+    }
+  }
+  return best;
+}
+
 function nearestOceanAnomaly(
   ctx: SimContext,
   ocean: OceanCurrentResult,
