@@ -125,6 +125,19 @@ export const MODEL_CONSTANTS = {
   continentalThermalHpa: 9,
   /** ITCZ トラフの深さ(hPa) */
   itczTroughHpa: 5,
+  /**
+   * 冬の亜寒帯海上低気圧の深さ(hPa。WL#32/#34: 寒候期、海氷縁近くの海上に
+   * 半永続低気圧 — アリューシャン/アイスランド低相当)。海氷は後段のため
+   * 極前線相対で配置。回転成分を通じて冬の西岸への暖気移流を生む
+   */
+  subpolarWinterLowHpa: 5,
+  /**
+   * 亜熱帯高気圧の離散セル化(WL#29): 帯ではなく海盆ごとのセルで、
+   * 「自転方向の東」に大陸が近い側(= 寒流の流れる海盆東縁)ほど強い。
+   * 海上の基準重みへの加算倍率と、その減衰距離(km)
+   */
+  subtropicalCellEastBoost: 0.6,
+  subtropicalCellEastScaleKm: 2200,
   /** モンスーントラフの増深: 経度列の熱帯陸割合 1.0 でトラフを +この倍率 */
   monsoonTroughDeepening: 0,
 
