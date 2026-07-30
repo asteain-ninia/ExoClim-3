@@ -135,6 +135,11 @@ export const MODEL_CONSTANTS = {
    * Log の ±15° は「wet→very wet 昇格」の質的規則で、リフト幅ではない模様
    */
   itczPrecipWidthFactor: 1.0,
+  /**
+   * 赤道常湿帯: 年平均 ITCZ 線の残留影響(0〜1)。実物の熱赤道近傍は年 2 回の
+   * 通過と近接で乾季にも雨が残る(赤道 = 雨林の定量化)。幅は半幅 ×0.7
+   */
+  equatorialItczResidual: 0.55,
   /** 経度方向平滑化の半幅(度)。広すぎるとモンスーンの経度応答が希釈される */
   itczSmoothingHalfWidthDeg: 12,
 
@@ -198,7 +203,12 @@ export const MODEL_CONSTANTS = {
   /** 陸上減衰距離(km、再循環なしの素の値) */
   moistureDecayLandKm: 1700,
   /** 陸面再蒸発の強さ(0〜1、二回目のパスで局所降水に比例) */
-  landRecyclingStrength: 0.9,
+  landRecyclingStrength: 0.35,
+  /**
+   * 再循環の反復回数。1 だと海から遠い赤道内陸の雨林が立ち上がれない
+   * (実物は降水の 5〜8 割が再循環の自己保持 — 仮想大陸で実測)
+   */
+  recyclingIterations: 2,
   /** 風上追跡の最大距離(km) */
   moistureTraceMaxKm: 5200,
   /**

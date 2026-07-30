@@ -72,6 +72,21 @@ export function computePrecipitation(
     }
   }
 
+  // 年平均 ITCZ 中心(経度列別)。赤道常湿帯の残留影響に使う —
+  // 実物の熱赤道近傍は ITCZ が年 2 回通過し遠くへ行かないため乾季でも雨が残る
+  // (Pasta/Log の「赤道 = 雨林」の定量化)。トラフが片半球へ深く出る経度でも
+  // 年平均線の周りは湿ったままにする
+  const meanItczCenters = new Float32Array(grid.widthCells);
+  {
+    for (let col = 0; col < grid.widthCells; col++) {
+      let s = 0;
+      for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+        s += itcz.monthlyCenterLatDegByCol[m]?.[col] ?? 0;
+      }
+      meanItczCenters[col] = s / MONTHS_PER_YEAR;
+    }
+  }
+
   // ---- パス 1: 海洋のみを供給源として風上追跡(全月)----
   const supplies1: Float32Array[] = [];
   for (let m = 0; m < MONTHS_PER_YEAR; m++) {
@@ -114,17 +129,28 @@ export function computePrecipitation(
       continue;
     }
     const supply1 = blend(supplies1, m);
-    const precip1 = convertToPrecip(ctx, itcz, m, tField, u, v, supply1, ridgeN, ridgeS, pfN, pfS, dyKm, ocean, eastOceanKm, eastOceanSstA);
+    const precip1 = convertToPrecip(ctx, itcz, m, tField, u, v, supply1, ridgeN, ridgeS, pfN, pfS, dyKm, ocean, eastOceanKm, eastOceanSstA, meanItczCenters);
     precip1ByMonth.push(precip1);
 
-    // ---- パス 2: 陸面再蒸発を供給源に加えて再追跡 ----
-    const landSource = new Float32Array(grid.cellCount);
-    for (let i = 0; i < grid.cellCount; i++) {
-      if (!terrain.landMask[i]) continue;
-      const wetness = Math.min(1, (precip1[i] ?? 0) / 40); // 40mm/月で飽和(寒冷地は少雨でも湿る)
-      landSource[i] = K.landRecyclingStrength * wetness;
+    // ---- パス 2: 陸面再蒸発を供給源に加えて再追跡(反復)----
+    // 実物の内陸雨林は降水の 5〜8 割が再蒸発の再循環で自己保持される。
+    // 1 回パスだと海から遠い赤道内陸が立ち上がれない(鶏と卵 — 仮想大陸の
+    // 赤道内陸が砂漠化する実測 2026-07-31)ため、固定点に向けて反復する
+    let precipIter = precip1;
+    let supplyIter = supply1;
+    for (let it = 0; it < K.recyclingIterations; it++) {
+      const landSource = new Float32Array(grid.cellCount);
+      for (let i = 0; i < grid.cellCount; i++) {
+        if (!terrain.landMask[i]) continue;
+        const wetness = Math.min(1, (precipIter[i] ?? 0) / 40); // 40mm/月で飽和
+        landSource[i] = K.landRecyclingStrength * wetness;
+      }
+      supplyIter = traceMoistureSupply(ctx, smallWater, tField, u, v, landSource, 0);
+      if (it < K.recyclingIterations - 1) {
+        precipIter = convertToPrecip(ctx, itcz, m, tField, u, v, supplyIter, ridgeN, ridgeS, pfN, pfS, dyKm, ocean, eastOceanKm, eastOceanSstA, meanItczCenters);
+      }
     }
-    supplies2.push(traceMoistureSupply(ctx, smallWater, tField, u, v, landSource, 0));
+    supplies2.push(supplyIter);
   }
 
   for (let m = 0; m < MONTHS_PER_YEAR; m++) {
@@ -140,7 +166,7 @@ export function computePrecipitation(
       continue;
     }
     const supply2 = blend(supplies2, m);
-    const precip2 = convertToPrecip(ctx, itcz, m, tField, u, v, supply2, ridgeN, ridgeS, pfN, pfS, dyKm, ocean, eastOceanKm, eastOceanSstA);
+    const precip2 = convertToPrecip(ctx, itcz, m, tField, u, v, supply2, ridgeN, ridgeS, pfN, pfS, dyKm, ocean, eastOceanKm, eastOceanSstA, meanItczCenters);
     monthlyPrecipMm.push(precip2);
   }
 
@@ -402,6 +428,7 @@ function convertToPrecip(
   ocean: OceanCurrentResult,
   eastOceanKm: Float32Array,
   eastOceanSstA: Float32Array,
+  meanItczCenters: Float32Array,
 ): Float32Array {
   const { grid, params, terrain } = ctx;
   const W = grid.widthCells;
@@ -423,7 +450,11 @@ function convertToPrecip(
       // ITCZ 収束。傘は「湿潤収束が海洋起源のときだけ開く」— 供給の乏しい
       // 乾燥内陸ではトラフ直下でも雨にならない(実物のアラビア熱低は乾いた
       // 低気圧 — 2026-07-30 レビュー A1)
-      const gI = itczInfluenceAt(itcz, month, col, lat, K.itczPrecipWidthFactor);
+      const gIm = itczInfluenceAt(itcz, month, col, lat, K.itczPrecipWidthFactor);
+      // 赤道常湿帯: 年平均 ITCZ 線の周りは月別中心が離れた季節でも影響が残る
+      const dMean = (lat - (meanItczCenters[col] ?? 0)) / (itcz.halfWidthDeg * 0.55);
+      const gIres = K.equatorialItczResidual * Math.exp(-dMean * dMean);
+      const gI = Math.max(gIm, gIres);
       const marineW = Math.min(1, (supply[i] ?? 0) / K.itczLiftSupplyNorm);
       lift *= 1 + K.itczLiftBoost * gI * marineW;
 
@@ -488,6 +519,11 @@ function convertToPrecip(
         const d = aLat < descLo ? descLo - aLat : aLat - descHi;
         descW = Math.exp(-(d * d) / 16);
       }
+      // 注(2026-07-31): 沈降の気圧場駆動(高圧下で増強/湿潤低圧下で緩和)は
+      // 両方向とも実測否定 — 増強はリッジ帯自体が +6hPa で飽和して一様乾燥化
+      // (−1.4pt)、湿潤側緩和はトラフを開けすぎ(−2.1pt、ゲート −1)。
+      // B 帯の縁の緯度直線性は Log の手法自体が「帯として描く」ものでもある
+      // (較正記録参照)。
       // 亜熱帯高気圧の西翼(自転方向の東に海が近い)では沈降が緩む。
       // ただし「東の海が暖流(西岸境界流)のとき」だけ — バミューダ高気圧の
       // 西翼は暖流の上で湿る。非暖流(アラビア海型)では緩めない(レビュー A2)
