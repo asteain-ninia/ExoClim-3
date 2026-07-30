@@ -63,17 +63,22 @@ export const MODEL_CONSTANTS = {
    * 周極海峡(陸を含まない緯度行)を跨ぐ南北拡散の低減率。
    * 遮られない地衡流水路は南北熱交換を抑える(南極周極流の効果、地理中立)。
    */
-  circumpolarChannelFactor: 0.45,
+  circumpolarChannelFactor: 0.32,
+  /**
+   * 周極海峡行の海上の雲増強(実在の南大洋は惑星で最も雲が多い海域。
+   * 遮られない西風の吹送距離 → 常時ストーム雲。トポロジー判定で地理中立)
+   */
+  channelCloudBoost: 0.55,
   /** 雲アルベドの循環変調: 沈降域(亜熱帯高圧帯)での低減率と ITCZ での増加率 */
-  subsidenceCloudReduction: 0.55,
+  subsidenceCloudReduction: 0.62,
   /** 沈降晴天の海上での効き(貿易風積雲・層積雲が残るため陸より弱い) */
-  subsidenceOceanFactor: 0.45,
+  subsidenceOceanFactor: 0.35,
   convectiveCloudBoost: 0.45,
   /** ストームトラック帯(海上)の雲増加率と雲アルベド上限 */
   stormTrackCloudBoost: 0.6,
   cloudAlbedoMax: 0.36,
   /** 寒流(SST 負偏差)上の層積雲デッキ: 偏差 -2°C で雲 +この比率 */
-  stratocumulusBoostPerNegC: 0.35,
+  stratocumulusBoostPerNegC: 0.55,
   /** 冬(月日射 < 年平均)の陸上における移流結合の低減率(接地逆転層) */
   winterInversionAdvectionFactor: 0.5,
   /** 周極海峡行の海洋混合層の増深倍率(遮られない流路の深い鉛直混合) */
@@ -232,6 +237,12 @@ export const MODEL_CONSTANTS = {
   // ---- 共通 ----
   /** 海面凍結温度(°C) */
   seaFreezeC: -1.9,
+  /**
+   * 海氷の断熱係数: 氷結した海面は混合層を大気から切り離し、実効熱容量が
+   * 陸並みに落ちる(氷量 1 のとき容量を 1−この値 に縮小)。これが無いと
+   * 極域の季節振幅が 1/3 になる(80N: モデル 9°C vs 実測 30°C — 2026-07-30)
+   */
+  seaIceInsulationFactor: 0.9,
 } as const;
 
 export type ModelConstants = typeof MODEL_CONSTANTS;

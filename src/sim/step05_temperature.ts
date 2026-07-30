@@ -161,13 +161,17 @@ export function computeTemperature(
         // 寒流上の層積雲デッキ(SST 負偏差の海で雲が増える)
         const sstA = coarse[i]?.sstAnomalyC ?? 0;
         const scDeck = sstA < 0 ? K.stratocumulusBoostPerNegC * Math.min(1.5, -sstA / 2) * oceanFrac : 0;
+        // 周極海峡行は常時ストーム雲(南大洋型。上限も少し引き上げる)
+        const chanCloud = rowIsChannel[row] ? K.channelCloudBoost * oceanFrac : 0;
         const factor =
           1 -
           K.subsidenceCloudReduction * subsidenceWeight * ridgeProx * (1 - itczInf) +
           K.convectiveCloudBoost * itczInf +
           K.stormTrackCloudBoost * stormW * oceanFrac +
-          scDeck;
-        field[i] = Math.min(K.cloudAlbedoMax, Math.max(0.04, atm.cloudAlbedo * factor));
+          scDeck +
+          chanCloud;
+        const capMax = K.cloudAlbedoMax + (rowIsChannel[row] ? 0.08 : 0);
+        field[i] = Math.min(capMax, Math.max(0.04, atm.cloudAlbedo * factor));
       }
     }
     cloudAlbedoMonthly.push(field);
@@ -221,6 +225,8 @@ export function computeTemperature(
       for (let col = 0; col < CW; col++) t[row * CW + col] = init;
     }
     const rhs = new Float64Array(N);
+    // 海氷断熱: 氷結セルの実効熱容量(氷量に応じて毎ステップ更新)
+    const capEff = new Float64Array(N);
     const monthAccum: Float64Array[] = Array.from({ length: MONTHS_PER_YEAR }, () => new Float64Array(N));
     const monthCount = new Array<number>(MONTHS_PER_YEAR).fill(0);
     const totalSteps = K.ebmYears * K.ebmStepsPerYear;
@@ -248,8 +254,13 @@ export function computeTemperature(
           if (permanentIce?.[i]) aSurf = Math.max(aSurf, K.permanentIceAlbedo);
           const cloud = ((cloud0?.[i] ?? 0.2) * (1 - frac) + (cloud1?.[i] ?? 0.2) * frac);
           const albedo = cloud + (1 - cloud) * aSurf;
+          // 海氷断熱: 氷結海面は混合層を切り離し実効熱容量が陸並みに落ちる
+          // (極域の季節振幅の再現に必須 — constants.seaIceInsulationFactor 参照)
+          const oceanFrac = 1 - (coarse[i]?.landFrac ?? 0);
+          capEff[i] =
+            (heatCap[i] ?? 1) * (1 - K.seaIceInsulationFactor * iceW * oceanFrac) * capScale;
           rhs[i] =
-            (((heatCap[i] ?? 1) * capScale) / dt) * (t[i] ?? 0) +
+            ((capEff[i] ?? 1) / dt) * (t[i] ?? 0) +
             s * (1 - albedo) -
             (aEff[i] ?? K.olrAWm2) +
             (qFlux[i] ?? 0);
@@ -311,7 +322,7 @@ export function computeTemperature(
               upwindV === i
                 ? 0
                 : advScale * vBandW * chanV * landGrip * (Math.min(5, Math.abs(vMs)) / 4);
-            const cOverDt = ((heatCap[i] ?? 1) * capScale) / dt;
+            const cOverDt = (capEff[i] ?? 1) / dt;
             const df = diffFactor[i] ?? 1;
             const gzEff = gz * df;
             const gNEff = gN * df;
