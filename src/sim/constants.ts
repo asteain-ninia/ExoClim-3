@@ -248,6 +248,8 @@ export const MODEL_CONSTANTS = {
    */
   eastCoastSubsidenceRelief: 0.8,
   eastCoastSubsidenceDecayKm: 900,
+  /** \u6771\u5cb8\u7de9\u548c\u306e\u4f9b\u7d66\u5b9f\u7e3e\u30b2\u30fc\u30c8(\u3053\u306e\u4f9b\u7d66\u3067\u5168\u958b\u3002\u4e7e\u3044\u305f\u6d41\u5165\u306e\u6d77\u3092\u9664\u5916) */
+  eastReliefSupplyNorm: 0.7,
   /** 寒候期でも残る前線性の最低水蒸気(qRel の下限。弱い前線雪の表現) */
   stormMinQRel: 0.4,
   /** 高温湿潤の陸での対流性増幅(T≥22°C かつ供給豊富で最大 +この倍率) */
@@ -281,6 +283,8 @@ export const MODEL_CONSTANTS = {
    * 風下の雨陰の主機構 — 2026-07-30 レビュー P1)
    */
   orographicDepletionM: 1600,
+  /** \u7a1c\u7dda\u63a8\u5b9a: \u96a3\u63a5\u3068\u306e\u6bd4\u9ad8\u306b\u639b\u3051\u308b\u4fc2\u6570(\u72ed\u3044\u5c71\u8108\u306e 1\u00b0 \u5e73\u5747\u5747\u3057\u5bfe\u7b56\u3002\u906e\u853d/\u969c\u58c1\u306e\u307f) */
+  crestProminenceFactor: 0,
   /** 風上山脈による遮蔽: この比高(m)以上で最大遮蔽、遮蔽時の残存率 */
   upwindBlockReliefM: 1200,
   upwindBlockScanKm: 900,
