@@ -80,6 +80,7 @@ function main(): void {
     temperature: scoreTemperature(result, climObs),
     precipitation: scorePrecipitation(result, climObs),
     regionGates: scoreRegionGates(result),
+    logStructure: scoreLogStructure(result, koppenObs),
   };
 
   renderAll(result, koppenObs);
@@ -330,6 +331,81 @@ function scoreRegionGates(result: PipelineResult) {
   return gates;
 }
 
+// ---- Log 由来の構造観点(WL#36 視覚まとめ。報告のみ、合否ゲートではない)----
+// 「砂漠(BW)の陸側の縁はステップ(BS)のリングで囲まれる。西岸砂漠だけは
+// 海に接しリング無し」「A 群は Af→Am→Aw の遷移帯を挟む」をモデルと観測の
+// 双方で数え、構造の再現度を比べる。
+function structureMetrics(
+  W: number,
+  H: number,
+  isLand: (i: number) => boolean,
+  classAt: (i: number) => number,
+) {
+  let ringEdges = 0; // BW → BS(リング健全)
+  let breakEdges = 0; // BW → B 以外の陸(リング欠落)
+  let coastEdges = 0; // BW → 水(海接砂漠として免除)
+  let afDirect = 0; // Af → Aw 直接接触
+  let afBuffered = 0; // Af → Am(遷移帯あり)
+  for (let row = 0; row < H; row++) {
+    for (let col = 0; col < W; col++) {
+      const i = row * W + col;
+      if (!isLand(i)) continue;
+      const c = classAt(i);
+      const isBW = c === 4 || c === 5;
+      const isAf = c === 1;
+      if (!isBW && !isAf) continue;
+      const nbs = [
+        row > 0 ? (row - 1) * W + col : -1,
+        row < H - 1 ? (row + 1) * W + col : -1,
+        row * W + ((col + 1) % W),
+        row * W + ((col + W - 1) % W),
+      ];
+      for (const nb of nbs) {
+        if (nb < 0) continue;
+        if (!isLand(nb)) {
+          if (isBW) coastEdges++;
+          continue;
+        }
+        const n = classAt(nb);
+        if (isBW) {
+          if (n === 6 || n === 7) ringEdges++;
+          else if (!(n === 4 || n === 5)) breakEdges++;
+        }
+        if (isAf) {
+          if (n === 3) afDirect++;
+          else if (n === 2) afBuffered++;
+        }
+      }
+    }
+  }
+  const pct = (a: number, b: number) => (a + b > 0 ? Math.round((a / (a + b)) * 100) : 0);
+  return {
+    bsRingRatePct: pct(ringEdges, breakEdges),
+    bwCoastSharePct: pct(coastEdges, ringEdges + breakEdges),
+    afDirectAwPct: pct(afDirect, afBuffered),
+  };
+}
+
+function scoreLogStructure(result: PipelineResult, obs: KoppenFixture) {
+  const grid = result.context.grid;
+  const W = grid.widthCells;
+  const H = grid.heightCells;
+  const land = result.context.terrain.landMask;
+  const model = structureMetrics(
+    W,
+    H,
+    (i) => !!land[i],
+    (i) => result.koppen.classId[i] ?? 0,
+  );
+  const observed = structureMetrics(
+    W,
+    H,
+    (i) => (obs.classRaster[i] ?? 0) !== 0,
+    (i) => obs.classRaster[i] ?? 0,
+  );
+  return { model, observed };
+}
+
 // ---- PNG 出力 ----
 function renderAll(result: PipelineResult, obs: KoppenFixture): void {
   const grid = result.context.grid;
@@ -403,6 +479,7 @@ function printSummary(report: {
   temperature: ReturnType<typeof scoreTemperature>;
   precipitation: ReturnType<typeof scorePrecipitation>;
   regionGates: ReturnType<typeof scoreRegionGates>;
+  logStructure: ReturnType<typeof scoreLogStructure>;
 }): void {
   console.log('\n===== 地球検証サマリ =====');
   console.log(
@@ -425,6 +502,14 @@ function printSummary(report: {
   for (const g of report.regionGates) {
     console.log(`  ${g.pass ? '✅' : '❌'} ${g.id}: ${g.detail}`);
   }
+  const ls = report.logStructure;
+  console.log('Log 構造観点(モデル vs 観測、報告のみ):');
+  console.log(
+    `  BS リング率(BW の陸縁が BS): ${ls.model.bsRingRatePct}% vs ${ls.observed.bsRingRatePct}% ・ BW 縁の海接率: ${ls.model.bwCoastSharePct}% vs ${ls.observed.bwCoastSharePct}%`,
+  );
+  console.log(
+    `  Af→Aw 直接接触率(遷移帯 Am の欠落): ${ls.model.afDirectAwPct}% vs ${ls.observed.afDirectAwPct}%`,
+  );
   console.log('\nモデル上位クラス:', report.koppen.topClassesModel.map((e) => `${e.cls} ${e.pct}%`).join(', '));
   console.log('観測上位クラス:', report.koppen.topClassesObs.map((e) => `${e.cls} ${e.pct}%`).join(', '));
   console.log(`\nPNG とレポート: ${OUT_DIR}`);

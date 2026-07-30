@@ -160,6 +160,12 @@ export const MODEL_CONSTANTS = {
   landRecyclingStrength: 0.75,
   /** 風上追跡の最大距離(km) */
   moistureTraceMaxKm: 5200,
+  /**
+   * Fetch 則(WL#32): 閉じた内海・湖(面積 < 1.2M km² の海成分)の湿潤が
+   * 内陸へ届く距離 = その水域の風上幅(Fetch)。この値はその実効上限。
+   * 外洋(海峡で繋がる縁辺海を含む)は対象外で、到達は減衰長が決める。
+   */
+  fetchOpenOceanCapKm: 2000,
   /** ITCZ 収束の降水増幅(中心で ×(1+この値)) */
   itczLiftBoost: 2.2,
   /** ストームトラック(温帯低気圧帯)の増幅 */

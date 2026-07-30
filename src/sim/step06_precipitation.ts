@@ -39,6 +39,7 @@ export function computePrecipitation(
   const monthlyPrecipMm: Float32Array[] = [];
   const annualPrecipMm = new Float32Array(grid.cellCount);
   const dyKm = cellHeightKm(grid, params.body.radiusKm);
+  const smallWater = buildSmallWaterMask(ctx);
 
   // 「自転方向の東」側の海までの距離(km)。亜熱帯高気圧の西翼湿潤化に使用。
   // 順行 = 東、逆行 = 西。行内スキャン(最大 40 セル)。
@@ -77,7 +78,7 @@ export function computePrecipitation(
     if (!tField || !u || !v) continue;
 
     // ---- パス 1: 海洋のみを供給源として風上追跡 ----
-    const supply1 = traceMoistureSupply(ctx, ocean, tField, u, v, null);
+    const supply1 = traceMoistureSupply(ctx, smallWater, tField, u, v, null);
 
     // ---- 持ち上げ・抑制係数と降水化(パス 1) ----
     const precip1 = convertToPrecip(ctx, itcz, m, tField, u, v, supply1, ridgeN, ridgeS, pfN, pfS, dyKm, ocean, eastOceanKm);
@@ -89,7 +90,7 @@ export function computePrecipitation(
       const wetness = Math.min(1, (precip1[i] ?? 0) / 70); // 70mm/月で飽和
       landSource[i] = K.landRecyclingStrength * wetness;
     }
-    const supply2 = traceMoistureSupply(ctx, ocean, tField, u, v, landSource);
+    const supply2 = traceMoistureSupply(ctx, smallWater, tField, u, v, landSource);
     const precip2 = convertToPrecip(ctx, itcz, m, tField, u, v, supply2, ridgeN, ridgeS, pfN, pfS, dyKm, ocean, eastOceanKm);
 
     monthlyPrecipMm.push(precip2);
@@ -101,13 +102,61 @@ export function computePrecipitation(
 }
 
 /**
+ * 閉じた内海・湖(面積 < 1.2M km² の海成分)のマスク。Fetch 則の対象。
+ * 海峡で外洋に繋がる縁辺海(地中海など)は外洋と同成分になり対象外。
+ */
+function buildSmallWaterMask(ctx: SimContext): Uint8Array {
+  const { grid, params, terrain } = ctx;
+  const W = grid.widthCells;
+  const H = grid.heightCells;
+  const label = new Int32Array(grid.cellCount).fill(-1);
+  const mask = new Uint8Array(grid.cellCount);
+  const dyKm = cellHeightKm(grid, params.body.radiusKm);
+  let next = 0;
+  const stack: number[] = [];
+  for (let seed = 0; seed < grid.cellCount; seed++) {
+    if (terrain.landMask[seed] || (label[seed] ?? 0) >= 0) continue;
+    const id = next++;
+    let areaKm2 = 0;
+    const cells: number[] = [];
+    stack.push(seed);
+    label[seed] = id;
+    while (stack.length > 0) {
+      const i = stack.pop();
+      if (i === undefined) break;
+      const row = Math.floor(i / W);
+      const col = i % W;
+      areaKm2 += cellWidthKm(grid, row, params.body.radiusKm) * dyKm;
+      cells.push(i);
+      const nbs = [
+        row > 0 ? (row - 1) * W + col : -1,
+        row < H - 1 ? (row + 1) * W + col : -1,
+        row * W + ((col + 1) % W),
+        row * W + ((col + W - 1) % W),
+      ];
+      for (const nb of nbs) {
+        if (nb >= 0 && !terrain.landMask[nb] && (label[nb] ?? 0) < 0) {
+          label[nb] = id;
+          stack.push(nb);
+        }
+      }
+    }
+    if (areaKm2 < 1_200_000) {
+      for (const i of cells) mask[i] = 1;
+    }
+  }
+  return mask;
+}
+
+/**
  * 風上追跡による水蒸気供給量(無次元)。各セルから風を遡り、
  * 海セルで q_sat(SST) に比例した蒸発を拾い、距離減衰で持ち込む。
  * landSource ≠ null のとき陸セルも(局所降水に応じて)供給源になる。
+ * 閉じた内海(smallWater)からの供給は Fetch 則で内陸到達を制限する。
  */
 function traceMoistureSupply(
   ctx: SimContext,
-  _ocean: OceanCurrentResult,
+  smallWater: Uint8Array,
   tField: Float32Array,
   u: Float32Array,
   v: Float32Array,
@@ -134,6 +183,25 @@ function traceMoistureSupply(
       // 基準は 1° の南北セル寸法 ≈ 111km)。ステップ数上限も距離基準
       const stepWeight = dyKm / 111;
       const maxSteps = Math.min(200, Math.ceil(K.moistureTraceMaxKm / dyKm) + 4);
+      // Fetch 則(WL#32): 閉じた内海・湖の湿潤は「水域の風上幅(Fetch)」まで
+      // しか内陸へ届かない。外洋(縁辺海含む)は対象外 — 到達は減衰長が決める。
+      // 内海ごとに供給を保留し、横断幅が確定した時点でゲートを掛けて計上する。
+      let landKmFromTarget = 0; // 対象セルからこれまでに歩いた陸の距離
+      let inWater = false; // いま「内海」を横断中か(外洋は含めない)
+      let bodyFetchKm = 0; // いま横断中の内海の幅
+      let bodyLandAtEntry = 0; // その内海に入る手前までの陸距離
+      let pendingSupply = 0; // その内海からの保留供給
+      const commitBody = () => {
+        if (pendingSupply > 0) {
+          // Fetch を超えた先も完全遮断はしない(下限 0.3)— 実在の黒海・バルト海は
+          // 遠方にも幾らか湿潤を送る。規則は「到達を抑える」性質のもの
+          const reach = Math.min(bodyFetchKm, K.fetchOpenOceanCapKm);
+          const f = Math.min(1, Math.max(0.3, (reach + 250 - bodyLandAtEntry) / 500));
+          supply += pendingSupply * f;
+        }
+        pendingSupply = 0;
+        bodyFetchKm = 0;
+      };
       // 自セルが海なら足元の蒸発をまず拾う
       for (let step = 0; step < maxSteps; step++) {
         const r = Math.min(H - 1, Math.max(0, Math.floor(fr)));
@@ -142,9 +210,29 @@ function traceMoistureSupply(
         const tHere = tField[i] ?? 0;
         const qRel = saturationVaporPressureHpa(tHere) / q0;
         if (!terrain.landMask[i]) {
-          supply += attenuation * qRel * stepWeight;
-        } else if (landSource) {
-          supply += attenuation * qRel * (landSource[i] ?? 0) * stepWeight;
+          if (smallWater[i]) {
+            if (!inWater) {
+              inWater = true;
+              bodyLandAtEntry = landKmFromTarget;
+              bodyFetchKm = 0;
+              pendingSupply = 0;
+            }
+            pendingSupply += attenuation * qRel * stepWeight;
+          } else {
+            if (inWater) {
+              inWater = false;
+              commitBody();
+            }
+            supply += attenuation * qRel * stepWeight;
+          }
+        } else {
+          if (inWater) {
+            inWater = false;
+            commitBody();
+          }
+          if (landSource) {
+            supply += attenuation * qRel * (landSource[i] ?? 0) * stepWeight;
+          }
         }
         if (traveledKm >= K.moistureTraceMaxKm) break;
         // 風上へ 1 セルぶん移動(風が弱い所は打ち切り)
@@ -159,10 +247,13 @@ function traceMoistureSupply(
         fr += drCells;
         if (fr < 0 || fr >= H) break;
         traveledKm += stepKm;
+        if (terrain.landMask[i]) landKmFromTarget += stepKm;
+        else if (smallWater[i]) bodyFetchKm += stepKm;
         const decayKm = terrain.landMask[i] ? K.moistureDecayLandKm : K.moistureDecayOceanKm;
         attenuation *= Math.exp(-stepKm / decayKm);
         if (attenuation < 0.02) break;
       }
+      if (inWater) commitBody(); // 途中終了した水域の保留分を精算
       out[i0] = supply;
     }
   }

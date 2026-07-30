@@ -48,7 +48,7 @@ for (let band = 80; band >= -80; band -= 10) {
     if (Math.abs(lat - band) > 5) continue;
     for (let cc = 0; cc < clim.widthCells; cc++) {
       const ci = cr * clim.widthCells + cc;
-      let obsMonthly: number[] = [];
+      const obsMonthly: number[] = [];
       let ok = true;
       for (let m = 0; m < 12; m++) {
         const v = clim.monthlyTemperatureDeciC[m]?.[ci] ?? -9999;
@@ -56,7 +56,7 @@ for (let band = 80; band >= -80; band -= 10) {
         obsMonthly.push(v / 10);
       }
       if (!ok) continue;
-      let mm = new Array<number>(12).fill(0);
+      const mm = new Array<number>(12).fill(0);
       let nn = 0;
       for (let dr = 0; dr < f; dr++) for (let dc = 0; dc < f; dc++) {
         const gr = cr * f + dr, gc = cc * f + dc;
