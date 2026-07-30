@@ -95,7 +95,7 @@ function preview(name: string, params: PlanetParams, month = -1): void {
   let landHits = 0;
   for (const sl of lines) {
     const rgb = COLORS[sl.kind];
-    for (const pts of smoothForDrawing(sl.points, 2)) {
+    for (const pts of smoothForDrawing(sl.points, 3)) {
     for (let k = 2; k + 1 < pts.length; k += 2) {
       const x0 = xOf(pts[k - 1] ?? 0);
       const y0 = yOf(pts[k - 2] ?? 0);

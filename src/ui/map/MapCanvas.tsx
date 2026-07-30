@@ -154,6 +154,24 @@ export function MapCanvas() {
       const colors = { warm: '#ff6a50', cold: '#58b0ff', neutral: '#e8e8e8' } as const;
       const xOf = (lon: number) => ((lon + 180) / 360) * CANVAS_W;
       const yOf = (lat: number) => ((90 - lat) / 180) * CANVAS_H;
+      // 湧昇域(シアンの点)とサンゴ礁(緑の点)— WL#30
+      const cellW2 = CANVAS_W / W;
+      const cellH2 = CANVAS_H / H;
+      for (let row = 0; row < H; row++) {
+        for (let col = 0; col < W; col++) {
+          const i = row * W + col;
+          if (result.ocean.upwellingMask[i]) {
+            ctx2d.fillStyle = 'rgba(90, 240, 255, 0.75)';
+            ctx2d.fillRect(col * cellW2 + cellW2 * 0.3, row * cellH2 + cellH2 * 0.3, cellW2 * 0.4, cellH2 * 0.4);
+          } else if (result.ocean.coralReefMask[i]) {
+            ctx2d.fillStyle = 'rgba(120, 255, 150, 0.7)';
+            ctx2d.beginPath();
+            ctx2d.arc(col * cellW2 + cellW2 / 2, row * cellH2 + cellH2 / 2, Math.max(1.2, cellW2 * 0.22), 0, Math.PI * 2);
+            ctx2d.fill();
+          }
+        }
+      }
+
       const lines =
         month >= 0 ? (result.ocean.monthlyStreamlines[month] ?? result.ocean.streamlines) : result.ocean.streamlines;
       for (const sl of lines) {
@@ -161,7 +179,7 @@ export function MapCanvas() {
         ctx2d.fillStyle = colors[sl.kind];
         ctx2d.lineWidth = 2.2;
         ctx2d.lineJoin = 'round';
-        for (const pts of smoothForDrawing(sl.points, 2)) {
+        for (const pts of smoothForDrawing(sl.points, 3)) {
           ctx2d.beginPath();
           for (let k = 0; k + 1 < pts.length; k += 2) {
             const x = xOf(pts[k + 1] ?? 0);
@@ -170,13 +188,17 @@ export function MapCanvas() {
             else ctx2d.lineTo(x, y);
           }
           ctx2d.stroke();
-          // 矢印(点列の並び = 流向)。平滑化後の点で 12 点ごと + 終端
+          // 矢印(点列の並び = 流向)。ピクセル弧長 ~60px ごとに配置
           const nPts = pts.length / 2;
-          for (let k = 6; k < nPts; k += 12) {
+          let arcAcc = 30;
+          for (let k = 1; k < nPts; k++) {
             const x1 = xOf(pts[k * 2 + 1] ?? 0);
             const y1 = yOf(pts[k * 2] ?? 0);
             const x0 = xOf(pts[(k - 1) * 2 + 1] ?? 0);
             const y0 = yOf(pts[(k - 1) * 2] ?? 0);
+            arcAcc += Math.hypot(x1 - x0, y1 - y0);
+            if (arcAcc < 60) continue;
+            arcAcc = 0;
             const ang = Math.atan2(y1 - y0, x1 - x0);
             ctx2d.beginPath();
             ctx2d.moveTo(x1, y1);
@@ -185,6 +207,55 @@ export function MapCanvas() {
             ctx2d.closePath();
             ctx2d.fill();
           }
+        }
+      }
+    }
+
+    // 気温オーバーレイ: 等温線(6°C 刻み — WL#34/35 の作図表現)
+    if (overlay === 'temperature') {
+      const field =
+        month < 0 ? result.temperature.annualMeanC : result.temperature.monthlyTemperatureC[month];
+      if (field) {
+        const cw = CANVAS_W / W;
+        const ch = CANVAS_H / H;
+        ctx2d.lineWidth = 1;
+        for (let level = -42; level <= 36; level += 6) {
+          ctx2d.strokeStyle = level === 0 ? 'rgba(255,255,255,0.55)' : 'rgba(30,30,40,0.45)';
+          ctx2d.beginPath();
+          for (let row = 0; row < H - 1; row++) {
+            for (let col = 0; col < W; col++) {
+              const colE = (col + 1) % W;
+              if (colE === 0) continue; // ラップセグメントは省略(端 1 列のみ)
+              const v00 = (field[row * W + col] ?? 0) - level;
+              const v10 = (field[row * W + colE] ?? 0) - level;
+              const v01 = (field[(row + 1) * W + col] ?? 0) - level;
+              const v11 = (field[(row + 1) * W + colE] ?? 0) - level;
+              const caseId = (v00 > 0 ? 1 : 0) | (v10 > 0 ? 2 : 0) | (v11 > 0 ? 4 : 0) | (v01 > 0 ? 8 : 0);
+              if (caseId === 0 || caseId === 15) continue;
+              const x0 = (col + 0.5) * cw;
+              const y0 = (row + 0.5) * ch;
+              // 辺上の交点(線形補間)
+              const top: [number, number] = [x0 + (v00 / (v00 - v10)) * cw, y0];
+              const bottom: [number, number] = [x0 + (v01 / (v01 - v11)) * cw, y0 + ch];
+              const left: [number, number] = [x0, y0 + (v00 / (v00 - v01)) * ch];
+              const right: [number, number] = [x0 + cw, y0 + (v10 / (v10 - v11)) * ch];
+              const seg = (a: [number, number], b: [number, number]) => {
+                ctx2d.moveTo(a[0], a[1]);
+                ctx2d.lineTo(b[0], b[1]);
+              };
+              switch (caseId) {
+                case 1: case 14: seg(left, top); break;
+                case 2: case 13: seg(top, right); break;
+                case 3: case 12: seg(left, right); break;
+                case 4: case 11: seg(right, bottom); break;
+                case 6: case 9: seg(top, bottom); break;
+                case 7: case 8: seg(left, bottom); break;
+                case 5: seg(left, top); seg(right, bottom); break;
+                case 10: seg(top, right); seg(left, bottom); break;
+              }
+            }
+          }
+          ctx2d.stroke();
         }
       }
     }

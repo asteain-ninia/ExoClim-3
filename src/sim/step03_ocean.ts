@@ -113,13 +113,48 @@ export function computeOceanCurrent(
     }
   }
 
+  // ---- 湧昇域とサンゴ礁(WL#30) ----
+  // 湧昇: 寒流の走る大陸西岸(自転の意味での東縁)沿い ~250km。エクマン輸送が
+  // 沿岸水を沖へ運び深層水が上がる。貿易風〜亜熱帯帯で最も強い。
+  // サンゴ礁: 熱帯(|lat| ≲ 傾斜 + 8°)の暖かい沿岸で、湧昇・寒流を避ける。
+  const upwellingMask = new Uint8Array(grid.cellCount);
+  const coralReefMask = new Uint8Array(grid.cellCount);
+  const reefLatMax = Math.min(28, params.body.axialTiltDeg + 8);
+  for (let row = 0; row < H; row++) {
+    const lat = latDegOfRow(grid, row);
+    const absLat = Math.abs(lat);
+    const kmPerCell = cellWidthKm(grid, row, params.body.radiusKm);
+    for (let col = 0; col < W; col++) {
+      const i = row * W + col;
+      if (land[i]) continue;
+      const coastKm = (ctx.oceanDistToLandKm[i] ?? 1e9);
+      if (coastKm > 260) continue;
+      const a = sstAnomalyC[i] ?? 0;
+      // 湧昇: 寒流沿岸(貿易風〜分離緯度 +5°)
+      if (a < -0.8 && absLat >= eccMean * 0.6 && absLat <= separationLat + 5) {
+        // 陸が自転の「東」側にあること(順行 = 大陸西岸)
+        const dir = prograde ? 1 : -1;
+        for (let d = 1; d <= Math.ceil(260 / kmPerCell); d++) {
+          if (land[row * W + ((col + dir * d + W * 4) % W)]) {
+            upwellingMask[i] = 1;
+            break;
+          }
+        }
+      }
+      // サンゴ礁: 熱帯の暖かい浅い沿岸(湧昇・寒流域は不可)
+      if (absLat <= reefLatMax && a > -0.5 && upwellingMask[i] === 0 && coastKm <= 180) {
+        coralReefMask[i] = 1;
+      }
+    }
+  }
+
   // ---- 流線: 月別トレース + 年平均(帯の年平均値でトレース) ----
   const monthlyStreamlines: OceanStreamline[][] = [];
   for (let m = 0; m < MONTHS_PER_YEAR; m++) {
     monthlyStreamlines.push(traceStreamlines(ctx, itcz, windBelt, m));
   }
   const streamlines = traceStreamlines(ctx, itcz, windBelt, -1);
-  return { sstAnomalyC, currentClass, streamlines, monthlyStreamlines };
+  return { sstAnomalyC, currentClass, upwellingMask, coralReefMask, streamlines, monthlyStreamlines };
 }
 
 /** 帯 [lo, hi] 内で 1、外側へ幅 edge の余韻で減衰 */
@@ -308,10 +343,19 @@ function traceStreamlines(
   };
 
   // ---- 種まき 1: ITCZ に沿う赤道反流(東向き・中立)。陸で分断される区間ごと ----
-  const centers =
-    month >= 0
-      ? itcz.monthlyCenterLatDegByCol[month]
-      : itcz.monthlyCenterLatDegByCol[Math.floor(MONTHS_PER_YEAR / 2)];
+  // 年平均(-1)では月別中心の年平均を使う(7 月固定だと年平均の帯と食い違い、
+  // 反流の分断位置がずれて北西太平洋の連鎖が壊れる = 黒潮消失事故)
+  let centers: Float32Array | undefined;
+  if (month >= 0) {
+    centers = itcz.monthlyCenterLatDegByCol[month];
+  } else {
+    const meanCenters = new Float32Array(W);
+    for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+      const c = itcz.monthlyCenterLatDegByCol[m];
+      for (let col = 0; col < W; col++) meanCenters[col] = (meanCenters[col] ?? 0) + (c?.[col] ?? 0) / MONTHS_PER_YEAR;
+    }
+    centers = meanCenters;
+  }
   {
     const eccOffsetDeg = bands.eccDeg + 3; // 反流の U ターン先(赤道流の緯度)
     let seg: number[] = [];

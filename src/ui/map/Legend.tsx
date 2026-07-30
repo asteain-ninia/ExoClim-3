@@ -37,7 +37,9 @@ export function Legend() {
     return (
       <div className="legend">
         <span className="legend-gradient legend-gradient--temp" />
-        <span className="legend-caption">−45°C 〜 +45°C</span>
+        <span className="legend-caption">
+          −45°C 〜 +45°C ・ 細線 = 等温線(6°C 刻み、白 = 0°C)
+        </span>
       </div>
     );
   }
@@ -54,9 +56,9 @@ export function Legend() {
       <div className="legend">
         <span className="legend-gradient legend-gradient--currents" />
         <span className="legend-caption">
-          流線 = 環流の演繹(矢印 = 流向): 赤 = 暖流(低緯度 → 高緯度)、青 = 寒流
-          (高緯度 → 低緯度)、白 = 中立(緯度方向)。背景色 = 海面温度偏差 −3.5 〜
-          +3.5°C。貿易風帯で西向き → 大陸棚で分割 → 偏西風帯で東向き → 環流を閉じる
+          流線 = 環流の演繹(矢印 = 流向): 赤 = 暖流、青 = 寒流、白 = 中立。
+          シアン角点 = 沿岸湧昇(好漁場)、緑丸 = サンゴ礁候補。背景色 = 海面温度偏差
+          −3.5 〜 +3.5°C。月切替で季節の環流・海氷縁が変わる
         </span>
       </div>
     );

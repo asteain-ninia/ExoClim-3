@@ -52,6 +52,10 @@ export interface OceanCurrentResult {
   sstAnomalyC: Float32Array;
   /** [cell] 表示用分類: 1 = 暖流域、-1 = 寒流域、0 = 中立/陸 */
   currentClass: Int8Array;
+  /** [cell] 沿岸湧昇域(1 = 湧昇。寒流沿岸のエクマン輸送、WL#30) */
+  upwellingMask: Uint8Array;
+  /** [cell] サンゴ礁候補(1 = 礁。熱帯の暖流沿岸で湧昇を避ける、WL#30) */
+  coralReefMask: Uint8Array;
   /** 環流の流線(年平均の帯でトレース)。docs/spec/01-04_循環.md 参照 */
   streamlines: OceanStreamline[];
   /** [month] 月別の流線(季節の転回緯度・海氷縁・ITCZ でトレース。WL#28 の夏冬版の一般化) */

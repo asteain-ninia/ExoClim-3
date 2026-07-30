@@ -43,7 +43,28 @@ export function chaikinSmooth(points: number[], iterations: number): number[] {
   return pts;
 }
 
-/** ラップ分割 → 平滑化 をまとめて行う(描画用) */
-export function smoothForDrawing(points: number[], iterations = 2): number[][] {
-  return splitAtLonWrap(points).map((seg) => chaikinSmooth(seg, iterations));
+/** 点列を約 spacingDeg 間隔に間引く(端点は保持)。階段状の頂点を減らして滑らかにする */
+export function decimate(points: number[], spacingDeg: number): number[] {
+  const n = points.length / 2;
+  if (n < 3) return points;
+  const out: number[] = [points[0] ?? 0, points[1] ?? 0];
+  let acc = 0;
+  for (let k = 1; k < n - 1; k++) {
+    const dLat = (points[k * 2] ?? 0) - (points[(k - 1) * 2] ?? 0);
+    let dLon = (points[k * 2 + 1] ?? 0) - (points[(k - 1) * 2 + 1] ?? 0);
+    if (dLon > 180) dLon -= 360;
+    if (dLon < -180) dLon += 360;
+    acc += Math.hypot(dLat, dLon);
+    if (acc >= spacingDeg) {
+      out.push(points[k * 2] ?? 0, points[k * 2 + 1] ?? 0);
+      acc = 0;
+    }
+  }
+  out.push(points[(n - 1) * 2] ?? 0, points[(n - 1) * 2 + 1] ?? 0);
+  return out;
+}
+
+/** ラップ分割 → 間引き → 平滑化 をまとめて行う(描画用) */
+export function smoothForDrawing(points: number[], iterations = 2, spacingDeg = 1.2): number[][] {
+  return splitAtLonWrap(points).map((seg) => chaikinSmooth(decimate(seg, spacingDeg), iterations));
 }
