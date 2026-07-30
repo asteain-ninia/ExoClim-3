@@ -3,8 +3,10 @@ import { expect, test } from '@playwright/test';
 test('起動 → 計算完了 → 気候区分マップが描画される', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByTestId('params-panel')).toBeVisible();
-  // 初回計算(2° で数秒)の完了を待つ
+  // 初回計算の完了を待つ
   await expect(page.getByTestId('computing-indicator')).toBeHidden({ timeout: 60_000 });
+  // ワーカーがエラーを返していないこと(process 参照事故などの回帰ガード)
+  await expect(page.locator('.error-badge')).toHaveCount(0);
   // Canvas に海以外の色が描かれている(気候区分の凡例も表示)
   await expect(page.getByTestId('legend')).toBeVisible();
   const nonOcean = await page.evaluate(() => {

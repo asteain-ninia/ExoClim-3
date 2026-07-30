@@ -10,7 +10,9 @@ export default defineConfig({
   webServer: {
     command: 'npm run preview',
     port: 4173,
-    reuseExistingServer: true,
+    // 常に自前でサーバを起動する。true だと残骸サーバの「古いビルド」を
+    // 検証してしまい、ブラウザ非互換(process 参照事故)を見逃す。
+    reuseExistingServer: false,
     timeout: 30_000,
   },
 });

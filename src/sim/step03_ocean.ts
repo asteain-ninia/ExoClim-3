@@ -284,7 +284,9 @@ function traceStreamlines(
     totalSegments++;
   };
 
-  const debugOn = !!process.env.TRACE_DEBUG && month === 0;
+  // Node の診断スクリプト専用(ブラウザ/Worker には process が無いので必ずガードする)
+  const debugOn =
+    typeof process !== 'undefined' && !!process.env?.TRACE_DEBUG && month === 0;
   const dbg = (msg: string, row: number, col: number) => {
     if (!debugOn) return;
     const lat = latDegOfRow(grid, row);
