@@ -81,6 +81,11 @@ export const MODEL_CONSTANTS = {
   stratocumulusBoostPerNegC: 0.55,
   /** 冬(月日射 < 年平均)の陸上における移流結合の低減率(接地逆転層) */
   winterInversionAdvectionFactor: 0.5,
+  /**
+   * 冬の接地逆転層は移流だけでなく拡散(自由大気との混合)も絶縁する。
+   * 内陸度 1 の冬に拡散をこの係数まで低減(シベリア・南極内陸の冬の冷え込み)
+   */
+  winterInversionDiffusionFactor: 0.65,
   /** 周極海峡行の海洋混合層の増深倍率(遮られない流路の深い鉛直混合) */
   channelMixedLayerBoost: 3.0,
   /** 気温減率(°C/km、標高降尺度と OLR 標高補正に使用) */

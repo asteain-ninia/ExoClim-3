@@ -49,6 +49,21 @@ export function computeOceanCurrent(
   const separationLat = ridgeMean + 0.25 * (pfMean - ridgeMean); // 境界流の分離緯度
   const driftHiLat = Math.min(84, pfMean + 8);
 
+  // 周極海峡がある半球では、その最赤道側の緯度より極側で暖流吹送域を抑制する
+  // (実物は周極流が環流を剪断するため北大西洋海流型の暖水輸送が成立しない。
+  //  2026-07-30 レビュー指摘: これが南半球中緯度 +8°C の主犯の一つ)
+  const channelMinAbsLat: [number, number] = [90, 90]; // [北, 南]
+  for (let row = 0; row < H; row++) {
+    const lat = latDegOfRow(grid, row);
+    if (Math.abs(lat) > K.channelMaxAbsLatDeg) continue;
+    let landN = 0;
+    for (let col = 0; col < W; col++) landN += land[row * W + col] ?? 0;
+    if (landN / W < K.channelLandFracMax) {
+      const h = lat >= 0 ? 0 : 1;
+      channelMinAbsLat[h] = Math.min(channelMinAbsLat[h] ?? 90, Math.abs(lat));
+    }
+  }
+
   for (let row = 0; row < H; row++) {
     const lat = latDegOfRow(grid, row);
     const absLat = Math.abs(lat);
@@ -97,7 +112,12 @@ export function computeOceanCurrent(
       // 中高緯度: 暖流吹送域(海盆東側ほど暖かい)と海盆西縁の寒流帰還
       if (absLat >= separationLat && absLat <= driftHiLat) {
         const bandW = bellBand(absLat, separationLat, driftHiLat, 6);
-        const widthFactor = Math.min(1, basinWidthDeg / 55); // 狭い海では発達しない
+        let widthFactor = Math.min(1, basinWidthDeg / 55); // 狭い海では発達しない
+        // ほぼ一周する「海盆」は周極流域であり環流吹送は成立しない
+        widthFactor *= Math.min(1, Math.max(0, (300 - basinWidthDeg) / 120));
+        // 周極海峡より極側は環流が剪断される
+        const chanCap = channelMinAbsLat[lat >= 0 ? 0 : 1] ?? 90;
+        if (absLat > chanCap - 4) widthFactor = 0;
         anomaly += K.warmDriftC * Math.pow(pos, 1.4) * bandW * widthFactor;
         if (pos < 0.35) {
           anomaly += K.coldReturnC * (1 - pos / 0.35) * bandW * widthFactor;

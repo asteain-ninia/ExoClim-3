@@ -98,19 +98,24 @@ export function computeTemperature(
     iceOnset[i] = K.iceOnsetC * c.landFrac + K.seaFreezeC * (1 - c.landFrac);
     qFlux[i] = K.sstAnomalyCouplingWm2PerK * c.sstAnomalyC * (1 - c.landFrac);
   }
-  // Q フラックスのエネルギー中立化
+  // Q フラックスのエネルギー中立化。補償は**海セルのみ**に配賦する —
+  // 全セル一律に引くと、qFlux が 0 の陸にまで恒常の寒冷税(全球 ~−4 W/m²
+  // ≈ −1.9°C)がかかる(2026-07-30 レビュー指摘。SST 偏差は構造的に正味プラス)
   {
     let sum = 0;
-    let wsum = 0;
+    let wOcean = 0;
     for (let row = 0; row < CH; row++) {
       const w = Math.cos((latDegOfRow(cg, row) * Math.PI) / 180);
       for (let col = 0; col < CW; col++) {
-        sum += (qFlux[row * CW + col] ?? 0) * w;
-        wsum += w;
+        const i = row * CW + col;
+        sum += (qFlux[i] ?? 0) * w;
+        wOcean += w * (1 - (coarse[i]?.landFrac ?? 0));
       }
     }
-    const mean = sum / wsum;
-    for (let i = 0; i < N; i++) qFlux[i] = (qFlux[i] ?? 0) - mean;
+    const meanOcean = wOcean > 1e-9 ? sum / wOcean : 0;
+    for (let i = 0; i < N; i++) {
+      qFlux[i] = (qFlux[i] ?? 0) - meanOcean * (1 - (coarse[i]?.landFrac ?? 0));
+    }
   }
 
   // ---- 雲アルベドの循環変調(月別・セル別) ----
@@ -271,7 +276,10 @@ export function computeTemperature(
       const vField = windOnCg.v[m0];
       const ridgeNNow = windBelt.monthlyRidgeLatNDeg[m0] ?? 31;
       const ridgeSNow = windBelt.monthlyRidgeLatSDeg[m0] ?? -31;
-      const ridgeAbs = Math.max(15, Math.abs(ridgeNNow));
+      // リッジは半球別(北半球の値を南に流用すると、南半球の冬にハドレー増強が
+      // 12° はみ出し、v 結合の許可帯も誤る — 2026-07-30 レビューで発見のバグ)
+      const ridgeAbsN = Math.max(15, Math.abs(ridgeNNow));
+      const ridgeAbsS = Math.max(15, Math.abs(ridgeSNow));
       const summerN = ridgeNNow > meanRidgeN;
       const summerS = ridgeSNow < meanRidgeS;
       for (let sweep = 0; sweep < GS_SWEEPS; sweep++) {
@@ -279,6 +287,7 @@ export function computeTemperature(
           const lat = latDegOfRow(cg, row);
           const cosC = Math.max(1e-3, cosCenter[row] ?? 1e-3);
           const gz = (dBase * K.zonalDiffusionFactor * (metricZonal[row] ?? 1)) / (dPhi * dPhi);
+          const ridgeAbs = lat >= 0 ? ridgeAbsN : ridgeAbsS;
           // ハドレー域はリッジ内側で南北拡散を増強(熱帯の平坦な温度場を再現)
           const hadleyW = Math.max(0, 1 - (lat / ridgeAbs) * (lat / ridgeAbs));
           const dMerid = dBase * (1 + K.hadleyDiffusionBoost * hadleyW);
@@ -323,13 +332,21 @@ export function computeTemperature(
                 ? 0
                 : advScale * vBandW * chanV * landGrip * (Math.min(5, Math.abs(vMs)) / 4);
             const cOverDt = (capEff[i] ?? 1) / dt;
-            const df = diffFactor[i] ?? 1;
-            const gzEff = gz * df;
-            const gNEff = gN * df;
-            const gSEff = gS * df;
-            const diag = cOverDt + K.olrBWm2PerC + 2 * gzEff + gNEff + gSEff + advCu + advCv;
+            // 界面伝導度は両セルの係数平均(受け手の値だけ掛けると行列が
+            // 非対称になり厳密には保存しない — 2026-07-30 レビュー指摘)。
+            // 冬の接地逆転は自由大気との混合(拡散)も絶縁する(内陸で強い)
+            const invD = isWinterRow
+              ? 1 - (1 - K.winterInversionDiffusionFactor) * (interior01[i] ?? 0)
+              : 1;
+            const df = (diffFactor[i] ?? 1) * invD;
+            const gzE = gz * 0.5 * (df + (diffFactor[east] ?? 1));
+            const gzW = gz * 0.5 * (df + (diffFactor[west] ?? 1));
+            const gNEff = gN * 0.5 * (df + (diffFactor[north] ?? 1));
+            const gSEff = gS * 0.5 * (df + (diffFactor[south] ?? 1));
+            const diag = cOverDt + K.olrBWm2PerC + gzE + gzW + gNEff + gSEff + advCu + advCv;
             const off =
-              gzEff * ((t[east] ?? 0) + (t[west] ?? 0)) +
+              gzE * (t[east] ?? 0) +
+              gzW * (t[west] ?? 0) +
               gNEff * (t[north] ?? 0) +
               gSEff * (t[south] ?? 0) +
               advCu * (t[upwindU] ?? 0) +
