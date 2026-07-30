@@ -11,6 +11,7 @@ import type { PipelineResult } from '@/sim/types';
 import { smoothForDrawing } from '@/domain/polyline';
 import { useResultsStore } from '@/store/results';
 import { useUiStore } from '@/store/ui';
+import earthKoppenObs from '@/domain/data/earth_koppen_1deg.json';
 import {
   currentColor,
   koppenColor,
@@ -68,6 +69,33 @@ export function MapCanvas() {
     const { grid, terrain } = result.context;
     const W = grid.widthCells;
     const H = grid.heightCells;
+
+    // 観測地球(Beck 2023)の参照レイヤー: モデルとは独立の 1° ラスタを
+    // そのまま描く(どのプリセットでも同じ「お手本」— 目視比較用)
+    if (overlay === 'koppenObs') {
+      const obs = earthKoppenObs as { widthCells: number; heightCells: number; classRaster: number[] };
+      const imgObs = new ImageData(obs.widthCells, obs.heightCells);
+      for (let i = 0; i < obs.widthCells * obs.heightCells; i++) {
+        const id = obs.classRaster[i] ?? 0;
+        const rgb = id === 0 ? OCEAN_COLOR : koppenColor(id, true);
+        imgObs.data[i * 4] = rgb[0];
+        imgObs.data[i * 4 + 1] = rgb[1];
+        imgObs.data[i * 4 + 2] = rgb[2];
+        imgObs.data[i * 4 + 3] = 255;
+      }
+      const offObs = new OffscreenCanvas(obs.widthCells, obs.heightCells);
+      const offObsCtx = offObs.getContext('2d');
+      if (offObsCtx) {
+        offObsCtx.putImageData(imgObs, 0, 0);
+        ctx2d.imageSmoothingEnabled = false;
+        ctx2d.clearRect(0, 0, CANVAS_W, CANVAS_H);
+        ctx2d.drawImage(offObs, 0, 0, CANVAS_W, CANVAS_H);
+        worldDataRef.current = ctx2d.getImageData(0, 0, CANVAS_W, CANVAS_H);
+        compositeView();
+        setWorldVersion((v) => v + 1);
+      }
+      return;
+    }
 
     // -- 基層ビットマップ --
     const img = new ImageData(W, H);

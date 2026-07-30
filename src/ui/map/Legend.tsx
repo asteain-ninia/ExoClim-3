@@ -13,9 +13,12 @@ const KOPPEN_GROUPS: Array<{ title: string; ids: number[] }> = [
 
 export function Legend() {
   const overlay = useUiStore((s) => s.overlay);
-  if (overlay === 'koppen') {
+  if (overlay === 'koppen' || overlay === 'koppenObs') {
     return (
       <div className="legend" data-testid="legend">
+        {overlay === 'koppenObs' && (
+          <span className="legend-caption">観測 = Beck et al. 2023(実在地球 1°、目視比較用のお手本)</span>
+        )}
         {KOPPEN_GROUPS.map((g) => (
           <div key={g.title} className="legend-group">
             <span className="legend-group__title">{g.title}</span>

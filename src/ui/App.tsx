@@ -16,6 +16,7 @@ const OVERLAYS: Array<{ id: OverlayKind; label: string; step: string }> = [
   { id: 'temperature', label: '気温', step: '5' },
   { id: 'precipitation', label: '降水', step: '6' },
   { id: 'koppen', label: '気候区分', step: '7' },
+  { id: 'koppenObs', label: '観測 (Beck)', step: '参' },
 ];
 
 const MONTH_LABELS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'];

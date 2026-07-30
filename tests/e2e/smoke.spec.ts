@@ -41,6 +41,11 @@ test('手順オーバーレイ(海流・気圧)が描画される', async ({ pag
   await page.getByTestId('month-6').click();
   await page.waitForTimeout(300);
   await page.screenshot({ path: 'test-results/app-pressure-jul.png', fullPage: false });
+  // 観測地球(Beck)の参照レイヤーが描画される
+  await page.getByTestId('overlay-koppenObs').click();
+  await expect(page.getByTestId('legend')).toBeVisible();
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: 'test-results/app-koppen-obs.png', fullPage: false });
 });
 
 test('ドラッグ周回・360°超スパン・球体表示が動く', async ({ page }) => {

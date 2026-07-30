@@ -8,7 +8,8 @@ export type OverlayKind =
   | 'pressure'
   | 'temperature'
   | 'precipitation'
-  | 'koppen';
+  | 'koppen'
+  | 'koppenObs';
 
 /** -1 = 年平均、0-11 = 月 */
 export type MonthSelection = number;

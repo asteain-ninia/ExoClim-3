@@ -196,14 +196,17 @@ export function computePrecipitation(
         let surplus = 0;
         const floors: number[] = [];
         for (let m = 0; m < MONTHS_PER_YEAR; m++) {
-          // 適用月 = 寒候期(赤緯が反対半球)。盛夏外(正規化赤緯 < 0.5)まで
-          // 広げる案は詳細 +0.6 だが大分類 −0.7 で撤回(2026-07-31)。
-          // 4〜5 月の「春の谷」→ タイガ Ds 誤判定は既知課題(較正記録)
-          const isWinter = lat >= 0 ? (decls[m] ?? 0) < 0 : (decls[m] ?? 0) > 0;
+          // 適用月 = 盛夏以外(正規化赤緯 < 0.5)。冬限定だと 4〜5 月の「春の谷」
+          // が夏半年の最乾月になり、秋こぶ(10 月)との組でタイガが夏乾 Ds に
+          // 誤判定される(s 条件: 4月 < 10月/3)。初回試験(07-31 未明)は
+          // −0.7pt だったが再循環再較正後の地形で再試験して採用判断する
+          const summerNorm =
+            (lat >= 0 ? (decls[m] ?? 0) : -(decls[m] ?? 0)) /
+            Math.max(1e-6, ctx.params.body.axialTiltDeg);
           const ridge = lat >= 0 ? (windBelt.monthlyRidgeLatNDeg[m] ?? 31) : (windBelt.monthlyRidgeLatSDeg[m] ?? -31);
           const pf = lat >= 0 ? (windBelt.monthlyPolarFrontLatNDeg[m] ?? 60) : (windBelt.monthlyPolarFrontLatSDeg[m] ?? -60);
           const inBand = aLat > Math.abs(ridge) + 1 && aLat < Math.abs(pf) + 12;
-          const f = isWinter && inBand ? floorMm : 0;
+          const f = summerNorm < 0.5 && inBand ? floorMm : 0;
           floors.push(f);
           const p = monthlyPrecipMm[m]?.[i] ?? 0;
           if (p < f) deficit += f - p;
@@ -223,6 +226,26 @@ export function computePrecipitation(
           const f = floors[m] ?? 0;
           arr[i] = p < f ? p + (f - p) * fill : p - (p - f) * k;
         }
+      }
+    }
+  }
+
+  // ---- 降水の月ブレンド(陸のみ、軽め)----
+  // 風向の月替わりで遷移月(特に春)が 0 近くまで陥没し、「夏半年の最乾月」に
+  // なってタイガが夏乾 Ds に誤判定される(西シベリア 4 月 7mm vs 実測 31mm)。
+  // 月平均は実際には隣接月と重なる分布の平均なので、軽い 3 点平滑で谷を埋める。
+  // 乾季が連続している所(サバナ・地中海の夏)は隣接月も乾いており不変
+  if (K.precipMonthBlend > 0) {
+    const b = K.precipMonthBlend;
+    const before = monthlyPrecipMm.map((arr) => Float32Array.from(arr));
+    for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+      const cur = monthlyPrecipMm[m];
+      const prev = before[(m + MONTHS_PER_YEAR - 1) % MONTHS_PER_YEAR];
+      const next = before[(m + 1) % MONTHS_PER_YEAR];
+      if (!cur || !prev || !next) continue;
+      for (let i = 0; i < grid.cellCount; i++) {
+        if (!terrain.landMask[i]) continue;
+        cur[i] = (1 - 2 * b) * (before[m]?.[i] ?? 0) + b * (prev[i] ?? 0) + b * (next[i] ?? 0);
       }
     }
   }
