@@ -47,6 +47,7 @@ export function computeTemperature(
   windBelt: WindBeltResult,
   ocean: OceanCurrentResult,
   airflow: AirflowResult,
+  priorPrecip?: { monthlyPrecipMm: Float32Array[] },
 ): TemperatureResult {
   const { params } = ctx;
   const cg = createGrid(Math.max(K.ebmResolutionDeg, params.gridResolutionDeg));
@@ -215,6 +216,14 @@ export function computeTemperature(
   // 月別 2D 風(Step 4)を EBM 格子へ集約(2026-07-30: 帯状移流を 2D 化。
   // 冬の大陸冷気の吹き出し・海からの暖気移流を経度別に表現する)
   const windOnCg = aggregateWinds(ctx, airflow, cg);
+
+  // 蒸発冷却フィードバック(2026-08-01): 湿った陸は潜熱で冷え、乾いた陸は
+  // 乾熱で暑い(実在の砂漠の暑さ・雨林の冷涼)。前回パスの降水の
+  // 「陸平均に対する偏差」を月別フラックスにする(偏差なので全球中立)。
+  // 降水→気温の初の結線(パイプラインは 温度→降水→温度→降水 の 2 パス)
+  const evapAnomWm2: Float32Array[] | null = priorPrecip
+    ? buildEvapCoolingAnomaly(ctx, priorPrecip.monthlyPrecipMm, cg, coarse)
+    : null;
   // 夏半球は結合を弱める(ジェット弱化で大陸が海洋の影響から解放される —
   // 旧・帯状移流の seasonFactor を踏襲)
   const meanRidgeN =
@@ -274,7 +283,8 @@ export function computeTemperature(
             ((capEff[i] ?? 1) / dt) * (t[i] ?? 0) +
             s * (1 - albedo) -
             (aEff[i] ?? K.olrAWm2) +
-            (qFlux[i] ?? 0);
+            (qFlux[i] ?? 0) -
+            (evapAnomWm2 ? (evapAnomWm2[m0]?.[i] ?? 0) * (1 - frac) + (evapAnomWm2[m1]?.[i] ?? 0) * frac : 0);
         }
       }
 
@@ -482,6 +492,60 @@ function aggregateToCoarse(
         sstAnomalyC: oceanN > 0 ? sstSum / oceanN : 0,
       };
     }
+  }
+  return out;
+}
+
+/**
+ * 蒸発冷却の偏差フラックス(W/m²、月別・EBM 格子)。陸セルの降水(mm/日)の
+ * 「陸面平均に対する偏差」× 係数。湿潤陸は正(冷却)、乾燥陸は負(乾熱)。
+ * 偏差なので陸全体では中立(全球平均を動かさない)。海は 0。
+ */
+function buildEvapCoolingAnomaly(
+  ctx: SimContext,
+  monthlyPrecipMm: Float32Array[],
+  cg: Grid,
+  coarse: CoarseCell[],
+): Float32Array[] {
+  const src = ctx.grid;
+  const out: Float32Array[] = [];
+  for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+    const p = monthlyPrecipMm[m];
+    const field = new Float32Array(cg.cellCount);
+    const n = new Float32Array(cg.cellCount);
+    if (p) {
+      for (let row = 0; row < src.heightCells; row++) {
+        const cgRow = Math.min(cg.heightCells - 1, Math.floor((row * src.resolutionDeg) / cg.resolutionDeg));
+        for (let col = 0; col < src.widthCells; col++) {
+          if (!ctx.terrain.landMask[row * src.widthCells + col]) continue;
+          const cgCol = Math.min(cg.widthCells - 1, Math.floor((col * src.resolutionDeg) / cg.resolutionDeg));
+          const ci = cgRow * cg.widthCells + cgCol;
+          field[ci] = (field[ci] ?? 0) + (p[row * src.widthCells + col] ?? 0);
+          n[ci] = (n[ci] ?? 0) + 1;
+        }
+      }
+    }
+    // 陸面平均(面積重み近似: セル数)を引いて偏差化し、W/m² へ
+    let sum = 0;
+    let cnt = 0;
+    for (let i = 0; i < cg.cellCount; i++) {
+      if ((n[i] ?? 0) > 0) {
+        field[i] = (field[i] ?? 0) / (n[i] ?? 1) / 30; // mm/月 → mm/日
+        sum += field[i] ?? 0;
+        cnt++;
+      }
+    }
+    const meanMmDay = cnt > 0 ? sum / cnt : 0;
+    for (let i = 0; i < cg.cellCount; i++) {
+      const landFrac = coarse[i]?.landFrac ?? 0;
+      if ((n[i] ?? 0) > 0 && landFrac > 0.2) {
+        const anomMmDay = Math.max(-3, Math.min(5, (field[i] ?? 0) - meanMmDay));
+        field[i] = K.evapCoolingWm2PerMmDay * anomMmDay * landFrac;
+      } else {
+        field[i] = 0;
+      }
+    }
+    out.push(field);
   }
   return out;
 }
