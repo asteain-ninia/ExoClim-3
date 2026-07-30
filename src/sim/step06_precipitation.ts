@@ -41,9 +41,12 @@ export function computePrecipitation(
   const dyKm = cellHeightKm(grid, params.body.radiusKm);
   const smallWater = buildSmallWaterMask(ctx);
 
-  // 「自転方向の東」側の海までの距離(km)。亜熱帯高気圧の西翼湿潤化に使用。
+  // 「自転方向の東」側の海までの距離(km)とその海の SST 偏差。
+  // 亜熱帯高気圧の西翼湿潤化は「東の海が暖流のとき」だけ効かせる
+  // (アラビア海のような非暖流の東海で誤発火しない — 2026-07-30 レビュー A2)。
   // 順行 = 東、逆行 = 西。行内スキャン(最大 40 セル)。
   const eastOceanKm = new Float32Array(grid.cellCount).fill(1e9);
+  const eastOceanSstA = new Float32Array(grid.cellCount);
   {
     const dir = params.body.rotationDirection >= 0 ? 1 : -1;
     const W = grid.widthCells;
@@ -53,6 +56,7 @@ export function computePrecipitation(
         const i = row * W + col;
         if (!terrain.landMask[i]) {
           eastOceanKm[i] = 0;
+          eastOceanSstA[i] = ocean.sstAnomalyC[i] ?? 0;
           continue;
         }
         const maxScan = Math.max(10, Math.round(4400 / dxKm)); // 距離基準(解像度非依存)
@@ -60,11 +64,67 @@ export function computePrecipitation(
           const j = row * W + wrapCol(grid, col + dir * d);
           if (!terrain.landMask[j]) {
             eastOceanKm[i] = d * dxKm;
+            eastOceanSstA[i] = ocean.sstAnomalyC[j] ?? 0;
             break;
           }
         }
       }
     }
+  }
+
+  // ---- パス 1: 海洋のみを供給源として風上追跡(全月)----
+  const supplies1: Float32Array[] = [];
+  for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+    const tField = temperature.monthlyTemperatureC[m];
+    const u = airflow.monthlyWindU[m];
+    const v = airflow.monthlyWindV[m];
+    supplies1.push(
+      tField && u && v
+        ? traceMoistureSupply(ctx, smallWater, tField, u, v, null, 0)
+        : new Float32Array(grid.cellCount),
+    );
+  }
+  // 供給の月ブレンド(0.25/0.5/0.25): 月平均風の単一方向トレースは風向の
+  // 月替わりで供給が断絶する(ガンジス 7 月 589mm → 8 月 0mm — レビュー H8)。
+  // 実際の遷移月はどちらの風も吹く。方位を振る案は雨陰へ回り込むため月方向で均す
+  const blend = (arr: Float32Array[], m: number): Float32Array => {
+    const prev = arr[(m + MONTHS_PER_YEAR - 1) % MONTHS_PER_YEAR];
+    const cur = arr[m];
+    const next = arr[(m + 1) % MONTHS_PER_YEAR];
+    const out = new Float32Array(grid.cellCount);
+    for (let i = 0; i < grid.cellCount; i++) {
+      out[i] = 0.0 * (prev?.[i] ?? 0) + 1.0 * (cur?.[i] ?? 0) + 0.0 * (next?.[i] ?? 0);
+    }
+    return out;
+  };
+
+  const supplies2: Float32Array[] = [];
+  const precip1ByMonth: Float32Array[] = [];
+  for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+    const tField = temperature.monthlyTemperatureC[m];
+    const u = airflow.monthlyWindU[m];
+    const v = airflow.monthlyWindV[m];
+    const ridgeN = windBelt.monthlyRidgeLatNDeg[m] ?? 31;
+    const ridgeS = windBelt.monthlyRidgeLatSDeg[m] ?? -31;
+    const pfN = windBelt.monthlyPolarFrontLatNDeg[m] ?? 60;
+    const pfS = windBelt.monthlyPolarFrontLatSDeg[m] ?? -60;
+    if (!tField || !u || !v) {
+      supplies2.push(new Float32Array(grid.cellCount));
+      precip1ByMonth.push(new Float32Array(grid.cellCount));
+      continue;
+    }
+    const supply1 = blend(supplies1, m);
+    const precip1 = convertToPrecip(ctx, itcz, m, tField, u, v, supply1, ridgeN, ridgeS, pfN, pfS, dyKm, ocean, eastOceanKm, eastOceanSstA);
+    precip1ByMonth.push(precip1);
+
+    // ---- パス 2: 陸面再蒸発を供給源に加えて再追跡 ----
+    const landSource = new Float32Array(grid.cellCount);
+    for (let i = 0; i < grid.cellCount; i++) {
+      if (!terrain.landMask[i]) continue;
+      const wetness = Math.min(1, (precip1[i] ?? 0) / 40); // 40mm/月で飽和(寒冷地は少雨でも湿る)
+      landSource[i] = K.landRecyclingStrength * wetness;
+    }
+    supplies2.push(traceMoistureSupply(ctx, smallWater, tField, u, v, landSource, 0));
   }
 
   for (let m = 0; m < MONTHS_PER_YEAR; m++) {
@@ -75,24 +135,12 @@ export function computePrecipitation(
     const ridgeS = windBelt.monthlyRidgeLatSDeg[m] ?? -31;
     const pfN = windBelt.monthlyPolarFrontLatNDeg[m] ?? 60;
     const pfS = windBelt.monthlyPolarFrontLatSDeg[m] ?? -60;
-    if (!tField || !u || !v) continue;
-
-    // ---- パス 1: 海洋のみを供給源として風上追跡 ----
-    const supply1 = traceMoistureSupply(ctx, smallWater, tField, u, v, null);
-
-    // ---- 持ち上げ・抑制係数と降水化(パス 1) ----
-    const precip1 = convertToPrecip(ctx, itcz, m, tField, u, v, supply1, ridgeN, ridgeS, pfN, pfS, dyKm, ocean, eastOceanKm);
-
-    // ---- パス 2: 陸面再蒸発を供給源に加えて再追跡 ----
-    const landSource = new Float32Array(grid.cellCount);
-    for (let i = 0; i < grid.cellCount; i++) {
-      if (!terrain.landMask[i]) continue;
-      const wetness = Math.min(1, (precip1[i] ?? 0) / 40); // 40mm/月で飽和(寒冷地は少雨でも湿る)
-      landSource[i] = K.landRecyclingStrength * wetness;
+    if (!tField || !u || !v) {
+      monthlyPrecipMm.push(new Float32Array(grid.cellCount));
+      continue;
     }
-    const supply2 = traceMoistureSupply(ctx, smallWater, tField, u, v, landSource);
-    const precip2 = convertToPrecip(ctx, itcz, m, tField, u, v, supply2, ridgeN, ridgeS, pfN, pfS, dyKm, ocean, eastOceanKm);
-
+    const supply2 = blend(supplies2, m);
+    const precip2 = convertToPrecip(ctx, itcz, m, tField, u, v, supply2, ridgeN, ridgeS, pfN, pfS, dyKm, ocean, eastOceanKm, eastOceanSstA);
     monthlyPrecipMm.push(precip2);
     for (let i = 0; i < grid.cellCount; i++) {
       annualPrecipMm[i] = (annualPrecipMm[i] ?? 0) + (precip2[i] ?? 0);
@@ -161,6 +209,7 @@ function traceMoistureSupply(
   u: Float32Array,
   v: Float32Array,
   landSource: Float32Array | null,
+  rotRad: number,
 ): Float32Array {
   const { grid, params, terrain } = ctx;
   const W = grid.widthCells;
@@ -245,9 +294,13 @@ function traceMoistureSupply(
           }
         }
         if (traveledKm >= K.moistureTraceMaxKm) break;
-        // 風上へ 1 セルぶん移動(風が弱い所は打ち切り)
-        const uu = u[i] ?? 0;
-        const vv = v[i] ?? 0;
+        // 風上へ 1 セルぶん移動(風が弱い所は打ち切り)。rotRad で方位を振る
+        const u0 = u[i] ?? 0;
+        const v0 = v[i] ?? 0;
+        const cosR = Math.cos(rotRad);
+        const sinR = Math.sin(rotRad);
+        const uu = u0 * cosR - v0 * sinR;
+        const vv = u0 * sinR + v0 * cosR;
         const speed = Math.hypot(uu, vv);
         if (speed < 0.5) break;
         const stepKm = dyKm; // 1 ステップ = 南北 1 セル相当の距離
@@ -286,6 +339,7 @@ function convertToPrecip(
   dyKm: number,
   ocean: OceanCurrentResult,
   eastOceanKm: Float32Array,
+  eastOceanSstA: Float32Array,
 ): Float32Array {
   const { grid, params, terrain } = ctx;
   const W = grid.widthCells;
@@ -307,9 +361,26 @@ function convertToPrecip(
       // ITCZ 収束。傘は「湿潤収束が海洋起源のときだけ開く」— 供給の乏しい
       // 乾燥内陸ではトラフ直下でも雨にならない(実物のアラビア熱低は乾いた
       // 低気圧 — 2026-07-30 レビュー A1)
-      const gI = itczInfluenceAt(itcz, month, col, lat);
+      const gI = itczInfluenceAt(itcz, month, col, lat, K.itczPrecipWidthFactor);
       const marineW = Math.min(1, (supply[i] ?? 0) / K.itczLiftSupplyNorm);
       lift *= 1 + K.itczLiftBoost * gI * marineW;
+
+      // 前線収束(WL#29「セル衝突線 = 前線(低圧・湿潤)」の定量化):
+      // 湿った空気(高供給)が極向き風で乾いた側へ押し込まれる場所が前線。
+      // ITCZ 傘とストーム帯の間(≈25-40°)の梅雨・バイウ前線の空白を埋める
+      {
+        const north2 = row > 0 ? (row - 1) * W + col : i;
+        const south2 = row < H - 1 ? (row + 1) * W + col : i;
+        const eqNb = lat >= 0 ? south2 : north2;
+        const polNb = lat >= 0 ? north2 : south2;
+        const gradPoleward = Math.max(0, (supply[eqNb] ?? 0) - (supply[polNb] ?? 0));
+        const vPoleward = lat >= 0 ? (v[i] ?? 0) : -(v[i] ?? 0);
+        const aLat0 = Math.abs(lat);
+        if (vPoleward > 0 && gradPoleward > 0 && aLat0 > Math.abs(ridge) - 6 && aLat0 < Math.abs(pf)) {
+          const frontW = Math.min(1.5, (vPoleward / 4) * gradPoleward);
+          lift *= 1 + K.frontalLiftBoost * frontW;
+        }
+      }
 
       // ストームトラック(リッジの極側〜極前線先の台形プラトー、寒候期に増強)
       const stLo = Math.abs(ridge) + 4;
@@ -355,9 +426,14 @@ function convertToPrecip(
         const d = aLat < descLo ? descLo - aLat : aLat - descHi;
         descW = Math.exp(-(d * d) / 16);
       }
-      // 亜熱帯高気圧の西翼(自転方向の東に海が近い)では沈降が緩む
+      // 亜熱帯高気圧の西翼(自転方向の東に海が近い)では沈降が緩む。
+      // ただし「東の海が暖流(西岸境界流)のとき」だけ — バミューダ高気圧の
+      // 西翼は暖流の上で湿る。非暖流(アラビア海型)では緩めない(レビュー A2)
+      const eastWarmth = Math.min(1, Math.max(0, ((eastOceanSstA[i] ?? 0) + 0.6) / 1.2));
       const eastRelief =
-        K.eastCoastSubsidenceRelief * Math.exp(-(eastOceanKm[i] ?? 1e9) / K.eastCoastSubsidenceDecayKm);
+        K.eastCoastSubsidenceRelief *
+        eastWarmth *
+        Math.exp(-(eastOceanKm[i] ?? 1e9) / K.eastCoastSubsidenceDecayKm);
       const subs = descW * (1 - K.subsidenceItczProtection * gI * marineW) * (1 - eastRelief);
       lift *= 1 - K.subsidenceSuppression * subs;
 
@@ -373,12 +449,14 @@ function convertToPrecip(
         }
       }
 
-      // 高温湿潤の陸での対流性増幅(夏の東岸・熱帯の午後対流)
+      // 高温湿潤の陸での対流性増幅(夏の東岸・熱帯の午後対流)。
+      // 分母を 2.8 に上げて高供給の湿潤域だけ発火させる(1.2 では半乾燥内陸まで
+      // 飽和して豪州が Aw 化した — 較正記録の撤回理由への対処。レビュー H5)
       if (terrain.landMask[i]) {
         const warmth = Math.min(1, Math.max(0, ((_tField[i] ?? 0) - 22) / 8));
         if (warmth > 0) {
-          const supplyNorm = Math.min(1, (supply[i] ?? 0) / 1.2);
-          lift *= 1 + K.warmHumidConvectiveBoost * warmth * supplyNorm;
+          const supplyNorm = Math.min(1, (supply[i] ?? 0) / K.warmHumidSupplyNorm);
+          lift *= 1 + K.warmHumidConvectiveBoost * warmth * supplyNorm * supplyNorm;
         }
       }
 

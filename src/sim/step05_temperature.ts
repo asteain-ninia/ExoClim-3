@@ -148,20 +148,23 @@ export function computeTemperature(
       const aLat = Math.abs(lat);
       const stLo = Math.abs(ridge) + 8;
       const stHi = Math.abs(pf) + 15;
-      // 夏半球ではストームトラックが弱まる(雲の反射しすぎで夏の中高緯度が壊れる)
-      const stormSeason = (lat >= 0 ? declM < 0 : declM > 0) ? 1 : 0.35;
-      const stormW =
-        aLat > stLo && aLat < stHi
-          ? Math.sin((Math.PI * (aLat - stLo)) / (stHi - stLo)) * stormSeason
-          : 0;
+      // 夏半球ではストームトラックが弱まる — ただし弱まるのは大陸側ジェット。
+      // 海(南大洋型)は夏も曇天のまま(レビュー仮説 5: 陸海で季節減衰を分離)
+      const isStormWinter = lat >= 0 ? declM < 0 : declM > 0;
+      const stormWBase =
+        aLat > stLo && aLat < stHi ? Math.sin((Math.PI * (aLat - stLo)) / (stHi - stLo)) : 0;
       for (let col = 0; col < CW; col++) {
         const i = row * CW + col;
         const fineCol = Math.min(ctx.grid.widthCells - 1, Math.round((col + 0.5) * colScale));
         const center = centers?.[fineCol] ?? 0;
-        const dI = (lat - center) / (itcz.halfWidthDeg * 1.3);
+        // 雲変調の ITCZ 幅は降水・循環より狭い(実物の雲帯は ±3〜5°。
+        // 広いと夏の 20-30°N 乾燥帯まで曇らせて寒くする — レビュー仮説 6)
+        const dI = (lat - center) / (itcz.halfWidthDeg * K.itczCloudWidthFactor);
         const itczInf = Math.exp(-dI * dI);
         const landFrac = coarse[i]?.landFrac ?? 0;
         const oceanFrac = 1 - landFrac;
+        const stormSeason = isStormWinter ? 1 : 0.35 + (K.stormCloudSummerOcean - 0.35) * oceanFrac;
+        const stormW = stormWBase * stormSeason;
         const subsidenceWeight = K.subsidenceOceanFactor + (1 - K.subsidenceOceanFactor) * landFrac;
         // 寒流上の層積雲デッキ(SST 負偏差の海で雲が増える)
         const sstA = coarse[i]?.sstAnomalyC ?? 0;
@@ -230,7 +233,10 @@ export function computeTemperature(
       for (let col = 0; col < CW; col++) t[row * CW + col] = init;
     }
     const rhs = new Float64Array(N);
-    // 海氷断熱: 氷結セルの実効熱容量(氷量に応じて毎ステップ更新)
+    // 海氷断熱: 氷結セルの実効熱容量(氷量に応じて毎ステップ更新)。
+    // 注: 氷厚状態を持つ 0 層海氷(融解 0°C 固定)は 2026-07-30 に試行したが、
+    // 断熱×融解固定の正帰還で南極海リングが夏に融け残り −60S が −14°C へ
+    // 暴走(双安定)。温度ランプ近似を維持する(較正記録参照)
     const capEff = new Float64Array(N);
     const monthAccum: Float64Array[] = Array.from({ length: MONTHS_PER_YEAR }, () => new Float64Array(N));
     const monthCount = new Array<number>(MONTHS_PER_YEAR).fill(0);
@@ -392,7 +398,7 @@ export function computeTemperature(
   }
   // 氷床の隣接拡張: 氷床は流動し周囲を冷やすため、核に隣接する冷涼な陸へ広げる
   // (無記憶モデルでは日射だけで沿岸氷床を自発形成できないことへの近似)
-  for (let iter = 0; iter < 4; iter++) {
+  for (let iter = 0; iter < 2; iter++) {
     let changed = false;
     for (let i = 0; i < N; i++) {
       if (permanentIce[i]) continue;
@@ -403,7 +409,7 @@ export function computeTemperature(
         if (v > warmest) warmest = v;
       }
       warmest -= gamma * (elevM[i] ?? 0);
-      if (warmest >= 6) continue;
+      if (warmest >= 3) continue;
       const row = Math.floor(i / CW);
       const col = i % CW;
       const nbs = [

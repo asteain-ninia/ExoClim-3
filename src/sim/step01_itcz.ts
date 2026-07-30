@@ -109,17 +109,22 @@ function smoothCyclic(values: Float32Array, resolutionDeg: number): Float32Array
   return out;
 }
 
-/** 指定セルの ITCZ 影響度(0〜1、中心で 1)。他ステップから利用。 */
+/**
+ * 指定セルの ITCZ 影響度(0〜1、中心で 1)。他ステップから利用。
+ * widthScale で用途別に幅を変えられる(降水影響圏は WL#31 の ±15° 規則に
+ * 合わせて広め、雲・トラフは狭め — 較正記録 2026-07-30「幅の共有は諸刃」)
+ */
 export function itczInfluenceAt(
   itcz: ItczResult,
   month: number,
   col: number,
   latDeg: number,
+  widthScale = 1,
 ): number {
   const centers = itcz.monthlyCenterLatDegByCol[month];
   if (!centers) return 0;
   const center = centers[col] ?? 0;
-  const d = Math.abs(latDeg - center) / itcz.halfWidthDeg;
+  const d = Math.abs(latDeg - center) / (itcz.halfWidthDeg * widthScale);
   return Math.exp(-d * d);
 }
 

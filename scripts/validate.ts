@@ -403,7 +403,37 @@ function scoreLogStructure(result: PipelineResult, obs: KoppenFixture) {
     (i) => (obs.classRaster[i] ?? 0) !== 0,
     (i) => obs.classRaster[i] ?? 0,
   );
-  return { model, observed };
+  // Pasta 由来の量的観点(モデル側のみ計算可能な月別実量): Am の最多雨月と
+  // Cwa の最多/最少雨月比(Pasta VIb: Cwa は 10 倍比が目安)
+  let amWetSum = 0;
+  let amN = 0;
+  let cwaRatioSum = 0;
+  let cwaN = 0;
+  for (let i = 0; i < grid.cellCount; i++) {
+    if (!land[i]) continue;
+    const id = result.koppen.classId[i] ?? 0;
+    if (id !== 2 && id !== 11) continue;
+    let wet = 0;
+    let dry = 1e9;
+    for (let m = 0; m < 12; m++) {
+      const p = result.precipitation.monthlyPrecipMm[m]?.[i] ?? 0;
+      if (p > wet) wet = p;
+      if (p < dry) dry = p;
+    }
+    if (id === 2) {
+      amWetSum += wet;
+      amN++;
+    } else {
+      cwaRatioSum += wet / Math.max(1, dry);
+      cwaN++;
+    }
+  }
+  return {
+    model,
+    observed,
+    amWettestMonthMeanMm: amN > 0 ? Math.round(amWetSum / amN) : 0,
+    cwaWetDryRatioMean: cwaN > 0 ? Math.round((cwaRatioSum / cwaN) * 10) / 10 : 0,
+  };
 }
 
 // ---- PNG 出力 ----
@@ -509,6 +539,9 @@ function printSummary(report: {
   );
   console.log(
     `  Af→Aw 直接接触率(遷移帯 Am の欠落): ${ls.model.afDirectAwPct}% vs ${ls.observed.afDirectAwPct}%`,
+  );
+  console.log(
+    `  Am 最多雨月平均 ${ls.amWettestMonthMeanMm}mm(Pasta 目安 500mm 級)・Cwa 最多/最少雨月比 ${ls.cwaWetDryRatioMean}(目安 ~10)`,
   );
   console.log('\nモデル上位クラス:', report.koppen.topClassesModel.map((e) => `${e.cls} ${e.pct}%`).join(', '));
   console.log('観測上位クラス:', report.koppen.topClassesObs.map((e) => `${e.cls} ${e.pct}%`).join(', '));

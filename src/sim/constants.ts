@@ -33,7 +33,7 @@ export const MODEL_CONSTANTS = {
    * ハドレー域(リッジ内側)の南北拡散増強。等方拡散 EBM は熱帯を単調減少に
    * してしまうが、実物はハドレー循環が |lat|<25° を平坦に均す。
    */
-  hadleyDiffusionBoost: 1.1,
+  hadleyDiffusionBoost: 0.8,
   /** 周極海峡と見なす緯度行の陸面積率の上限と適用緯度上限(極海の氷蓋下は対象外) */
   channelLandFracMax: 0.04,
   channelMaxAbsLatDeg: 70,
@@ -76,7 +76,11 @@ export const MODEL_CONSTANTS = {
   convectiveCloudBoost: 0.45,
   /** ストームトラック帯(海上)の雲増加率と雲アルベド上限 */
   stormTrackCloudBoost: 0.6,
-  cloudAlbedoMax: 0.36,
+  cloudAlbedoMax: 0.4,
+  /** 夏半球のストーム雲の海上残存率(陸側ジェットは弱まるが海は夏も曇天) */
+  stormCloudSummerOcean: 0.7,
+  /** 雲変調に使う ITCZ 幅の倍率(実物の雲帯は降水影響圏より狭い) */
+  itczCloudWidthFactor: 0.85,
   /** 寒流(SST 負偏差)上の層積雲デッキ: 偏差 -2°C で雲 +この比率 */
   stratocumulusBoostPerNegC: 0.55,
   /** 冬(月日射 < 年平均)の陸上における移流結合の低減率(接地逆転層) */
@@ -125,6 +129,12 @@ export const MODEL_CONSTANTS = {
   itczSmoothLocalBlend: 0.4,
   /** ITCZ 影響帯の半幅(度) */
   itczHalfWidthDeg: 9,
+  /**
+   * 降水影響圏の幅倍率(WL#31 の ±15° 規則に対応する差込口)。1.15 でも
+   * 全球 −0.5pt・1.4 で −2.8pt と実測否定(2026-07-30)のため 1.0 に据え置き。
+   * Log の ±15° は「wet→very wet 昇格」の質的規則で、リフト幅ではない模様
+   */
+  itczPrecipWidthFactor: 1.0,
   /** 経度方向平滑化の半幅(度)。広すぎるとモンスーンの経度応答が希釈される */
   itczSmoothingHalfWidthDeg: 12,
 
@@ -226,6 +236,13 @@ export const MODEL_CONSTANTS = {
   stormMinQRel: 0.4,
   /** 高温湿潤の陸での対流性増幅(T≥22°C かつ供給豊富で最大 +この倍率) */
   warmHumidConvectiveBoost: 0,
+  /** 対流性増幅の供給正規化(この供給で全開。二乗で立ち上げ半乾燥を除外) */
+  warmHumidSupplyNorm: 2.8,
+  /**
+   * 前線収束の持ち上げ(WL#29 セル衝突線の定量化)。湿潤空気の極向き移流 ×
+   * 供給の極向き勾配に比例。ITCZ 傘とストーム帯の間(梅雨帯)を埋める
+   */
+  frontalLiftBoost: 0.5,
   /** 夏半球の偏西風移流の弱化率(ジェットの季節弱化) */
   summerAdvectionFactor: 0.42,
   /**
@@ -248,7 +265,7 @@ export const MODEL_CONSTANTS = {
   /** 寒流沿岸の追加抑制率 */
   coldCoastSuppression: 0.45,
   /** 全球スケール係数(供給×持ち上げ → mm/月) */
-  precipScaleMmPerUnit: 9.0,
+  precipScaleMmPerUnit: 8.2,
 
   // ---- 共通 ----
   /** 海面凍結温度(°C) */
@@ -259,6 +276,13 @@ export const MODEL_CONSTANTS = {
    * 極域の季節振幅が 1/3 になる(80N: モデル 9°C vs 実測 30°C — 2026-07-30)
    */
   seaIceInsulationFactor: 0.9,
+  /**
+   * 0 層海氷: 成長率(m/°C/日、凍結点以下 1°C あたり)・最大氷厚(m)・
+   * 融解潜熱(J/m³)。融解中の海面は凍結点に固定される(北極の夏 −0.3°C の再現)
+   */
+  seaIceGrowthMPerDegDay: 0.0006,
+  seaIceMaxThicknessM: 2.5,
+  seaIceLatentJPerM3: 3.0e8,
 } as const;
 
 export type ModelConstants = typeof MODEL_CONSTANTS;
