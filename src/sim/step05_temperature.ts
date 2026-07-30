@@ -323,8 +323,10 @@ export function computeTemperature(
             const north = row > 0 ? (row - 1) * CW + col : i;
             const south = row < CH - 1 ? (row + 1) * CW + col : i;
             // 2D 風上結合: 東西 = u、南北 = v(v > 0 = 北向き → 南から来る)。
-            // 結合は実効風速 7/5 m/s で頭打ち(地表結合は風速に線形では増えない)
-            const advCu = advScale * (Math.min(7, Math.abs(uMs)) / 4);
+            // 結合は実効風速 9/5 m/s で頭打ち(u 上限 7→9: 冬の偏西風による
+            // 西岸の海洋性緩和の到達を伸ばし、C/D 境界の経度波打ちを作る —
+            // 実物は大西洋岸 60°N 超まで C、内陸で 45°N まで D)
+            const advCu = advScale * (Math.min(9, Math.abs(uMs)) / 4);
             const upwindU = uMs >= 0 ? west : east;
             const upwindV = vMs >= 0 ? south : north;
             // v 結合は (a) 周極海峡の隔離則を尊重(迂回すると南極海が過熱)、

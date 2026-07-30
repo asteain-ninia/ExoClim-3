@@ -142,8 +142,70 @@ export function computePrecipitation(
     const supply2 = blend(supplies2, m);
     const precip2 = convertToPrecip(ctx, itcz, m, tField, u, v, supply2, ridgeN, ridgeS, pfN, pfS, dyKm, ocean, eastOceanKm, eastOceanSstA);
     monthlyPrecipMm.push(precip2);
+  }
+
+  // ---- 寒候期の弱前線の床(年総量保存の再配分)----
+  // 最乾月が 0mm に張り付く癖(検証観点: Cwa 最多/最少比 276 vs 実物 ~10)への
+  // 対策。冬のストーム帯内では弱い前線・降雪が最乾月にも数〜十数 mm 残る。
+  // 湿潤月から比例控除して年総量を保存する(B 閾値の年量判定を動かさない。
+  // 夏集中率だけが下がり、実物どおり閾値 2T+28→2T+21 に戻る)。
+  // 熱帯のサバナ乾季(ストーム帯外)には掛からない。
+  {
+    const W = grid.widthCells;
+    const decls = ctx.insolation.monthlyDeclinationDeg;
+    for (let row = 0; row < grid.heightCells; row++) {
+      const lat = latDegOfRow(grid, row);
+      const aLat = Math.abs(lat);
+      for (let col = 0; col < W; col++) {
+        const i = row * W + col;
+        if (!terrain.landMask[i]) continue;
+        let wettest = 0;
+        for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+          const p = monthlyPrecipMm[m]?.[i] ?? 0;
+          if (p > wettest) wettest = p;
+        }
+        const floorMm = Math.min(K.winterFloorMaxMm, K.winterFloorFracOfWettest * wettest);
+        if (floorMm < 0.5) continue;
+        let deficit = 0;
+        let surplus = 0;
+        const floors: number[] = [];
+        for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+          // 適用月 = 寒候期(赤緯が反対半球)。盛夏外(正規化赤緯 < 0.5)まで
+          // 広げる案は詳細 +0.6 だが大分類 −0.7 で撤回(2026-07-31)。
+          // 4〜5 月の「春の谷」→ タイガ Ds 誤判定は既知課題(較正記録)
+          const isWinter = lat >= 0 ? (decls[m] ?? 0) < 0 : (decls[m] ?? 0) > 0;
+          const ridge = lat >= 0 ? (windBelt.monthlyRidgeLatNDeg[m] ?? 31) : (windBelt.monthlyRidgeLatSDeg[m] ?? -31);
+          const pf = lat >= 0 ? (windBelt.monthlyPolarFrontLatNDeg[m] ?? 60) : (windBelt.monthlyPolarFrontLatSDeg[m] ?? -60);
+          const inBand = aLat > Math.abs(ridge) + 1 && aLat < Math.abs(pf) + 12;
+          const f = isWinter && inBand ? floorMm : 0;
+          floors.push(f);
+          const p = monthlyPrecipMm[m]?.[i] ?? 0;
+          if (p < f) deficit += f - p;
+          else surplus += p - f;
+        }
+        if (deficit <= 0 || surplus <= 0) continue;
+        // 移転は湿潤月の余剰の 35% まで(無制限だと不足 ≈ 余剰のセルで k→1 と
+        // なり夏の雨をほぼ全部持っていき、タイガが夏乾の Ds に化ける — 実測)。
+        // 足りない分は床の部分充足に留める(季節性の保存が最優先)
+        const transfer = Math.min(deficit, surplus * 0.35);
+        const k = transfer / surplus;
+        const fill = transfer / deficit;
+        for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+          const arr = monthlyPrecipMm[m];
+          if (!arr) continue;
+          const p = arr[i] ?? 0;
+          const f = floors[m] ?? 0;
+          arr[i] = p < f ? p + (f - p) * fill : p - (p - f) * k;
+        }
+      }
+    }
+  }
+
+  for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+    const arr = monthlyPrecipMm[m];
+    if (!arr) continue;
     for (let i = 0; i < grid.cellCount; i++) {
-      annualPrecipMm[i] = (annualPrecipMm[i] ?? 0) + (precip2[i] ?? 0);
+      annualPrecipMm[i] = (annualPrecipMm[i] ?? 0) + (arr[i] ?? 0);
     }
   }
   return { monthlyPrecipMm, annualPrecipMm };

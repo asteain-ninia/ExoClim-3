@@ -102,7 +102,7 @@ export const MODEL_CONSTANTS = {
    * 流される誤った物理になる(較正ログ 2026-07-29)。到達距離 ≈ 結合/(B+Dk²)
    * 換算で 1500〜2500 km 相当。
    */
-  zonalAdvectionCouplingWm2PerK: 40,
+  zonalAdvectionCouplingWm2PerK: 46,
   /** EBM 積分年数と 1 年のステップ数 */
   ebmYears: 4,
   ebmStepsPerYear: 240,
@@ -243,6 +243,13 @@ export const MODEL_CONSTANTS = {
    * 供給の極向き勾配に比例。ITCZ 傘とストーム帯の間(梅雨帯)を埋める
    */
   frontalLiftBoost: 0.5,
+  /**
+   * 寒候期の弱前線の床: 冬のストーム帯内の最乾月に残る降水
+   * (最多雨月のこの割合、上限 mm)。年総量は保存(湿潤月から比例控除)。
+   * タイガの Dw 化(実物は Df)と Cwa 最多/最少比 276 への対策
+   */
+  winterFloorFracOfWettest: 0.35,
+  winterFloorMaxMm: 24,
   /** 夏半球の偏西風移流の弱化率(ジェットの季節弱化) */
   summerAdvectionFactor: 0.42,
   /**
