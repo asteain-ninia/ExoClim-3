@@ -22,33 +22,45 @@ export function computeItcz(ctx: SimContext): ItczResult {
   // 帯内の陸平均標高(km)。高所加熱がモンスーントラフを大きく引き上げる(WL#32)
   const elevBoostN = new Float64Array(W);
   const elevBoostS = new Float64Array(W);
-  for (let col = 0; col < W; col++) {
+  // 高原引き寄せ(度): ≥1,500m の陸(チベット型)は平均標高で希釈されるため
+  // 別集計。高原の高さ(1.5→4km で 0→1)× 帯内占有率で追加の北上量にする
+  const plateauPullN = new Float64Array(W);
+  const plateauPullS = new Float64Array(W);
+  const scanBand = (col: number, row0: number, row1: number) => {
     let n = 0;
     let nLand = 0;
-    let nElev = 0;
-    for (let row = rowN35; row <= rowEq; row++) {
+    let elevSum = 0;
+    let highN = 0;
+    let highElevSum = 0;
+    for (let row = row0; row <= row1; row++) {
       n++;
       const i = row * W + col;
       if (terrain.landMask[i]) {
         nLand++;
-        nElev += Math.max(0, terrain.elevationMeters[i] ?? 0);
+        const e = Math.max(0, terrain.elevationMeters[i] ?? 0);
+        elevSum += e;
+        if (e >= 1500) {
+          highN++;
+          highElevSum += e;
+        }
       }
     }
-    landFracN[col] = n > 0 ? nLand / n : 0;
-    elevBoostN[col] = 1 + K.itczMonsoonElevBoostPerKm * (n > 0 ? nElev / n / 1000 : 0);
-    let s = 0;
-    let sLand = 0;
-    let sElev = 0;
-    for (let row = rowEq + 1; row <= rowS35; row++) {
-      s++;
-      const i = row * W + col;
-      if (terrain.landMask[i]) {
-        sLand++;
-        sElev += Math.max(0, terrain.elevationMeters[i] ?? 0);
-      }
-    }
-    landFracS[col] = s > 0 ? sLand / s : 0;
-    elevBoostS[col] = 1 + K.itczMonsoonElevBoostPerKm * (s > 0 ? sElev / s / 1000 : 0);
+    const landFrac = n > 0 ? nLand / n : 0;
+    const elevBoost = 1 + K.itczMonsoonElevBoostPerKm * (n > 0 ? elevSum / n / 1000 : 0);
+    const highElevKm = highN > 0 ? highElevSum / highN / 1000 : 0;
+    const height01 = Math.min(1, Math.max(0, (highElevKm - 1.5) / 2.5));
+    const cover01 = Math.min(1, (n > 0 ? highN / n : 0) * 6);
+    return { landFrac, elevBoost, plateauPull: K.itczPlateauPullDeg * height01 * cover01 };
+  };
+  for (let col = 0; col < W; col++) {
+    const bn = scanBand(col, rowN35, rowEq);
+    landFracN[col] = bn.landFrac;
+    elevBoostN[col] = bn.elevBoost;
+    plateauPullN[col] = bn.plateauPull;
+    const bs = scanBand(col, rowEq + 1, rowS35);
+    landFracS[col] = bs.landFrac;
+    elevBoostS[col] = bs.elevBoost;
+    plateauPullS[col] = bs.plateauPull;
   }
 
   for (let m = 0; m < MONTHS_PER_YEAR; m++) {
@@ -60,13 +72,22 @@ export function computeItcz(ctx: SimContext): ItczResult {
       // 夏半球の大陸が ITCZ を引き寄せる(高所加熱で増強、冬半球の大陸は押し返す)
       const pull =
         declNorm >= 0
-          ? K.itczMonsoonPullDeg * declNorm * (landFracN[col] ?? 0) * (elevBoostN[col] ?? 1) -
+          ? K.itczMonsoonPullDeg * declNorm * (landFracN[col] ?? 0) * (elevBoostN[col] ?? 1) +
+            declNorm * (plateauPullN[col] ?? 0) -
             K.itczMonsoonPullDeg * 0.25 * declNorm * (landFracS[col] ?? 0)
-          : K.itczMonsoonPullDeg * declNorm * (landFracS[col] ?? 0) * (elevBoostS[col] ?? 1) -
+          : K.itczMonsoonPullDeg * declNorm * (landFracS[col] ?? 0) * (elevBoostS[col] ?? 1) +
+            declNorm * (plateauPullS[col] ?? 0) -
             K.itczMonsoonPullDeg * 0.25 * declNorm * (landFracN[col] ?? 0);
       centers[col] = base + pull;
     }
-    monthlyCenterLatDegByCol.push(smoothCyclic(centers, grid.resolutionDeg));
+    const smoothed = smoothCyclic(centers, grid.resolutionDeg);
+    // 完全平滑はモンスーンの経度局所性(大陸で深く、海で浅い)を希釈するため
+    // 生値を一部混ぜ戻す
+    const b = K.itczSmoothLocalBlend;
+    for (let col = 0; col < W; col++) {
+      smoothed[col] = (1 - b) * (smoothed[col] ?? 0) + b * (centers[col] ?? 0);
+    }
+    monthlyCenterLatDegByCol.push(smoothed);
   }
   return { monthlyCenterLatDegByCol, halfWidthDeg: K.itczHalfWidthDeg };
 }
