@@ -8,6 +8,7 @@ import { buildSimContext } from '../src/sim/context';
 import { computeItcz } from '../src/sim/step01_itcz';
 import { computeWindBelt } from '../src/sim/step02_windbelt';
 import { computeOceanCurrent } from '../src/sim/step03_ocean';
+import { computeAirflow } from '../src/sim/step04_airflow';
 import { computeTemperature } from '../src/sim/step05_temperature';
 import { areaWeightedMean } from '../src/domain/grid';
 
@@ -27,7 +28,8 @@ const ctx = buildSimContext(EARTH_PARAMS);
 const itcz = computeItcz(ctx);
 const wind = computeWindBelt(ctx, itcz);
 const ocean = computeOceanCurrent(ctx, itcz, wind);
-const temp = computeTemperature(ctx, itcz, wind, ocean);
+const airflow = computeAirflow(ctx, itcz, wind);
+const temp = computeTemperature(ctx, itcz, wind, ocean, airflow);
 console.log('気温まで', ((Date.now() - t0) / 1000).toFixed(1), 's');
 
 const grid = ctx.grid;

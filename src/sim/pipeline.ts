@@ -39,7 +39,7 @@ export function runPipeline(params: PlanetParams): PipelineResult {
   mark('step4_airflow', t0);
 
   t0 = performance.now();
-  const temperature = computeTemperature(context, itcz, windBelt, ocean);
+  const temperature = computeTemperature(context, itcz, windBelt, ocean, airflow);
   mark('step5_temperature', t0);
 
   t0 = performance.now();

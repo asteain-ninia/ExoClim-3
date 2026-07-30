@@ -23,6 +23,7 @@ import type { TerrainField } from '@/domain/terrain';
 import { MODEL_CONSTANTS as K } from './constants';
 import { chamferDistanceCells } from './context';
 import type {
+  AirflowResult,
   ItczResult,
   OceanCurrentResult,
   SimContext,
@@ -45,6 +46,7 @@ export function computeTemperature(
   itcz: ItczResult,
   windBelt: WindBeltResult,
   ocean: OceanCurrentResult,
+  airflow: AirflowResult,
 ): TemperatureResult {
   const { params } = ctx;
   const cg = createGrid(Math.max(K.ebmResolutionDeg, params.gridResolutionDeg));
@@ -198,7 +200,15 @@ export function computeTemperature(
       interior01[i] = Math.min(1, ((distToOceanCells[i] ?? 0) * cellKm) / 1500);
     }
   }
-  const uAdvByMonthRow = buildZonalAdvection(cg, windBelt, params.body.rotationDirection);
+  // 月別 2D 風(Step 4)を EBM 格子へ集約(2026-07-30: 帯状移流を 2D 化。
+  // 冬の大陸冷気の吹き出し・海からの暖気移流を経度別に表現する)
+  const windOnCg = aggregateWinds(ctx, airflow, cg);
+  // 夏半球は結合を弱める(ジェット弱化で大陸が海洋の影響から解放される —
+  // 旧・帯状移流の seasonFactor を踏襲)
+  const meanRidgeN =
+    windBelt.monthlyRidgeLatNDeg.reduce((a, b) => a + b, 0) / windBelt.monthlyRidgeLatNDeg.length;
+  const meanRidgeS =
+    windBelt.monthlyRidgeLatSDeg.reduce((a, b) => a + b, 0) / windBelt.monthlyRidgeLatSDeg.length;
 
   const yearSeconds = orbitalPeriodYears(params.orbital) * SECONDS_PER_EARTH_YEAR;
   const dt = yearSeconds / K.ebmStepsPerYear;
@@ -246,9 +256,13 @@ export function computeTemperature(
         }
       }
 
-      const uRow = uAdvByMonthRow[m0];
+      const uField = windOnCg.u[m0];
+      const vField = windOnCg.v[m0];
       const ridgeNNow = windBelt.monthlyRidgeLatNDeg[m0] ?? 31;
+      const ridgeSNow = windBelt.monthlyRidgeLatSDeg[m0] ?? -31;
       const ridgeAbs = Math.max(15, Math.abs(ridgeNNow));
+      const summerN = ridgeNNow > meanRidgeN;
+      const summerS = ridgeSNow < meanRidgeS;
       for (let sweep = 0; sweep < GS_SWEEPS; sweep++) {
         for (let row = 0; row < CH; row++) {
           const lat = latDegOfRow(cg, row);
@@ -263,31 +277,52 @@ export function computeTemperature(
           const chanS = rowIsChannel[row] || (row < CH - 1 && rowIsChannel[row + 1]) ? K.circumpolarChannelFactor : 1;
           const gN = row > 0 ? (chanN * dMerid * Math.cos(phiEdgeN)) / (dPhi * dPhi * cosC) : 0;
           const gS = row < CH - 1 ? (chanS * dMerid * Math.cos(phiEdgeS)) / (dPhi * dPhi * cosC) : 0;
-          const uMs = uRow?.[row] ?? 0;
-          const advCBase = K.zonalAdvectionCouplingWm2PerK * (Math.abs(uMs) / 4);
+          const seasonFactor = (lat >= 0 ? summerN : summerS) ? K.summerAdvectionFactor : 1;
+          // 南北結合はリッジより極側のみ(温帯低気圧の南北混合が実在する帯)。
+          // ハドレー域の南北輸送は拡散増強で表現済みで、そこに v 結合を足すと
+          // 「冷気コンベア」(シベリア→インド)の二重計上になる(2026-07-30 実測)
+          const vBandW = Math.min(1, Math.max(0, (Math.abs(lat) - ridgeAbs) / 10));
           // 冬(月日射 < 年平均)の陸は接地逆転層で移流が地表に届きにくい
           const isWinterRow = (insolation.monthlyByRow[m0]?.[row] ?? 0) < (insolation.annualMeanByRow[row] ?? 0);
           for (let col = 0; col < CW; col++) {
             const i = row * CW + col;
-            const advC = isWinterRow
-              ? advCBase * (1 - (1 - K.winterInversionAdvectionFactor) * (interior01[i] ?? 0))
-              : advCBase;
+            const uMs = uField?.[i] ?? 0;
+            const vMs = vField?.[i] ?? 0;
+            const inv = isWinterRow
+              ? 1 - (1 - K.winterInversionAdvectionFactor) * (interior01[i] ?? 0)
+              : 1;
+            const advScale = seasonFactor * inv * K.zonalAdvectionCouplingWm2PerK;
+            const east = row * CW + ((col + 1) % CW);
+            const west = row * CW + ((col + CW - 1) % CW);
+            const north = row > 0 ? (row - 1) * CW + col : i;
+            const south = row < CH - 1 ? (row + 1) * CW + col : i;
+            // 2D 風上結合: 東西 = u、南北 = v(v > 0 = 北向き → 南から来る)。
+            // 結合は実効風速 7/5 m/s で頭打ち(地表結合は風速に線形では増えない)
+            const advCu = advScale * (Math.min(7, Math.abs(uMs)) / 4);
+            const upwindU = uMs >= 0 ? west : east;
+            const upwindV = vMs >= 0 ? south : north;
+            // v 結合は (a) 周極海峡の隔離則を尊重(迂回すると南極海が過熱)、
+            // (b) 陸で強く外洋で弱い(海面温度への大気移流の掴みは小さい)
+            const upwindVRow = Math.floor(upwindV / CW);
+            const chanV =
+              rowIsChannel[row] || rowIsChannel[upwindVRow] ? K.circumpolarChannelFactor : 1;
+            const landGrip = 0.25 + 0.75 * (coarse[i]?.landFrac ?? 0);
+            const advCv =
+              upwindV === i
+                ? 0
+                : advScale * vBandW * chanV * landGrip * (Math.min(5, Math.abs(vMs)) / 4);
             const cOverDt = ((heatCap[i] ?? 1) * capScale) / dt;
             const df = diffFactor[i] ?? 1;
             const gzEff = gz * df;
             const gNEff = gN * df;
             const gSEff = gS * df;
-            const east = row * CW + ((col + 1) % CW);
-            const west = row * CW + ((col + CW - 1) % CW);
-            const north = row > 0 ? (row - 1) * CW + col : i;
-            const south = row < CH - 1 ? (row + 1) * CW + col : i;
-            const upwindNb = uMs >= 0 ? west : east;
-            const diag = cOverDt + K.olrBWm2PerC + 2 * gzEff + gNEff + gSEff + advC;
+            const diag = cOverDt + K.olrBWm2PerC + 2 * gzEff + gNEff + gSEff + advCu + advCv;
             const off =
               gzEff * ((t[east] ?? 0) + (t[west] ?? 0)) +
               gNEff * (t[north] ?? 0) +
               gSEff * (t[south] ?? 0) +
-              advC * (t[upwindNb] ?? 0);
+              advCu * (t[upwindU] ?? 0) +
+              advCv * (t[upwindV] ?? 0);
             t[i] = ((rhs[i] ?? 0) + off) / diag;
           }
         }
@@ -415,40 +450,52 @@ function aggregateToCoarse(
   return out;
 }
 
-/** 月別・行別の帯状移流速度(偏西風帯で東向き、貿易風帯で弱い西向き) */
-function buildZonalAdvection(
+/**
+ * 月別 2D 風(表示格子)を EBM 格子へ平均集約する。
+ * 移流結合の風上方向・強度に使う(旧・帯状移流の置換、2026-07-30)
+ */
+function aggregateWinds(
+  ctx: SimContext,
+  airflow: AirflowResult,
   cg: Grid,
-  windBelt: WindBeltResult,
-  rotationDirection: number,
-): Float64Array[] {
-  const dirSign = rotationDirection >= 0 ? 1 : -1;
-  const rows = cg.heightCells;
-  const result: Float64Array[] = [];
-  const meanRidgeN =
-    windBelt.monthlyRidgeLatNDeg.reduce((a, b) => a + b, 0) / windBelt.monthlyRidgeLatNDeg.length;
-  const meanRidgeS =
-    windBelt.monthlyRidgeLatSDeg.reduce((a, b) => a + b, 0) / windBelt.monthlyRidgeLatSDeg.length;
+): { u: Float32Array[]; v: Float32Array[] } {
+  const src = ctx.grid;
+  const uMonthly: Float32Array[] = [];
+  const vMonthly: Float32Array[] = [];
   for (let m = 0; m < MONTHS_PER_YEAR; m++) {
-    const ridgeN = windBelt.monthlyRidgeLatNDeg[m] ?? 31;
-    const ridgeS = windBelt.monthlyRidgeLatSDeg[m] ?? -31;
-    const pfN = windBelt.monthlyPolarFrontLatNDeg[m] ?? 60;
-    const pfS = windBelt.monthlyPolarFrontLatSDeg[m] ?? -60;
-    const u = new Float64Array(rows);
-    for (let row = 0; row < rows; row++) {
-      const lat = latDegOfRow(cg, row);
-      // 夏半球はジェットが弱まり、大陸が海洋の影響から解放される
-      const isSummer =
-        lat >= 0 ? (windBelt.monthlyRidgeLatNDeg[m] ?? 31) > meanRidgeN : (windBelt.monthlyRidgeLatSDeg[m] ?? -31) < meanRidgeS;
-      const seasonFactor = isSummer ? K.summerAdvectionFactor : 1;
-      let v = 0;
-      if (lat > ridgeN && lat < pfN + 8) v = 4.0 * seasonFactor;
-      else if (lat < ridgeS && lat > pfS - 8) v = 4.0 * seasonFactor;
-      else if (Math.abs(lat) < Math.min(ridgeN, Math.abs(ridgeS))) v = -1.5;
-      u[row] = v * dirSign;
+    const su = airflow.monthlyWindU[m];
+    const sv = airflow.monthlyWindV[m];
+    const u = new Float32Array(cg.cellCount);
+    const v = new Float32Array(cg.cellCount);
+    const n = new Float32Array(cg.cellCount);
+    if (su && sv) {
+      for (let row = 0; row < src.heightCells; row++) {
+        const cgRow = Math.min(
+          cg.heightCells - 1,
+          Math.floor((row * src.resolutionDeg) / cg.resolutionDeg),
+        );
+        for (let col = 0; col < src.widthCells; col++) {
+          const cgCol = Math.min(
+            cg.widthCells - 1,
+            Math.floor((col * src.resolutionDeg) / cg.resolutionDeg),
+          );
+          const ci = cgRow * cg.widthCells + cgCol;
+          const i = row * src.widthCells + col;
+          u[ci] = (u[ci] ?? 0) + (su[i] ?? 0);
+          v[ci] = (v[ci] ?? 0) + (sv[i] ?? 0);
+          n[ci] = (n[ci] ?? 0) + 1;
+        }
+      }
+      for (let i = 0; i < cg.cellCount; i++) {
+        const c = Math.max(1, n[i] ?? 1);
+        u[i] = (u[i] ?? 0) / c;
+        v[i] = (v[i] ?? 0) / c;
+      }
     }
-    result.push(u);
+    uMonthly.push(u);
+    vMonthly.push(v);
   }
-  return result;
+  return { u: uMonthly, v: vMonthly };
 }
 
 function relaxPolarRows(cg: Grid, t: Float64Array): void {

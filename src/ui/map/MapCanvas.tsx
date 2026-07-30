@@ -369,18 +369,22 @@ export function MapCanvas() {
       }
     }
 
-    // 球体サンプリング用のピクセルを退避してコンポジタへ通知
+    // 球体サンプリング用のピクセルを退避 → 同一コミット内で即時コンポジット
+    // (バージョン state 経由の 2 コミット構成は、クリック直後の E2E 読取りと
+    // 競合してフレーク化する)
     worldDataRef.current = ctx2d.getImageData(0, 0, CANVAS_W, CANVAS_H);
-    setWorldVersion((v) => v + 1);
+    compositeView();
+    setWorldVersion((v) => v + 1); // 最上層(ホバー枠)の再描画通知のみに使う
   }, [result, overlay, month, showItczLine, showWindArrows]);
 
-  // ---- コンポジタ(平面タイル / 球体) ----
-  useEffect(() => {
+  // ---- コンポジタ(平面タイル / 球体)。世界描画直後とビュー状態変更時に呼ぶ ----
+  const compositeView = () => {
     const canvas = baseRef.current;
     const world = worldRef.current;
-    if (!canvas || !world || worldVersion === 0) return;
+    if (!canvas || !world) return;
     const ctx2d = canvas.getContext('2d');
     if (!ctx2d) return;
+    const { viewMode, panLonDeg, viewSpanDeg, globeLon0, globeLat0 } = useUiStore.getState();
     if (viewMode === 'flat') {
       const scale = 360 / viewSpanDeg;
       const tileW = CANVAS_W * scale;
@@ -447,7 +451,11 @@ export function MapCanvas() {
       }
       ctx2d.putImageData(img, 0, 0);
     }
-  }, [worldVersion, viewMode, panLonDeg, viewSpanDeg, globeLon0, globeLat0]);
+  };
+
+  useEffect(() => {
+    compositeView();
+  }, [viewMode, panLonDeg, viewSpanDeg, globeLon0, globeLat0]);
 
   // ---- 最上層(ホバー枠のみ) ----
   useEffect(() => {
