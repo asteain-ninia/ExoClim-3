@@ -43,6 +43,51 @@ test('手順オーバーレイ(海流・気圧)が描画される', async ({ pag
   await page.screenshot({ path: 'test-results/app-pressure-jul.png', fullPage: false });
 });
 
+test('ドラッグ周回・360°超スパン・球体表示が動く', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('computing-indicator')).toBeHidden({ timeout: 60_000 });
+  // 位置重み付き(巡回シフトでも値が変わる)
+  const fingerprint = () =>
+    page.evaluate(() => {
+      const canvas = document.querySelector<HTMLCanvasElement>('.map-base');
+      const ctx = canvas?.getContext('2d');
+      if (!canvas || !ctx) return -1;
+      const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      let sum = 0;
+      for (let i = 0; i < data.length; i += 16 * 4) {
+        const w = 1 + ((i / 4) % 997);
+        sum = (sum + w * ((data[i] ?? 0) + (data[i + 1] ?? 0) + (data[i + 2] ?? 0))) % 1_000_000_007;
+      }
+      return sum;
+    });
+  const before = await fingerprint();
+  // ドラッグで経度方向に周回する(平面)
+  const map = page.getByTestId('map-canvas');
+  const box = await map.boundingBox();
+  if (!box) throw new Error('map-canvas が見つからない');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 173, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+  const panned = await fingerprint();
+  expect(panned).not.toBe(before);
+  // ホイールで 360° 超のスパン(世界が繰り返して見える)
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, 400);
+  await page.waitForTimeout(200);
+  const zoomedOut = await fingerprint();
+  expect(zoomedOut).not.toBe(panned);
+  await page.screenshot({ path: 'test-results/app-wide-span.png', fullPage: false });
+  // 球体表示に切替
+  await page.getByTestId('view-globe').click();
+  await page.waitForTimeout(300);
+  const globe = await fingerprint();
+  expect(globe).not.toBe(zoomedOut);
+  await page.screenshot({ path: 'test-results/app-globe.png', fullPage: false });
+  await page.getByTestId('view-flat').click();
+});
+
 test('オーバーレイと月の切替でマップが変化する', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByTestId('computing-indicator')).toBeHidden({ timeout: 60_000 });

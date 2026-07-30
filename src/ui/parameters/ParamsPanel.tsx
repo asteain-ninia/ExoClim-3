@@ -8,8 +8,8 @@ import { Slider } from './Slider';
 
 const TERRAIN_PRESETS: Array<{ id: TerrainPresetName; label: string }> = [
   { id: 'earth', label: '実在地球' },
-  { id: 'idealized_continent', label: '理想化大陸(単一)' },
-  { id: 'two_continents', label: '南北分断大陸' },
+  { id: 'idealized_continent', label: '仮想大陸(全大陸集約)' },
+  { id: 'two_continents', label: '仮想大陸(赤道分断)' },
   { id: 'aquaplanet', label: '全海惑星' },
   { id: 'all_land', label: '全陸惑星' },
 ];

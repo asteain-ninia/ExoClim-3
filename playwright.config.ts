@@ -8,11 +8,11 @@ export default defineConfig({
     viewport: { width: 1480, height: 940 },
   },
   webServer: {
-    command: 'npm run preview',
+    // preview はビルドしない(dist の残骸を配るだけ)ため、必ず build を先行させる。
+    // reuseExistingServer: false は「残骸サーバ」対策、build 先行は「残骸ビルド」対策。
+    command: 'npm run build && npm run preview',
     port: 4173,
-    // 常に自前でサーバを起動する。true だと残骸サーバの「古いビルド」を
-    // 検証してしまい、ブラウザ非互換(process 参照事故)を見逃す。
     reuseExistingServer: false,
-    timeout: 30_000,
+    timeout: 180_000,
   },
 });

@@ -1,8 +1,10 @@
-// マップ描画。格子解像度の ImageData を作り、拡大描画する(最近傍)。
-// ITCZ 線・風矢印は上層の別 canvas に描く(教訓 §4 F4: ホバーで全再描画しない)。
-// オーバーレイ要素は 3 オフセット描画(教訓 §5: 経度循環)…v0.1 はパンなしのため単一。
+// マップ描画。世界全体(円筒 equirect)を 1 枚のオフスクリーン canvas に描き、
+// コンポジタが表示モードに応じて可視 canvas へ写す:
+//  - 平面: 世界をタイル状に並べて描く(ドラッグで無限周回、ホイールで 360° 超を一望)
+//  - 球体: 正射図法の逆写像で世界画像をサンプリング(ドラッグで回転)
+// ホバー枠は最上層の別 canvas(教訓 §4 F4: ホバーで世界を再描画しない)。
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { latDegOfRow, lonDegOfCol } from '@/domain/grid';
 import { KOPPEN_CLASSES } from '@/domain/koppen';
 import type { PipelineResult } from '@/sim/types';
@@ -21,6 +23,7 @@ import {
 
 const CANVAS_W = 1080;
 const CANVAS_H = 540;
+const SPACE_BG = '#0a0e18';
 
 export function MapCanvas() {
   const result = useResultsStore((s) => s.result);
@@ -30,18 +33,43 @@ export function MapCanvas() {
   const showWindArrows = useUiStore((s) => s.showWindArrows);
   const hoveredCell = useUiStore((s) => s.hoveredCell);
   const setHoveredCell = useUiStore((s) => s.setHoveredCell);
-  const baseRef = useRef<HTMLCanvasElement>(null);
-  const overlayRef = useRef<HTMLCanvasElement>(null);
+  const viewMode = useUiStore((s) => s.viewMode);
+  const panLonDeg = useUiStore((s) => s.panLonDeg);
+  const viewSpanDeg = useUiStore((s) => s.viewSpanDeg);
+  const globeLon0 = useUiStore((s) => s.globeLon0);
+  const globeLat0 = useUiStore((s) => s.globeLat0);
+  const setViewMode = useUiStore((s) => s.setViewMode);
+  const setPanLonDeg = useUiStore((s) => s.setPanLonDeg);
+  const setViewSpanDeg = useUiStore((s) => s.setViewSpanDeg);
+  const setGlobeRotation = useUiStore((s) => s.setGlobeRotation);
 
-  // ---- 基層ビットマップ ----
+  const baseRef = useRef<HTMLCanvasElement>(null);
+  const topRef = useRef<HTMLCanvasElement>(null);
+  const worldRef = useRef<OffscreenCanvas | null>(null);
+  const worldDataRef = useRef<ImageData | null>(null);
+  const [worldVersion, setWorldVersion] = useState(0);
+  const dragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    panStart: number;
+    lonStart: number;
+    latStart: number;
+    moved: boolean;
+  } | null>(null);
+
+  // ---- 世界キャンバス(基層ビットマップ + 線オーバーレイを 1 枚に描く) ----
   useEffect(() => {
-    const canvas = baseRef.current;
-    if (!canvas || !result) return;
-    const ctx2d = canvas.getContext('2d');
+    if (!result) return;
+    if (!worldRef.current) worldRef.current = new OffscreenCanvas(CANVAS_W, CANVAS_H);
+    const world = worldRef.current;
+    const ctx2d = world.getContext('2d');
     if (!ctx2d) return;
     const { grid, terrain } = result.context;
     const W = grid.widthCells;
     const H = grid.heightCells;
+
+    // -- 基層ビットマップ --
     const img = new ImageData(W, H);
     for (let i = 0; i < grid.cellCount; i++) {
       const isLand = terrain.landMask[i] === 1;
@@ -90,25 +118,15 @@ export function MapCanvas() {
       img.data[i * 4 + 2] = rgb[2];
       img.data[i * 4 + 3] = 255;
     }
-    const off = new OffscreenCanvas(W, H);
-    const offCtx = off.getContext('2d');
-    if (!offCtx) return;
-    offCtx.putImageData(img, 0, 0);
+    const cellCanvas = new OffscreenCanvas(W, H);
+    const cellCtx = cellCanvas.getContext('2d');
+    if (!cellCtx) return;
+    cellCtx.putImageData(img, 0, 0);
     ctx2d.imageSmoothingEnabled = false;
     ctx2d.clearRect(0, 0, CANVAS_W, CANVAS_H);
-    ctx2d.drawImage(off, 0, 0, CANVAS_W, CANVAS_H);
-  }, [result, overlay, month]);
+    ctx2d.drawImage(cellCanvas, 0, 0, CANVAS_W, CANVAS_H);
 
-  // ---- 上層(ITCZ 線・風矢印・ホバー枠) ----
-  useEffect(() => {
-    const canvas = overlayRef.current;
-    if (!canvas || !result) return;
-    const ctx2d = canvas.getContext('2d');
-    if (!ctx2d) return;
-    ctx2d.clearRect(0, 0, CANVAS_W, CANVAS_H);
-    const { grid } = result.context;
-    const W = grid.widthCells;
-    const H = grid.heightCells;
+    // -- 線オーバーレイ --
     const cellW = CANVAS_W / W;
     const cellH = CANVAS_H / H;
     const m = month < 0 ? 6 : month;
@@ -118,7 +136,6 @@ export function MapCanvas() {
       if (centers) {
         const hw = result.itcz.halfWidthDeg;
         const yOf = (lat: number) => ((90 - lat) / 180) * CANVAS_H;
-        // 影響帯(半透明の帯)
         ctx2d.fillStyle = 'rgba(255, 120, 60, 0.14)';
         ctx2d.beginPath();
         for (let col = 0; col < W; col++) {
@@ -148,25 +165,21 @@ export function MapCanvas() {
       }
     }
 
-    // 海流オーバーレイ: 環流の流線(赤 = 暖、青 = 寒、白 = 中立。矢印 = 流向)。
-    // 月選択で季節版(WL#28 の夏冬マップの一般化)。描画前に Chaikin 平滑化。
+    // 海流オーバーレイ: 環流の流線(赤 = 暖、青 = 寒、白 = 中立。矢印 = 流向)
     if (overlay === 'currents') {
       const colors = { warm: '#ff6a50', cold: '#58b0ff', neutral: '#e8e8e8' } as const;
       const xOf = (lon: number) => ((lon + 180) / 360) * CANVAS_W;
       const yOf = (lat: number) => ((90 - lat) / 180) * CANVAS_H;
-      // 湧昇域(シアンの点)とサンゴ礁(緑の点)— WL#30
-      const cellW2 = CANVAS_W / W;
-      const cellH2 = CANVAS_H / H;
       for (let row = 0; row < H; row++) {
         for (let col = 0; col < W; col++) {
           const i = row * W + col;
           if (result.ocean.upwellingMask[i]) {
             ctx2d.fillStyle = 'rgba(90, 240, 255, 0.75)';
-            ctx2d.fillRect(col * cellW2 + cellW2 * 0.3, row * cellH2 + cellH2 * 0.3, cellW2 * 0.4, cellH2 * 0.4);
+            ctx2d.fillRect(col * cellW + cellW * 0.3, row * cellH + cellH * 0.3, cellW * 0.4, cellH * 0.4);
           } else if (result.ocean.coralReefMask[i]) {
             ctx2d.fillStyle = 'rgba(120, 255, 150, 0.7)';
             ctx2d.beginPath();
-            ctx2d.arc(col * cellW2 + cellW2 / 2, row * cellH2 + cellH2 / 2, Math.max(1.2, cellW2 * 0.22), 0, Math.PI * 2);
+            ctx2d.arc(col * cellW + cellW / 2, row * cellH + cellH / 2, Math.max(1.2, cellW * 0.22), 0, Math.PI * 2);
             ctx2d.fill();
           }
         }
@@ -234,7 +247,6 @@ export function MapCanvas() {
               if (caseId === 0 || caseId === 15) continue;
               const x0 = (col + 0.5) * cw;
               const y0 = (row + 0.5) * ch;
-              // 辺上の交点(線形補間)
               const top: [number, number] = [x0 + (v00 / (v00 - v10)) * cw, y0];
               const bottom: [number, number] = [x0 + (v01 / (v01 - v11)) * cw, y0 + ch];
               const left: [number, number] = [x0, y0 + (v00 / (v00 - v01)) * ch];
@@ -357,36 +369,283 @@ export function MapCanvas() {
       }
     }
 
-    if (hoveredCell) {
-      ctx2d.strokeStyle = 'rgba(255, 230, 0, 0.95)';
-      ctx2d.lineWidth = 2;
-      ctx2d.strokeRect(hoveredCell.col * cellW, hoveredCell.row * cellH, cellW, cellH);
-    }
-  }, [result, month, overlay, showItczLine, showWindArrows, hoveredCell]);
+    // 球体サンプリング用のピクセルを退避してコンポジタへ通知
+    worldDataRef.current = ctx2d.getImageData(0, 0, CANVAS_W, CANVAS_H);
+    setWorldVersion((v) => v + 1);
+  }, [result, overlay, month, showItczLine, showWindArrows]);
 
-  const onMouseMove = (ev: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!result) return;
-    const rect = ev.currentTarget.getBoundingClientRect();
-    const { grid } = result.context;
-    const col = Math.floor(((ev.clientX - rect.left) / rect.width) * grid.widthCells);
-    const row = Math.floor(((ev.clientY - rect.top) / rect.height) * grid.heightCells);
-    if (row >= 0 && row < grid.heightCells && col >= 0 && col < grid.widthCells) {
-      if (hoveredCell?.row !== row || hoveredCell?.col !== col) setHoveredCell({ row, col });
+  // ---- コンポジタ(平面タイル / 球体) ----
+  useEffect(() => {
+    const canvas = baseRef.current;
+    const world = worldRef.current;
+    if (!canvas || !world || worldVersion === 0) return;
+    const ctx2d = canvas.getContext('2d');
+    if (!ctx2d) return;
+    if (viewMode === 'flat') {
+      const scale = 360 / viewSpanDeg;
+      const tileW = CANVAS_W * scale;
+      const tileH = CANVAS_H * scale;
+      const y0 = (CANVAS_H - tileH) / 2;
+      ctx2d.imageSmoothingEnabled = scale !== 1;
+      ctx2d.fillStyle = SPACE_BG;
+      ctx2d.fillRect(0, 0, CANVAS_W, CANVAS_H);
+      let offsetPx = ((panLonDeg / 360) * tileW) % tileW;
+      if (offsetPx < 0) offsetPx += tileW;
+      for (let x = -offsetPx - tileW; x < CANVAS_W; x += tileW) {
+        ctx2d.drawImage(world, x, y0, tileW, tileH);
+      }
+    } else {
+      const data = worldDataRef.current;
+      if (!data) return;
+      const img = ctx2d.createImageData(CANVAS_W, CANVAS_H);
+      // 背景
+      const bg = [10, 14, 24];
+      for (let i = 0; i < CANVAS_W * CANVAS_H; i++) {
+        img.data[i * 4] = bg[0] ?? 0;
+        img.data[i * 4 + 1] = bg[1] ?? 0;
+        img.data[i * 4 + 2] = bg[2] ?? 0;
+        img.data[i * 4 + 3] = 255;
+      }
+      const R = CANVAS_H * 0.48;
+      const cx = CANVAS_W / 2;
+      const cy = CANVAS_H / 2;
+      const φ0 = (globeLat0 * Math.PI) / 180;
+      const λ0 = (globeLon0 * Math.PI) / 180;
+      // カメラ基底(東・北・視線)
+      const Xh = [-Math.sin(λ0), Math.cos(λ0), 0];
+      const Yh = [-Math.sin(φ0) * Math.cos(λ0), -Math.sin(φ0) * Math.sin(λ0), Math.cos(φ0)];
+      const Zh = [Math.cos(φ0) * Math.cos(λ0), Math.cos(φ0) * Math.sin(λ0), Math.sin(φ0)];
+      const x0i = Math.max(0, Math.floor(cx - R));
+      const x1i = Math.min(CANVAS_W - 1, Math.ceil(cx + R));
+      const y0i = Math.max(0, Math.floor(cy - R));
+      const y1i = Math.min(CANVAS_H - 1, Math.ceil(cy + R));
+      for (let py = y0i; py <= y1i; py++) {
+        const ny = -(py - cy) / R;
+        for (let px = x0i; px <= x1i; px++) {
+          const nx = (px - cx) / R;
+          const ρ2 = nx * nx + ny * ny;
+          if (ρ2 > 1) continue;
+          const nz = Math.sqrt(1 - ρ2);
+          const wx = nx * (Xh[0] ?? 0) + ny * (Yh[0] ?? 0) + nz * (Zh[0] ?? 0);
+          const wy = nx * (Xh[1] ?? 0) + ny * (Yh[1] ?? 0) + nz * (Zh[1] ?? 0);
+          const wz = nx * (Xh[2] ?? 0) + ny * (Yh[2] ?? 0) + nz * (Zh[2] ?? 0);
+          const lat = Math.asin(Math.min(1, Math.max(-1, wz)));
+          const lon = Math.atan2(wy, wx);
+          let u = Math.floor(((lon / Math.PI + 1) / 2) * CANVAS_W);
+          let v = Math.floor(((0.5 - lat / Math.PI) * CANVAS_H));
+          u = Math.min(CANVAS_W - 1, Math.max(0, u));
+          v = Math.min(CANVAS_H - 1, Math.max(0, v));
+          const si = (v * CANVAS_W + u) * 4;
+          const di = (py * CANVAS_W + px) * 4;
+          // 縁の簡易シェーディング(周辺減光)で球らしく
+          const shade = 0.72 + 0.28 * nz;
+          img.data[di] = (data.data[si] ?? 0) * shade;
+          img.data[di + 1] = (data.data[si + 1] ?? 0) * shade;
+          img.data[di + 2] = (data.data[si + 2] ?? 0) * shade;
+          img.data[di + 3] = 255;
+        }
+      }
+      ctx2d.putImageData(img, 0, 0);
     }
+  }, [worldVersion, viewMode, panLonDeg, viewSpanDeg, globeLon0, globeLat0]);
+
+  // ---- 最上層(ホバー枠のみ) ----
+  useEffect(() => {
+    const canvas = topRef.current;
+    if (!canvas) return;
+    const ctx2d = canvas.getContext('2d');
+    if (!ctx2d) return;
+    ctx2d.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    if (!hoveredCell || !result) return;
+    const { grid } = result.context;
+    const W = grid.widthCells;
+    const H = grid.heightCells;
+    ctx2d.strokeStyle = 'rgba(255, 230, 0, 0.95)';
+    ctx2d.lineWidth = 2;
+    if (viewMode === 'flat') {
+      const scale = 360 / viewSpanDeg;
+      const tileW = CANVAS_W * scale;
+      const tileH = CANVAS_H * scale;
+      const y0 = (CANVAS_H - tileH) / 2;
+      let offsetPx = ((panLonDeg / 360) * tileW) % tileW;
+      if (offsetPx < 0) offsetPx += tileW;
+      const cw = tileW / W;
+      const ch = tileH / H;
+      const xCell = (hoveredCell.col / W) * tileW;
+      const y = y0 + (hoveredCell.row / H) * tileH;
+      for (let x = xCell - offsetPx - tileW; x < CANVAS_W; x += tileW) {
+        if (x + cw < 0) continue;
+        ctx2d.strokeRect(x, y, cw, ch);
+      }
+    } else {
+      const lat = (latDegOfRow(grid, hoveredCell.row) * Math.PI) / 180;
+      const lon = (lonDegOfCol(grid, hoveredCell.col) * Math.PI) / 180;
+      const φ0 = (globeLat0 * Math.PI) / 180;
+      const λ0 = (globeLon0 * Math.PI) / 180;
+      const p = [Math.cos(lat) * Math.cos(lon), Math.cos(lat) * Math.sin(lon), Math.sin(lat)];
+      const e =
+        (p[0] ?? 0) * -Math.sin(λ0) + (p[1] ?? 0) * Math.cos(λ0);
+      const n =
+        (p[0] ?? 0) * -Math.sin(φ0) * Math.cos(λ0) +
+        (p[1] ?? 0) * -Math.sin(φ0) * Math.sin(λ0) +
+        (p[2] ?? 0) * Math.cos(φ0);
+      const z =
+        (p[0] ?? 0) * Math.cos(φ0) * Math.cos(λ0) +
+        (p[1] ?? 0) * Math.cos(φ0) * Math.sin(λ0) +
+        (p[2] ?? 0) * Math.sin(φ0);
+      if (z > 0) {
+        const R = CANVAS_H * 0.48;
+        ctx2d.beginPath();
+        ctx2d.arc(CANVAS_W / 2 + e * R, CANVAS_H / 2 - n * R, 4, 0, Math.PI * 2);
+        ctx2d.stroke();
+      }
+    }
+  }, [result, hoveredCell, viewMode, panLonDeg, viewSpanDeg, globeLon0, globeLat0, worldVersion]);
+
+  // ---- ポインタ操作(ドラッグ = 周回/回転、それ以外はホバー) ----
+  const toCanvasXY = (ev: React.PointerEvent<HTMLCanvasElement>) => {
+    const rect = ev.currentTarget.getBoundingClientRect();
+    return {
+      x: ((ev.clientX - rect.left) / rect.width) * CANVAS_W,
+      y: ((ev.clientY - rect.top) / rect.height) * CANVAS_H,
+    };
   };
+
+  const cellAt = (x: number, y: number): { row: number; col: number } | null => {
+    if (!result) return null;
+    const { grid } = result.context;
+    const W = grid.widthCells;
+    const H = grid.heightCells;
+    if (viewMode === 'flat') {
+      const scale = 360 / viewSpanDeg;
+      const tileW = CANVAS_W * scale;
+      const tileH = CANVAS_H * scale;
+      const y0 = (CANVAS_H - tileH) / 2;
+      if (y < y0 || y >= y0 + tileH) return null;
+      let offsetPx = ((panLonDeg / 360) * tileW) % tileW;
+      if (offsetPx < 0) offsetPx += tileW;
+      let wx = (x + offsetPx) / tileW;
+      wx -= Math.floor(wx);
+      const col = Math.min(W - 1, Math.floor(wx * W));
+      const row = Math.min(H - 1, Math.floor(((y - y0) / tileH) * H));
+      return { row, col };
+    }
+    const R = CANVAS_H * 0.48;
+    const nx = (x - CANVAS_W / 2) / R;
+    const ny = -(y - CANVAS_H / 2) / R;
+    const ρ2 = nx * nx + ny * ny;
+    if (ρ2 > 1) return null;
+    const nz = Math.sqrt(1 - ρ2);
+    const φ0 = (globeLat0 * Math.PI) / 180;
+    const λ0 = (globeLon0 * Math.PI) / 180;
+    const wx3 =
+      nx * -Math.sin(λ0) + ny * -Math.sin(φ0) * Math.cos(λ0) + nz * Math.cos(φ0) * Math.cos(λ0);
+    const wy3 =
+      nx * Math.cos(λ0) + ny * -Math.sin(φ0) * Math.sin(λ0) + nz * Math.cos(φ0) * Math.sin(λ0);
+    const wz3 = ny * Math.cos(φ0) + nz * Math.sin(φ0);
+    const lat = (Math.asin(Math.min(1, Math.max(-1, wz3))) * 180) / Math.PI;
+    const lon = (Math.atan2(wy3, wx3) * 180) / Math.PI;
+    const row = Math.min(H - 1, Math.max(0, Math.floor((90 - lat) / grid.resolutionDeg)));
+    const col = Math.min(W - 1, Math.max(0, Math.floor((lon + 180) / grid.resolutionDeg)));
+    return { row, col };
+  };
+
+  const onPointerDown = (ev: React.PointerEvent<HTMLCanvasElement>) => {
+    const { x, y } = toCanvasXY(ev);
+    dragRef.current = {
+      pointerId: ev.pointerId,
+      startX: x,
+      startY: y,
+      panStart: panLonDeg,
+      lonStart: globeLon0,
+      latStart: globeLat0,
+      moved: false,
+    };
+    ev.currentTarget.setPointerCapture(ev.pointerId);
+  };
+
+  const onPointerMove = (ev: React.PointerEvent<HTMLCanvasElement>) => {
+    const { x, y } = toCanvasXY(ev);
+    const drag = dragRef.current;
+    if (drag && ev.buttons > 0) {
+      const dx = x - drag.startX;
+      const dy = y - drag.startY;
+      if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+      if (drag.moved) {
+        if (viewMode === 'flat') {
+          setPanLonDeg(drag.panStart - dx * (viewSpanDeg / CANVAS_W));
+        } else {
+          const k = 180 / (2 * CANVAS_H * 0.48);
+          setGlobeRotation(drag.lonStart - dx * k, drag.latStart + dy * k);
+        }
+        if (hoveredCell) setHoveredCell(null);
+        return;
+      }
+    }
+    const cell = cellAt(x, y);
+    if (!cell) {
+      if (hoveredCell) setHoveredCell(null);
+      return;
+    }
+    if (hoveredCell?.row !== cell.row || hoveredCell?.col !== cell.col) setHoveredCell(cell);
+  };
+
+  const onPointerUp = (ev: React.PointerEvent<HTMLCanvasElement>) => {
+    dragRef.current = null;
+    ev.currentTarget.releasePointerCapture(ev.pointerId);
+  };
+
+  // ホイール = 平面の経度スパン(360°〜1440°。360 超で世界が繰り返して見える)
+  useEffect(() => {
+    const canvas = topRef.current;
+    if (!canvas) return;
+    const onWheel = (ev: WheelEvent) => {
+      ev.preventDefault();
+      const s = useUiStore.getState();
+      if (s.viewMode !== 'flat') return;
+      const factor = ev.deltaY > 0 ? 1.12 : 1 / 1.12;
+      s.setViewSpanDeg(s.viewSpanDeg * factor);
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, []);
 
   return (
     <div className="map-wrap">
       <canvas ref={baseRef} width={CANVAS_W} height={CANVAS_H} className="map-base" />
       <canvas
-        ref={overlayRef}
+        ref={topRef}
         width={CANVAS_W}
         height={CANVAS_H}
         className="map-overlay"
-        onMouseMove={onMouseMove}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
         onMouseLeave={() => setHoveredCell(null)}
         data-testid="map-canvas"
       />
+      <div className="view-toggle" data-testid="view-toggle">
+        <button
+          className={viewMode === 'flat' ? 'active' : ''}
+          onClick={() => setViewMode('flat')}
+          data-testid="view-flat"
+        >
+          平面
+        </button>
+        <button
+          className={viewMode === 'globe' ? 'active' : ''}
+          onClick={() => setViewMode('globe')}
+          data-testid="view-globe"
+        >
+          球体
+        </button>
+        {viewMode === 'flat' && viewSpanDeg > 361 && (
+          <button onClick={() => setViewSpanDeg(360)} title="スパンを 360° に戻す">
+            {Math.round(viewSpanDeg)}°
+          </button>
+        )}
+      </div>
       <CellTooltip result={result} />
     </div>
   );

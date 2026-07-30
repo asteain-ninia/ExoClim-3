@@ -30,9 +30,9 @@ export function resolveTerrain(grid: Grid, source: TerrainSource): TerrainField 
         case 'earth':
           return earthTerrain(grid);
         case 'idealized_continent':
-          return idealizedContinent(grid, false);
+          return hypotheticalContinent(grid, false);
         case 'two_continents':
-          return idealizedContinent(grid, true);
+          return hypotheticalContinent(grid, true);
         case 'aquaplanet':
           return uniform(grid, false);
         case 'all_land':
@@ -108,34 +108,49 @@ function earthTerrain(grid: Grid): TerrainField {
 }
 
 /**
- * 理想化大陸: 経度 [-30°, +50°]、緯度 [-55°, +70°] の単一大陸。
- * 西岸近くに南北山脈(アンデス相当 3000m 級)、内陸は 300m 平原。
- * split = true では赤道 [-6°, +6°] を海峡で分断した南北二大陸。
+ * 仮想大陸: 地球の全大陸を一定経度(0°)を中心に集めた仮想の大陸
+ * (高校地理の「仮想大陸」図と同じ発想)。各緯度の陸幅 = 実在地球の
+ * その緯度の陸割合 × 360° とし、輪郭は緯度方向 ±2° で平滑化する。
+ * 標高は一様 300m(教育図と同じく無地形 — 気候帯の理想配置を見るため)。
+ * split = true は赤道 [-6°, +6°] を海峡で分断した変種。
  */
-function idealizedContinent(grid: Grid, split: boolean): TerrainField {
+function hypotheticalContinent(grid: Grid, split: boolean): TerrainField {
+  const src = earthTerrainJson as EarthTerrainJson;
+  // 1° ソース行ごとの陸割合 → ±2 行移動平均で輪郭を滑らかに
+  const frac = new Float64Array(src.heightCells);
+  for (let r = 0; r < src.heightCells; r++) {
+    let n = 0;
+    for (let c = 0; c < src.widthCells; c++) n += src.landMask[r * src.widthCells + c] ?? 0;
+    frac[r] = n / src.widthCells;
+  }
+  const fracSmooth = new Float64Array(src.heightCells);
+  for (let r = 0; r < src.heightCells; r++) {
+    let s = 0;
+    let n = 0;
+    for (let d = -2; d <= 2; d++) {
+      const rr = r + d;
+      if (rr < 0 || rr >= src.heightCells) continue;
+      s += frac[rr] ?? 0;
+      n++;
+    }
+    fracSmooth[r] = n > 0 ? s / n : 0;
+  }
+
   const elevationMeters = new Float32Array(grid.cellCount).fill(OCEAN_FLOOR_M);
   const landMask = new Uint8Array(grid.cellCount);
   for (let row = 0; row < grid.heightCells; row++) {
     const lat = latDegOfRow(grid, row);
+    const srcRow = Math.min(src.heightCells - 1, Math.max(0, Math.floor(90 - lat)));
+    const halfWidthDeg = (fracSmooth[srcRow] ?? 0) * 180;
+    if (halfWidthDeg <= 0) continue;
+    const inStrait = split && lat >= -6 && lat <= 6;
+    if (inStrait) continue;
     for (let col = 0; col < grid.widthCells; col++) {
       const lon = lonDegOfCol(grid, col);
-      const inLon = lon >= -30 && lon <= 50;
-      const inLat = lat >= -55 && lat <= 70;
-      const inStrait = split && lat >= -6 && lat <= 6;
-      if (!inLon || !inLat || inStrait) continue;
+      if (Math.abs(lon) > halfWidthDeg) continue;
       const i = cellIndex(grid, row, col);
       landMask[i] = 1;
-      let elev = 300;
-      // 西岸山脈(lon -27〜-20 に稜線、最高 3200m)
-      const ridgeCenter = -23.5;
-      const ridgeHalfWidth = 3.5;
-      const d = Math.abs(lon - ridgeCenter);
-      if (d < ridgeHalfWidth) {
-        elev = 300 + 2900 * (1 - d / ridgeHalfWidth);
-      }
-      // 東へ向かってなだらかに低下(200m 台へ)
-      if (lon > 20) elev = Math.min(elev, 300 - ((lon - 20) / 30) * 100);
-      elevationMeters[i] = elev;
+      elevationMeters[i] = 300;
     }
   }
   return { elevationMeters, landMask };

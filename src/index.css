@@ -110,7 +110,35 @@ body {
 }
 
 .map-overlay {
-  cursor: crosshair;
+  cursor: grab;
+  touch-action: none;
+}
+
+.map-overlay:active {
+  cursor: grabbing;
+}
+
+.view-toggle {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  display: flex;
+  gap: 4px;
+}
+
+.view-toggle button {
+  background: rgba(12, 18, 28, 0.82);
+  border: 1px solid var(--panel-border);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.view-toggle button.active {
+  background: rgba(70, 110, 180, 0.85);
+  border-color: rgba(120, 170, 240, 0.9);
 }
 
 .cell-tooltip {
