@@ -27,6 +27,7 @@ import {
   evaluateAcceptance,
   evaluateRegression,
 } from './validate_criteria';
+import { regionKoppenDiag, regionPrecipDiag } from './scoring_regions';
 
 const OUT_DIR = path.join(process.cwd(), 'out', 'validate');
 // 採点定義は scripts/scoring.ts に一元化(P0-3)。ここでは複製しない。
@@ -105,6 +106,14 @@ function main(): void {
       lineRmseRainWeightedDeg: round2(itczRmseDeg),
     },
     regionGates,
+    // R0(地域降水 FB): 報告専用の地域診断。目的関数には入れない
+    regionDiagnostics: {
+      note:
+        '面積重み(cos 緯度)・2° 観測有効セルのみ・モデルは陸ブロック平均・' +
+        '最乾/最多雨月は地域平均月別系列の最小/最大。詳細は scoring_regions.ts 冒頭',
+      precip: regionPrecipDiag(result, climObs),
+      koppen: regionKoppenDiag(result, koppenObs),
+    },
     logStructure: scoreLogStructure(result, koppenObs),
   };
 
@@ -112,6 +121,16 @@ function main(): void {
 
   fs.writeFileSync(path.join(OUT_DIR, 'report.json'), JSON.stringify(report, null, 2));
   printSummary(report);
+
+  console.log('地域降水診断(R0、報告のみ — モデル/観測):');
+  for (const p of report.regionDiagnostics.precip) {
+    const kd = report.regionDiagnostics.koppen.find((x) => x.id === p.id);
+    console.log(
+      `  ${p.label}: 年 ${p.modelAnnualMm}/${p.obsAnnualMm}mm (比 ${p.ratio})` +
+        ` 最乾月 ${p.modelDriestMm}/${p.obsDriestMm}mm 最多雨月 ${p.modelWettestMm}/${p.obsWettestMm}mm` +
+        (kd ? ` Af+Am ${kd.afAmModelPct}% vs ${kd.afAmObsPct}%` : ''),
+    );
+  }
 
   console.log(
     `\n退行防止ゲート(基準凍結 ${REGRESSION_BASELINE.frozenAt}): ${regression.pass ? '✅ PASS' : '❌ FAIL — 非零終了'}`,
