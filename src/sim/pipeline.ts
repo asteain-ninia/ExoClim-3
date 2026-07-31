@@ -23,8 +23,44 @@ export function runPipeline(params: PlanetParams): PipelineResult {
   const context = buildSimContext(params);
   mark('context', t0);
 
+  // ---- プレパス: 半球間 SST 非対称 → ITCZ の北偏オフセット ----
+  // 実物の ITCZ は暖かい半球へ寄る(~3°/K)。海流場(周極海峡で切られる
+  // 南半球 vs 暖流ドリフトの北半球)が持つ非対称を測り、線に恒常オフセットを
+  // 与える。ステップ 1-3 のプレパスは計 ~150ms(ストリームライン含む)
   t0 = performance.now();
-  const itcz = computeItcz(context);
+  let hemisOffsetDeg = 0;
+  if (MODEL_CONSTANTS.itczHemisOffsetPerC > 0) {
+    const itcz0 = computeItcz(context);
+    const wb0 = computeWindBelt(context, itcz0);
+    const ocean0 = computeOceanCurrent(context, itcz0, wb0);
+    const grid = context.grid;
+    let nSum = 0;
+    let nW = 0;
+    let sSum = 0;
+    let sW = 0;
+    for (let row = 0; row < grid.heightCells; row++) {
+      const lat = 90 - (row + 0.5) * grid.resolutionDeg;
+      const w = Math.cos((lat * Math.PI) / 180);
+      for (let col = 0; col < grid.widthCells; col++) {
+        const i = row * grid.widthCells + col;
+        if (context.terrain.landMask[i]) continue;
+        const a = ocean0.sstAnomalyC[i] ?? 0;
+        if (lat >= 0) {
+          nSum += w * a;
+          nW += w;
+        } else {
+          sSum += w * a;
+          sW += w;
+        }
+      }
+    }
+    const deltaC = (nW > 0 ? nSum / nW : 0) - (sW > 0 ? sSum / sW : 0);
+    hemisOffsetDeg = Math.max(-6, Math.min(6, MODEL_CONSTANTS.itczHemisOffsetPerC * deltaC));
+  }
+  mark('step0_hemis', t0);
+
+  t0 = performance.now();
+  const itcz = computeItcz(context, hemisOffsetDeg);
   mark('step1_itcz', t0);
 
   t0 = performance.now();

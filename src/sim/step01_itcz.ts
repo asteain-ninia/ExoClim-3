@@ -7,7 +7,13 @@ import { latDegOfRow, rowOfLatDeg } from '@/domain/grid';
 import { MODEL_CONSTANTS as K } from './constants';
 import type { ItczResult, SimContext } from './types';
 
-export function computeItcz(ctx: SimContext): ItczResult {
+/**
+ * hemisOffsetDeg: 半球間非対称による ITCZ の恒常オフセット(度、北偏が正)。
+ * 実物の ITCZ は海洋の半球間熱輸送(AMOC 型)で暖かい半球へ ~3°/K 寄り、
+ * 年平均 2〜6°N に座る(赤道対称ではない)。パイプラインがプレパスの
+ * SST 非対称から算出して渡す(初回パスは 0)。
+ */
+export function computeItcz(ctx: SimContext, hemisOffsetDeg = 0): ItczResult {
   const { grid, terrain, insolation } = ctx;
   const W = grid.widthCells;
   const tilt = Math.max(ctx.params.body.axialTiltDeg, 1e-6);
@@ -68,7 +74,11 @@ export function computeItcz(ctx: SimContext): ItczResult {
     const declNorm = decl / tilt; // -1..1
     const centers = new Float32Array(W);
     for (let col = 0; col < W; col++) {
-      const base = K.itczDeclinationFollowRatio * decl;
+      // 海上の ITCZ は熱慣性でほとんど動かず、陸上では太陽を大きく追う
+      // (Log/Pasta の明示規則)。経度列の帯内陸率で季節追従を減衰する
+      const landness = Math.min(1, ((landFracN[col] ?? 0) + (landFracS[col] ?? 0)));
+      const followDamp = K.itczOceanFollowDamp + (1 - K.itczOceanFollowDamp) * landness;
+      const base = K.itczDeclinationFollowRatio * decl * followDamp;
       // 夏半球の大陸が ITCZ を引き寄せる(高所加熱で増強、冬半球の大陸は押し返す)
       const pull =
         declNorm >= 0
@@ -78,7 +88,7 @@ export function computeItcz(ctx: SimContext): ItczResult {
           : K.itczMonsoonPullDeg * declNorm * (landFracS[col] ?? 0) * (elevBoostS[col] ?? 1) +
             declNorm * (plateauPullS[col] ?? 0) -
             K.itczMonsoonPullDeg * 0.25 * declNorm * (landFracN[col] ?? 0);
-      centers[col] = base + pull;
+      centers[col] = base + pull + hemisOffsetDeg;
     }
     const smoothed = smoothCyclic(centers, grid.resolutionDeg);
     // 完全平滑はモンスーンの経度局所性(大陸で深く、海で浅い)を希釈するため

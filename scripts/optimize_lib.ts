@@ -60,6 +60,8 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['sstAnomalyCouplingWm2PerK', 12, 26],
   ['olrAWm2', 201, 206],
   ['diffusionWm2PerK', 0.45, 0.65],
+  ['itczHemisOffsetPerC', 0, 14],
+  ['itczOceanFollowDamp', 0.35, 1.0],
   ['itczMonsoonPullDeg', 7, 13],
   ['itczPlateauPullDeg', 6, 14],
   ['itczSmoothLocalBlend', 0.25, 0.55],

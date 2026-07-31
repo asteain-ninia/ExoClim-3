@@ -116,6 +116,14 @@ export const MODEL_CONSTANTS = {
   // ---- Step 1 ITCZ (docs/spec/01_ITCZ.md) ----
   /** 熱赤道の赤緯追従率(海上基準) */
   itczDeclinationFollowRatio: 0.3248,
+  /**
+   * 半球間非対称による ITCZ の恒常オフセット(度 per °C。暖かい半球へ寄る。
+   * 文献値 ~3°/K。SST 非対称はプレパスで測定、オフセットは ±6° クランプ) */
+  itczHemisOffsetPerC: 5,
+  /**
+   * 海上の季節追従の減衰(Log/Pasta: ITCZ は海上でほとんど動かない)。
+   * 経度列の帯内陸率 0 のときの追従率倍率(1 = 減衰なし) */
+  itczOceanFollowDamp: 0.55,
   /** 大陸モンスーンによる追加引き寄せ(度、夏半球の陸割合 1.0 のとき) */
   itczMonsoonPullDeg: 7.792,
   /**
