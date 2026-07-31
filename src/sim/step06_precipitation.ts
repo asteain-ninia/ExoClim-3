@@ -248,9 +248,21 @@ export function solveSoilWater(
   capacityMm: number,
   maxYears: number,
   initialFillFrac = 0,
+  /**
+   * 初期貯水(mm)。結合反復のウォームスタート用 — 前反復の周期定常解を
+   * 渡すと必要な空回し年数が大幅に減る。周期定常への収束判定は同じなので
+   * 得られる解は許容差内で同一(テストで担保)
+   */
+  initialStorage?: ArrayLike<number>,
 ): SoilWaterResult {
   const storage = new Float64Array(cellCount);
-  if (capacityMm > 0 && initialFillFrac > 0) {
+  if (capacityMm > 0 && initialStorage) {
+    for (let i = 0; i < cellCount; i++) {
+      if (isLand(i)) {
+        storage[i] = Math.min(capacityMm, Math.max(0, initialStorage[i] ?? 0));
+      }
+    }
+  } else if (capacityMm > 0 && initialFillFrac > 0) {
     for (let i = 0; i < cellCount; i++) {
       if (isLand(i)) storage[i] = capacityMm * initialFillFrac;
     }
@@ -675,6 +687,10 @@ export function computePrecipitation(
         temperature.monthlyTemperatureC,
         K.soilWaterCapacityMm,
         K.soilSpinupYears,
+        0,
+        // 結合反復のウォームスタート(前反復の 12 月末貯水)。周期定常への
+        // 収束判定は同じなので解は許容差内で同一、空回し年数だけ減る
+        soil?.storageMm[MONTHS_PER_YEAR - 1],
       );
     }
     for (let m = 0; m < MONTHS_PER_YEAR; m++) {
