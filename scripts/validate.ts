@@ -186,6 +186,8 @@ function main(): void {
       lineRmseRainWeightedDeg: round2(itczRmseDeg),
     },
     regionGates,
+    // 系統ハズレ追跡ベンチ(報告専用 — 実験の採否判断の共通物差し)
+    systematicMisses: systematicMisses(k, temperatureNW.zonalAnnual),
     // 変更レビュー FB P1-1: これは「全球学習済みモデルの区画別診断」であり
     // 未見データへの一般化性能ではない(現行定数は全球で較正済み)。
     // holdout / 一般化 / 未見の語は、対象 fold を除外して再較正したモデルの
@@ -287,6 +289,10 @@ function main(): void {
         (kd ? ` Af+Am ${kd.afAmModelPct}% vs ${kd.afAmObsPct}%` : ''),
     );
   }
+  console.log('系統ハズレ追跡(現在 / 基準 → 目標):');
+  for (const b of report.systematicMisses.benches) {
+    console.log(`  ${b.label}: ${b.current} / ${b.baseline} → ${b.target}`);
+  }
   console.log('地域降水の第一目標(基準 = 2026-07-31 凍結、目標 = 地域降水 FB §12):');
   for (const t of report.regionDiagnostics.targetStatus) {
     const mark = t.meetsFirstGoal ? '✅' : t.regressedFromBaseline ? '❌ 基準から退行' : '⏳';
@@ -310,6 +316,45 @@ function main(): void {
 
 function round2(x: number): number {
   return Math.round(x * 100) / 100;
+}
+
+// ---- 系統ハズレの追跡ベンチ(2026-07-31 凍結 @8b07d01。報告専用) ----
+// R1 完了時に特定した大面積の系統バイアス 4 群 + 関連クラスを、実験ごとに
+// 同じ定義で追跡する。baseline = 凍結時実測、obsTarget = 観測値(到達目標)。
+// 目的関数には入れない。クラス番号は Beck 体系(domain/koppen.ts)。
+const SYSTEMATIC_MISS_BASELINES = {
+  frozenAt: '2026-07-31',
+  baselineCommit: '8b07d01',
+} as const;
+
+function systematicMisses(
+  k: ReturnType<typeof koppenScore>,
+  zonal: Array<{ lat: number; obsAnnual: number; modelAnnual: number }>,
+) {
+  const pctOf = (x: number) => Math.round((x / Math.max(1e-9, k.wTotal)) * 1000) / 10;
+  const cls = (id: number) => ({ model: pctOf(k.areaModelW[id] ?? 0), obs: pctOf(k.areaObsW[id] ?? 0) });
+  const zonalBias = (lats: number[]) => {
+    const rows = zonal.filter((z) => lats.includes(z.lat));
+    const s = rows.reduce((a, z) => a + (z.modelAnnual - z.obsAnnual), 0);
+    return Math.round((s / Math.max(1, rows.length)) * 10) / 10;
+  };
+  return {
+    ...SYSTEMATIC_MISS_BASELINES,
+    note: '大面積の系統バイアス追跡(R1 で特定)。confusion は観測メジャー→モデルメジャーの面積 pt',
+    benches: [
+      { id: 'c_to_b_pt', label: '温帯 C の乾燥 B 化', current: pctOf(k.confusionW[2]?.[1] ?? 0), baseline: 4.2, target: 0 },
+      { id: 'b_to_a_pt', label: '乾燥 B の湿潤 A 化', current: pctOf(k.confusionW[1]?.[0] ?? 0), baseline: 3.9, target: 0 },
+      { id: 'd_to_e_pt', label: '冷帯 D の寒帯 E 化', current: pctOf(k.confusionW[3]?.[4] ?? 0), baseline: 3.5, target: 0 },
+      { id: 'dfc_model_pct', label: 'Dfc 面積(亜寒帯タイガ)', current: cls(27).model, baseline: 2.6, target: cls(27).obs },
+      { id: 'dfa_model_pct', label: 'Dfa 面積(過剰側)', current: cls(25).model, baseline: 7.4, target: cls(25).obs },
+      { id: 'bwh_model_pct', label: 'BWh 面積(砂漠核)', current: cls(4).model, baseline: 12.3, target: cls(4).obs },
+      { id: 'bsh_model_pct', label: 'BSh 面積(過剰側)', current: cls(6).model, baseline: 8.8, target: cls(6).obs },
+      { id: 'af_model_pct', label: 'Af 面積(過剰側)', current: cls(1).model, baseline: 7.1, target: cls(1).obs },
+      { id: 'am_model_pct', label: 'Am 面積(遷移帯欠落)', current: cls(2).model, baseline: 1.0, target: cls(2).obs },
+      { id: 'arctic_warm_bias_c', label: '北極圏 70-80°N 温暖バイアス °C', current: zonalBias([70, 80]), baseline: 4.5, target: 0 },
+      { id: 's3040_warm_bias_c', label: '南緯 30-40° 温暖バイアス °C', current: zonalBias([-30, -40]), baseline: 5.2, target: 0 },
+    ],
+  };
 }
 
 // ---- ケッペン(採点は scoring.ts、ここは報告用の整形のみ) ----

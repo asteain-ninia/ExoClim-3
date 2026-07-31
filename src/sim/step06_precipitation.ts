@@ -73,6 +73,34 @@ export interface PrecipDiagBox {
   fields?: PrecipDiagnostics;
 }
 
+// ---- R2(地域降水 FB §6): 供給場の循環 3 点月ブレンド ----
+// 月平均風の単一方向トレースは風向の月替わりで供給が断絶する
+// (ガンジス 7 月 589mm → 8 月 0mm — レビュー H8)。実際の遷移月はどちらの
+// 風も吹くため、供給場を前/当/翌月で 0.25/0.5/0.25 に均す。
+// 後段の precipMonthBlend(最終降水場の平滑)とは役割が異なる: こちらは
+// 変換(持上げ・抑制の非線形)の**前**に供給の断絶を埋める。
+// 旧実装は 0/1/0 の恒等写像でコメントと不一致だった(FB 指摘)。
+// 2026-07-31 R2 単独実験として 0.25 を復活(採否は事前凍結基準で判定)。
+export const SUPPLY_MONTH_BLEND_SIDE = 0.25;
+
+/** 循環 3 点ブレンド(1 月と 12 月は互いに隣接)。side=0 で恒等 */
+export function blendSupplyMonths(
+  arr: Float32Array[],
+  m: number,
+  cellCount: number,
+  side: number = SUPPLY_MONTH_BLEND_SIDE,
+): Float32Array {
+  const prev = arr[(m + MONTHS_PER_YEAR - 1) % MONTHS_PER_YEAR];
+  const cur = arr[m];
+  const next = arr[(m + 1) % MONTHS_PER_YEAR];
+  const out = new Float32Array(cellCount);
+  const center = 1 - 2 * side;
+  for (let i = 0; i < cellCount; i++) {
+    out[i] = side * (prev?.[i] ?? 0) + center * (cur?.[i] ?? 0) + side * (next?.[i] ?? 0);
+  }
+  return out;
+}
+
 interface PrecipDiagMonth {
   supplyStorm: Float32Array;
   liftItcz: Float32Array;
@@ -178,19 +206,8 @@ export function computePrecipitation(
         : new Float32Array(grid.cellCount),
     );
   }
-  // 供給の月ブレンド(0.25/0.5/0.25): 月平均風の単一方向トレースは風向の
-  // 月替わりで供給が断絶する(ガンジス 7 月 589mm → 8 月 0mm — レビュー H8)。
-  // 実際の遷移月はどちらの風も吹く。方位を振る案は雨陰へ回り込むため月方向で均す
-  const blend = (arr: Float32Array[], m: number): Float32Array => {
-    const prev = arr[(m + MONTHS_PER_YEAR - 1) % MONTHS_PER_YEAR];
-    const cur = arr[m];
-    const next = arr[(m + 1) % MONTHS_PER_YEAR];
-    const out = new Float32Array(grid.cellCount);
-    for (let i = 0; i < grid.cellCount; i++) {
-      out[i] = 0.0 * (prev?.[i] ?? 0) + 1.0 * (cur?.[i] ?? 0) + 0.0 * (next?.[i] ?? 0);
-    }
-    return out;
-  };
+  const blend = (arr: Float32Array[], m: number): Float32Array =>
+    blendSupplyMonths(arr, m, grid.cellCount);
 
   const supplies2: Float32Array[] = [];
   const precip1ByMonth: Float32Array[] = [];
