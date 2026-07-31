@@ -31,7 +31,15 @@ if (
 ) {
   throw new Error(`--holdout-fold は 0〜4 の整数(指定値: ${String(HOLDOUT_FOLD)})`);
 }
-const FILE_SUFFIX = HOLDOUT_FOLD === undefined ? '' : `_fold${HOLDOUT_FOLD}`;
+// --run <名前> で成果物を分離する(既存 v1/v2 の state/log を保護 — FB の
+// 「凍結成果物を上書きしない」制約。構造変更後の再較正はこれを使う)
+const runIdx = process.argv.indexOf('--run');
+const RUN_NAME = runIdx >= 0 ? (process.argv[runIdx + 1] ?? '') : '';
+if (RUN_NAME && !/^[a-z0-9][a-z0-9-_]*$/i.test(RUN_NAME)) {
+  throw new Error('--run には英数字・ハイフン・下線の名前を指定する');
+}
+const FILE_SUFFIX =
+  (RUN_NAME ? `_${RUN_NAME}` : '') + (HOLDOUT_FOLD === undefined ? '' : `_fold${HOLDOUT_FOLD}`);
 const STATE_PATH = path.join(OUT_DIR, `state${FILE_SUFFIX}.json`);
 const LOG_PATH = path.join(OUT_DIR, `log${FILE_SUFFIX}.jsonl`);
 

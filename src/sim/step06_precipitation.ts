@@ -71,6 +71,111 @@ export interface PrecipDiagnostics {
 /** 診断の受け皿。computePrecipitation に渡すと fields が割り当てられる */
 export interface PrecipDiagBox {
   fields?: PrecipDiagnostics;
+  /** R3 土壌水分の周期定常解(有効時のみ) */
+  soil?: SoilWaterResult;
+}
+
+// ---- R3(地域降水 FB §7): 土壌水分の季節記憶 ----
+// 各陸セルの月別貯水を状態として持ち、乾季へ前月までの雨を持ち越す。
+//   S[m] = clamp(S[m-1] + P[m] − ET[m], 0, 容量)、超過分は流出
+//   ET[m] = 可能蒸発散(気温) × (S[m-1] / 容量)  ← 供給律速の線形近似
+// 陸面水蒸気供給は「当月降水に比例」ではなく実蒸発散に比例させる。
+// 12 月 → 1 月を接続し、周期定常解へ収束するまで空回しする(初期値に
+// 依らない決定的な解)。バケツ収支は風上追跡を含まないため安価。
+
+/** 可能蒸発散(mm/月)。0°C 以下は凍結として 0 */
+export function potentialEtMmPerMonth(tempC: number): number {
+  if (tempC <= 0) return 0;
+  return (
+    (K.soilPetScaleMmPerMonth * saturationVaporPressureHpa(tempC)) /
+    saturationVaporPressureHpa(20)
+  );
+}
+
+export interface SoilWaterResult {
+  /** [month][cell] 実蒸発散 mm/月 */
+  actualEtMm: Float32Array[];
+  /** [month][cell] 月末貯水 mm */
+  storageMm: Float32Array[];
+  /** [month][cell] 流出 mm/月 */
+  runoffMm: Float32Array[];
+  /**
+   * [month][cell] 月初の土壌湿り度 S/容量(0〜1)= 実蒸発散 / 可能蒸発散。
+   * 陸面水蒸気供給はこれに比例させる — 「湿った土は蒸発が可能蒸発散に近い」
+   * という無次元量で、気温スケール(可能蒸発散の絶対値)と混ざらない
+   */
+  wetness01: Float32Array[];
+}
+
+/**
+ * 土壌水分の周期定常解。降水場・気温場を固定して years 年空回しする。
+ * 決定的(乱数なし・固定反復)。initialFillFrac は収束検証用の初期値指定。
+ */
+export function solveSoilWater(
+  cellCount: number,
+  isLand: (i: number) => boolean,
+  precipByMonth: Float32Array[],
+  tempByMonth: Float32Array[],
+  capacityMm: number,
+  years: number,
+  initialFillFrac = 0,
+): SoilWaterResult {
+  const storage = new Float64Array(cellCount);
+  if (capacityMm > 0 && initialFillFrac > 0) {
+    for (let i = 0; i < cellCount; i++) {
+      if (isLand(i)) storage[i] = capacityMm * initialFillFrac;
+    }
+  }
+  const actualEtMm: Float32Array[] = [];
+  const storageMm: Float32Array[] = [];
+  const runoffMm: Float32Array[] = [];
+  const wetness01: Float32Array[] = [];
+  for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+    actualEtMm.push(new Float32Array(cellCount));
+    storageMm.push(new Float32Array(cellCount));
+    runoffMm.push(new Float32Array(cellCount));
+    wetness01.push(new Float32Array(cellCount));
+  }
+  if (capacityMm <= 0) return { actualEtMm, storageMm, runoffMm, wetness01 };
+  const totalYears = Math.max(1, Math.round(years));
+  for (let y = 0; y < totalYears; y++) {
+    const record = y === totalYears - 1;
+    for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+      const p = precipByMonth[m];
+      const t = tempByMonth[m];
+      for (let i = 0; i < cellCount; i++) {
+        if (!isLand(i)) continue;
+        const pet = potentialEtMmPerMonth(t?.[i] ?? 0);
+        const s0 = storage[i] ?? 0;
+        // 供給律速: 貯水が少ないほど蒸発散が減る(乾季の自己制限)
+        const et = Math.min(s0 + (p?.[i] ?? 0), pet * (s0 / capacityMm));
+        let s = s0 + (p?.[i] ?? 0) - et;
+        let runoff = 0;
+        if (s > capacityMm) {
+          runoff = s - capacityMm;
+          s = capacityMm;
+        }
+        if (s < 0) s = 0;
+        storage[i] = s;
+        if (record) {
+          actualEtMm[m]![i] = et;
+          storageMm[m]![i] = s;
+          runoffMm[m]![i] = runoff;
+          wetness01[m]![i] = Math.min(1, s0 / capacityMm);
+        }
+      }
+    }
+  }
+  return { actualEtMm, storageMm, runoffMm, wetness01 };
+}
+
+/** 全球陸の水収支(mm/年、面積重みなしのセル平均 — 収支の閉じ方の確認用) */
+export interface WaterBudget {
+  precipMm: number;
+  evapotranspirationMm: number;
+  runoffMm: number;
+  storageChangeMm: number;
+  landCells: number;
 }
 
 // ---- R2(地域降水 FB §6): 供給場の循環 3 点月ブレンド ----
@@ -209,34 +314,30 @@ export function computePrecipitation(
   const blend = (arr: Float32Array[], m: number): Float32Array =>
     blendSupplyMonths(arr, m, grid.cellCount);
 
-  const supplies2: Float32Array[] = [];
-  const precip1ByMonth: Float32Array[] = [];
-  for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+  // ---- パス 2: 陸面再蒸発を供給源に加えて再追跡(結合反復)----
+  // 実物の内陸雨林は降水の 5〜8 割が再蒸発の再循環で自己保持される。
+  // 1 回パスだと海から遠い赤道内陸が立ち上がれない(鶏と卵 — 仮想大陸の
+  // 赤道内陸が砂漠化する実測 2026-07-31)ため、固定点に向けて反復する。
+  // R3: 陸面供給は「当月降水に比例」ではなく土壌水分バケツの実蒸発散に
+  // 比例させる(乾季へ前月までの雨を持ち越す)。月をまたぐ状態を持つため
+  // 結合反復を月ループの外側に置く — 土壌無効時は月ごと独立で従来と同一。
+  const monthlyConvert = (m: number, supply: Float32Array): Float32Array => {
     const tField = temperature.monthlyTemperatureC[m];
     const u = airflow.monthlyWindU[m];
     const v = airflow.monthlyWindV[m];
-    const ridgeN = windBelt.monthlyRidgeLatNDeg[m] ?? 31;
-    const ridgeS = windBelt.monthlyRidgeLatSDeg[m] ?? -31;
-    const pfN = windBelt.monthlyPolarFrontLatNDeg[m] ?? 60;
-    const pfS = windBelt.monthlyPolarFrontLatSDeg[m] ?? -60;
-    if (!tField || !u || !v) {
-      supplies2.push(new Float32Array(grid.cellCount));
-      precip1ByMonth.push(new Float32Array(grid.cellCount));
-      continue;
-    }
-    const supply1 = blend(supplies1, m);
-    const precip1 = convertToPrecip(
+    if (!tField || !u || !v) return new Float32Array(grid.cellCount);
+    return convertToPrecip(
       ctx,
       itcz,
       m,
       tField,
       u,
       v,
-      supply1,
-      ridgeN,
-      ridgeS,
-      pfN,
-      pfS,
+      supply,
+      windBelt.monthlyRidgeLatNDeg[m] ?? 31,
+      windBelt.monthlyRidgeLatSDeg[m] ?? -31,
+      windBelt.monthlyPolarFrontLatNDeg[m] ?? 60,
+      windBelt.monthlyPolarFrontLatSDeg[m] ?? -60,
       dyKm,
       ocean,
       eastOceanKm,
@@ -244,46 +345,70 @@ export function computePrecipitation(
       meanItczCenters,
       crestElev,
     );
-    precip1ByMonth.push(precip1);
+  };
 
-    // ---- パス 2: 陸面再蒸発を供給源に加えて再追跡(反復)----
-    // 実物の内陸雨林は降水の 5〜8 割が再蒸発の再循環で自己保持される。
-    // 1 回パスだと海から遠い赤道内陸が立ち上がれない(鶏と卵 — 仮想大陸の
-    // 赤道内陸が砂漠化する実測 2026-07-31)ため、固定点に向けて反復する
-    let precipIter = precip1;
-    let supplyIter = supply1;
-    for (let it = 0; it < K.recyclingIterations; it++) {
+  const supplies2: Float32Array[] = [];
+  const precipEst: Float32Array[] = [];
+  for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+    const tField = temperature.monthlyTemperatureC[m];
+    const u = airflow.monthlyWindU[m];
+    const v = airflow.monthlyWindV[m];
+    supplies2.push(new Float32Array(grid.cellCount));
+    precipEst.push(tField && u && v ? monthlyConvert(m, blend(supplies1, m)) : new Float32Array(grid.cellCount));
+  }
+
+  const soilOn = K.soilWaterCapacityMm > 0;
+  const isLand = (i: number): boolean => terrain.landMask[i] === 1;
+  let soil: SoilWaterResult | null = null;
+  for (let it = 0; it < K.recyclingIterations; it++) {
+    if (soilOn) {
+      soil = solveSoilWater(
+        grid.cellCount,
+        isLand,
+        precipEst,
+        temperature.monthlyTemperatureC,
+        K.soilWaterCapacityMm,
+        K.soilSpinupYears,
+      );
+    }
+    for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+      const tField = temperature.monthlyTemperatureC[m];
+      const u = airflow.monthlyWindU[m];
+      const v = airflow.monthlyWindV[m];
+      if (!tField || !u || !v) continue;
       const landSource = new Float32Array(grid.cellCount);
+      const etM = soil?.actualEtMm[m];
       for (let i = 0; i < grid.cellCount; i++) {
         if (!terrain.landMask[i]) continue;
-        const wetness = Math.min(1, (precipIter[i] ?? 0) / 40); // 40mm/月で飽和
+        // 大気への水蒸気供給は実蒸発散(質量フラックス)に比例させ、20°C 基準の
+        // 可能蒸発散で無次元化する(旧: 当月降水 / 40mm)。
+        // 湿り度分数 S/容量 での正規化も試したが、暑く湿った熱帯で実蒸発散が
+        // 可能蒸発散に近づく効果が落ちて全指標が悪化した(2026-07-31 実測:
+        // 容量 300mm で詳細 43.47→42.61、アマゾン最乾 68→57mm)。
+        // 供給は「フラックス」であって「湿り具合」ではない
+        const wetness = soilOn
+          ? Math.min(1, (etM?.[i] ?? 0) / K.soilPetScaleMmPerMonth)
+          : Math.min(1, (precipEst[m]?.[i] ?? 0) / 40);
         landSource[i] = K.landRecyclingStrength * wetness;
       }
-      supplyIter = traceMoistureSupply(ctx, smallWater, crestElev, tField, u, v, landSource, 0);
-      if (it < K.recyclingIterations - 1) {
-        precipIter = convertToPrecip(
-          ctx,
-          itcz,
-          m,
-          tField,
-          u,
-          v,
-          supplyIter,
-          ridgeN,
-          ridgeS,
-          pfN,
-          pfS,
-          dyKm,
-          ocean,
-          eastOceanKm,
-          eastOceanSstA,
-          meanItczCenters,
-          crestElev,
-        );
+      supplies2[m] = traceMoistureSupply(
+        ctx,
+        smallWater,
+        crestElev,
+        tField,
+        u,
+        v,
+        landSource,
+        0,
+      );
+    }
+    if (it < K.recyclingIterations - 1) {
+      for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+        precipEst[m] = monthlyConvert(m, supplies2[m] ?? new Float32Array(grid.cellCount));
       }
     }
-    supplies2.push(supplyIter);
   }
+  if (diagOut && soil) diagOut.soil = soil;
 
   for (let m = 0; m < MONTHS_PER_YEAR; m++) {
     const tField = temperature.monthlyTemperatureC[m];
