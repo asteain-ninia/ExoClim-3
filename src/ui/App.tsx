@@ -25,6 +25,7 @@ export function App() {
   const isComputing = useResultsStore((s) => s.isComputing);
   const lastError = useResultsStore((s) => s.lastError);
   const result = useResultsStore((s) => s.result);
+  const stepTimingsMs = useResultsStore((s) => s.stepTimingsMs);
   const outOfDomain = result?.diagnostics?.status === 'out_of_domain';
   const { overlay, setOverlay, month, setMonth, showItczLine, toggleItczLine, showWindArrows, toggleWindArrows } =
     useUiStore();
@@ -137,10 +138,10 @@ export function App() {
 
           <Legend />
 
-          {result && (
+          {result && stepTimingsMs && (
             <div className="timing-note">
               計算時間: 全 7 段{' '}
-              {Object.values(result.stepTimingsMs)
+              {Object.values(stepTimingsMs)
                 .reduce((a, b) => a + b, 0)
                 .toLocaleString()}{' '}
               ms(格子 {result.context.grid.resolutionDeg}°)

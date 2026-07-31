@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PNG } from 'pngjs';
 import { EARTH_PARAMS } from '../src/domain/planetParams';
-import { runPipeline } from '../src/sim/pipeline';
+import { runPipelineTimed } from '../src/sim/pipeline';
 import { KOPPEN_CLASSES, KOPPEN_COLORS, MAJOR_CLASS_NAMES } from '../src/domain/koppen';
 import type { PipelineResult } from '../src/sim/types';
 import {
@@ -39,8 +39,8 @@ function main(): void {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const t0 = Date.now();
   console.log('パイプライン実行中(実在地球 1°)…');
-  const result = runPipeline(EARTH_PARAMS);
-  console.log('所要時間:', ((Date.now() - t0) / 1000).toFixed(1), 's', result.stepTimingsMs);
+  const { result, stepTimingsMs } = runPipelineTimed(EARTH_PARAMS);
+  console.log('所要時間:', ((Date.now() - t0) / 1000).toFixed(1), 's', stepTimingsMs);
 
   const koppenObs = getKoppenObs();
   const climObs = getClimObs();
@@ -77,7 +77,7 @@ function main(): void {
 
   const report = {
     generatedAt: new Date().toISOString(),
-    stepTimingsMs: result.stepTimingsMs,
+    stepTimingsMs,
     // P1-3: 適用範囲診断。'out_of_domain' のときケッペン採点は科学的に無効
     diagnostics: result.diagnostics,
     weighting:

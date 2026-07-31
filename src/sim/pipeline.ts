@@ -1,5 +1,7 @@
 // パイプライン: Step 1〜7 を順に実行する純粋関数。docs/要件.md §3
 // 部分再計算のキャッシュはワーカー層の責務(この関数は常に全段を計算する)。
+// P1-4(FB 2026-07-31): 物理結果(PipelineResult)は同一入力で配列まで決定的。
+// 時刻依存の計測(stepTimingsMs)は runPipelineTimed のラッパー側に分離した。
 
 import type { PlanetParams } from '@/domain/planetParams';
 import { buildSimContext } from './context';
@@ -14,7 +16,16 @@ import type { PipelineResult } from './types';
 import { MODEL_CONSTANTS } from './constants';
 import { buildDiagnostics } from './diagnostics';
 
+/** 物理結果のみ(決定的)。計測が要る場合は runPipelineTimed を使う */
 export function runPipeline(params: PlanetParams): PipelineResult {
+  return runPipelineTimed(params).result;
+}
+
+/** 物理結果 + ステップ別所要時間(計測は時刻依存 — 物理結果には含めない) */
+export function runPipelineTimed(params: PlanetParams): {
+  result: PipelineResult;
+  stepTimingsMs: Record<string, number>;
+} {
   const timings: Record<string, number> = {};
   const mark = (label: string, start: number) => {
     timings[label] = Math.round(performance.now() - start);
@@ -109,15 +120,17 @@ export function runPipeline(params: PlanetParams): PipelineResult {
   const diagnostics = buildDiagnostics(params, temperature, precipitation);
 
   return {
-    context,
-    itcz,
-    windBelt,
-    ocean,
-    airflow,
-    temperature,
-    precipitation,
-    koppen,
-    diagnostics,
+    result: {
+      context,
+      itcz,
+      windBelt,
+      ocean,
+      airflow,
+      temperature,
+      precipitation,
+      koppen,
+      diagnostics,
+    },
     stepTimingsMs: timings,
   };
 }

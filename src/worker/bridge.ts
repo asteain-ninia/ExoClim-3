@@ -4,17 +4,23 @@
 //   (教訓 §4 F1: 最新要求以外の応答は捨てる)
 
 import type { PlanetParams } from '@/domain/planetParams';
-import { runPipeline } from '@/sim/pipeline';
+import { runPipelineTimed } from '@/sim/pipeline';
 import type { PipelineResult } from '@/sim/types';
 
+/** 物理結果(決定的)と計測(時刻依存)の分離を保ったままワーカー境界を渡す */
+export interface PipelineRunOutput {
+  result: PipelineResult;
+  stepTimingsMs: Record<string, number>;
+}
+
 export interface PipelineBridge {
-  run(params: PlanetParams): Promise<PipelineResult>;
+  run(params: PlanetParams): Promise<PipelineRunOutput>;
   dispose(): void;
 }
 
 export class DirectBridge implements PipelineBridge {
-  run(params: PlanetParams): Promise<PipelineResult> {
-    return Promise.resolve(runPipeline(params));
+  run(params: PlanetParams): Promise<PipelineRunOutput> {
+    return Promise.resolve(runPipelineTimed(params));
   }
   dispose(): void {}
 }
@@ -22,7 +28,7 @@ export class DirectBridge implements PipelineBridge {
 interface WorkerResponse {
   id: number;
   ok: boolean;
-  payload?: PipelineResult;
+  payload?: PipelineRunOutput;
   message?: string;
 }
 
@@ -30,7 +36,7 @@ export class WorkerBridge implements PipelineBridge {
   private worker: Worker;
   private nextId = 1;
   private latestId = 0;
-  private pending = new Map<number, { resolve: (r: PipelineResult) => void; reject: (e: Error) => void }>();
+  private pending = new Map<number, { resolve: (r: PipelineRunOutput) => void; reject: (e: Error) => void }>();
   private disposed = false;
 
   constructor() {
@@ -52,10 +58,10 @@ export class WorkerBridge implements PipelineBridge {
     };
   }
 
-  run(params: PlanetParams): Promise<PipelineResult> {
+  run(params: PlanetParams): Promise<PipelineRunOutput> {
     const id = this.nextId++;
     this.latestId = id;
-    return new Promise<PipelineResult>((resolve, reject) => {
+    return new Promise<PipelineRunOutput>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       this.worker.postMessage({ id, params });
     });

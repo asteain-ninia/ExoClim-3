@@ -1,11 +1,11 @@
 // 0.5° の実走確認と所要時間計測(製品の「最高精細・数十秒」の裏取り)
 import { EARTH_PARAMS } from '../src/domain/planetParams';
-import { runPipeline } from '../src/sim/pipeline';
+import { runPipelineTimed } from '../src/sim/pipeline';
 
 const t0 = Date.now();
-const r = runPipeline({ ...EARTH_PARAMS, gridResolutionDeg: 0.5 });
+const { result: r, stepTimingsMs } = runPipelineTimed({ ...EARTH_PARAMS, gridResolutionDeg: 0.5 });
 const total = (Date.now() - t0) / 1000;
-console.log('0.5° 合計', total.toFixed(1), 's', r.stepTimingsMs);
+console.log('0.5° 合計', total.toFixed(1), 's', stepTimingsMs);
 console.log('格子', r.context.grid.widthCells, 'x', r.context.grid.heightCells);
 let landN = 0;
 let sum = 0;

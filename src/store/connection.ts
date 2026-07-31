@@ -27,9 +27,9 @@ export function connectPipeline(bridge: PipelineBridge): () => void {
         // 直近の状態を読み直す(古いクロージャを掴まない)
         const params = useParamsStore.getState().params;
         try {
-          const result = await bridge.run(params);
+          const out = await bridge.run(params);
           if (disposed) return;
-          useResultsStore.getState().setResult(result);
+          useResultsStore.getState().setResult(out.result, out.stepTimingsMs);
         } catch (e) {
           if (disposed) return;
           useResultsStore.getState().setError(e instanceof Error ? e.message : String(e));

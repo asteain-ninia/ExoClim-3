@@ -111,6 +111,6 @@ export interface PipelineResult {
    * 有効な科学出力として表示しない(UI・ヘッドレス検証の両方で明示する)
    */
   diagnostics: PipelineDiagnostics;
-  /** 各ステップの所要時間 ms(計測は harness/worker 用の参考値) */
-  stepTimingsMs: Record<string, number>;
+  // 注(P1-4): ステップ別所要時間は時刻依存のため物理結果に含めない。
+  // 必要なら runPipelineTimed の戻り値 stepTimingsMs を使う
 }
