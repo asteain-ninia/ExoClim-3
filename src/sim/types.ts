@@ -5,6 +5,7 @@ import type { Grid } from '@/domain/grid';
 import type { InsolationField } from '@/domain/insolation';
 import type { PlanetParams } from '@/domain/planetParams';
 import type { TerrainField } from '@/domain/terrain';
+import type { PipelineDiagnostics } from './diagnostics';
 
 /** 全ステップ共通の文脈(パイプライン先頭で構築、以後不変) */
 export interface SimContext {
@@ -105,6 +106,11 @@ export interface PipelineResult {
   temperature: TemperatureResult;
   precipitation: PrecipitationResult;
   koppen: KoppenResult;
+  /**
+   * 適用範囲診断(P1-3)。status = 'out_of_domain' のとき、ケッペン分類は
+   * 有効な科学出力として表示しない(UI・ヘッドレス検証の両方で明示する)
+   */
+  diagnostics: PipelineDiagnostics;
   /** 各ステップの所要時間 ms(計測は harness/worker 用の参考値) */
   stepTimingsMs: Record<string, number>;
 }

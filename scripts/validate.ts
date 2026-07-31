@@ -78,6 +78,8 @@ function main(): void {
   const report = {
     generatedAt: new Date().toISOString(),
     stepTimingsMs: result.stepTimingsMs,
+    // P1-3: 適用範囲診断。'out_of_domain' のときケッペン採点は科学的に無効
+    diagnostics: result.diagnostics,
     weighting:
       '正本の集計は面積重み(cos 緯度)。nonAreaWeighted はセル単純平均の非面積重み診断値。' +
       '観測欠損(-9999)セルは除外、採点は共通陸セル(モデル陸 ∩ 観測有効)のみ',
@@ -145,6 +147,11 @@ function main(): void {
   renderAll(result, koppenObs);
 
   fs.writeFileSync(path.join(OUT_DIR, 'report.json'), JSON.stringify(report, null, 2));
+
+  if (result.diagnostics.status === 'out_of_domain') {
+    console.log('⚠ 適用範囲外 — このモデルでは判定不能。以下の採点は科学的に無効:');
+    for (const x of result.diagnostics.issues) console.log(`  [${x.severity}] ${x.message}`);
+  }
   printSummary(report);
 
   console.log('空間ホールドアウト区画別(P1-1、fold を保留検証にした場合):');

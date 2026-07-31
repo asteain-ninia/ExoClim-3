@@ -12,6 +12,7 @@ import { computePrecipitation } from './step06_precipitation';
 import { computeKoppen } from './step07_koppen';
 import type { PipelineResult } from './types';
 import { MODEL_CONSTANTS } from './constants';
+import { buildDiagnostics } from './diagnostics';
 
 export function runPipeline(params: PlanetParams): PipelineResult {
   const timings: Record<string, number> = {};
@@ -104,6 +105,9 @@ export function runPipeline(params: PlanetParams): PipelineResult {
   const koppen = computeKoppen(context, temperature, precipitation);
   mark('step7_koppen', t0);
 
+  // P1-3: 適用範囲診断。範囲外は値を切り詰めず「判定不能」を宣言する
+  const diagnostics = buildDiagnostics(params, temperature, precipitation);
+
   return {
     context,
     itcz,
@@ -113,6 +117,7 @@ export function runPipeline(params: PlanetParams): PipelineResult {
     temperature,
     precipitation,
     koppen,
+    diagnostics,
     stepTimingsMs: timings,
   };
 }

@@ -25,6 +25,7 @@ export function App() {
   const isComputing = useResultsStore((s) => s.isComputing);
   const lastError = useResultsStore((s) => s.lastError);
   const result = useResultsStore((s) => s.result);
+  const outOfDomain = result?.diagnostics?.status === 'out_of_domain';
   const { overlay, setOverlay, month, setMonth, showItczLine, toggleItczLine, showWindArrows, toggleWindArrows } =
     useUiStore();
 
@@ -70,7 +71,50 @@ export function App() {
             </label>
           </div>
 
-          <MapCanvas />
+          {outOfDomain && (
+            <div
+              className="domain-banner"
+              data-testid="domain-banner"
+              style={{
+                background: '#5a1f1f',
+                color: '#ffd7d7',
+                padding: '8px 12px',
+                borderRadius: 6,
+                margin: '6px 0',
+                fontSize: 13,
+              }}
+            >
+              <strong>適用範囲外 — このモデルでは判定不能。</strong>{' '}
+              気候区分は有効な科学出力ではありません。
+              <ul style={{ margin: '4px 0 0 18px' }}>
+                {result?.diagnostics.issues
+                  .filter((x) => x.severity === 'error')
+                  .slice(0, 5)
+                  .map((x) => (
+                    <li key={x.code}>{x.message}</li>
+                  ))}
+              </ul>
+            </div>
+          )}
+          {outOfDomain && overlay === 'koppen' ? (
+            <div
+              className="map-invalid"
+              data-testid="koppen-invalid"
+              style={{
+                minHeight: 320,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: '#1a2233',
+                color: '#8fa0b8',
+                borderRadius: 6,
+              }}
+            >
+              適用範囲外のため気候区分は表示しません(他レイヤーは生の場として閲覧可能)
+            </div>
+          ) : (
+            <MapCanvas />
+          )}
 
           <div className="month-row">
             <button
