@@ -11,7 +11,11 @@ import { computeWindBelt } from './step02_windbelt';
 import { computeOceanCurrent } from './step03_ocean';
 import { computeAirflow } from './step04_airflow';
 import { computeTemperature } from './step05_temperature';
-import { computePrecipitation } from './step06_precipitation';
+import {
+  computePrecipitation,
+  type PrecipDiagBox,
+  type PrecipDiagnostics,
+} from './step06_precipitation';
 import { computeKoppen } from './step07_koppen';
 import type { PipelineResult } from './types';
 import { MODEL_CONSTANTS } from './constants';
@@ -25,6 +29,21 @@ const noTimer: SectionTimer = (_label, fn) => fn();
 /** 物理結果のみ(決定的)。計測が要る場合は runPipelineTimed を使う */
 export function runPipeline(params: PlanetParams): PipelineResult {
   return runPipelineCore(params, noTimer);
+}
+
+/**
+ * R1 診断つき実行(地域降水 FB §5)。降水の内部要因(供給 3 種・倍率 6 種)を
+ * 捕捉して返す。物理結果は runPipeline と同一(診断は書込のみの受け皿 —
+ * テストでビット一致を担保)
+ */
+export function runPipelineWithPrecipDiag(params: PlanetParams): {
+  result: PipelineResult;
+  precipDiag: PrecipDiagnostics;
+} {
+  const box: PrecipDiagBox = {};
+  const result = runPipelineCore(params, noTimer, box);
+  if (!box.fields) throw new Error('降水診断が生成されなかった(内部エラー)');
+  return { result, precipDiag: box.fields };
 }
 
 /** 物理結果 + ステップ別所要時間(計測は時刻依存 — 物理結果には含めない) */
@@ -42,7 +61,11 @@ export function runPipelineTimed(params: PlanetParams): {
   return { result: runPipelineCore(params, timer), stepTimingsMs: timings };
 }
 
-function runPipelineCore(params: PlanetParams, time: SectionTimer): PipelineResult {
+function runPipelineCore(
+  params: PlanetParams,
+  time: SectionTimer,
+  precipDiagBox?: PrecipDiagBox,
+): PipelineResult {
   // 事前検査(変更レビュー FB): 計算不能な入力は配列確保・反復の前に明示エラー
   assertComputableInputs(params);
 
@@ -90,7 +113,7 @@ function runPipelineCore(params: PlanetParams, time: SectionTimer): PipelineResu
     computeTemperature(context, itcz, windBelt, ocean, airflow),
   );
   const precipitation1 = time('step6_precipitation', () =>
-    computePrecipitation(context, itcz, windBelt, ocean, airflow, temperature1),
+    computePrecipitation(context, itcz, windBelt, ocean, airflow, temperature1, precipDiagBox),
   );
 
   // ---- 蒸発冷却フィードバック(降水 → 気温 → 降水の 2 パス目)----
@@ -104,8 +127,9 @@ function runPipelineCore(params: PlanetParams, time: SectionTimer): PipelineResu
     temperature = time('step5b_temperature', () =>
       computeTemperature(context, itcz, windBelt, ocean, airflow, precipitation1),
     );
+    // 2 パス目が最終場になるため、診断も 2 パス目のもので上書きする
     precipitation = time('step6b_precipitation', () =>
-      computePrecipitation(context, itcz, windBelt, ocean, airflow, temperature),
+      computePrecipitation(context, itcz, windBelt, ocean, airflow, temperature, precipDiagBox),
     );
   }
 

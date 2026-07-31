@@ -28,6 +28,57 @@ export function saturationVaporPressureHpa(tempC: number): number {
   return 6.112 * Math.exp((17.67 * tempC) / (tempC + 243.5));
 }
 
+// ---- R1 診断(地域降水 FB §5)----
+// 降水の内部要因(供給 3 種・持上げ/抑制の各倍率)を診断時のみ捕捉する。
+// 通常実行では一切割り当てず、計算経路も変えない(倍率の named 化は乗算順を
+// 保存しており出力はビット不変 — テストで担保)。
+// 再構成恒等式(月 m・セル i、床再配分と月ブレンドの前):
+//   preAdjustMm = (supplyOcean + supplyLand + supplyStorm)
+//                 × upwindBlock × liftItcz × liftFrontal × liftOther部の storm
+//                 ... 正確には liftItcz × liftFrontal × liftStorm × liftOrographic
+//                 × subsidenceResidual × coldCoast × warmHumid の積 = lift。
+//   ここでは FB の 8 因子以外(liftStorm・coldCoast・warmHumid)を liftOther に
+//   まとめ、preAdjustMm = 供給和 × upwindBlock × liftItcz × liftFrontal ×
+//   liftOrographic × subsidenceResidual × liftOther × 変換係数 で厳密再構成できる。
+//   最終降水との差は床再配分・月ブレンド(陸のみ)による。
+export interface PrecipDiagnostics {
+  /** [month][cell] 海洋由来供給(無次元供給量) */
+  supplyOcean: Float32Array[];
+  /** [month][cell] 陸面再循環由来供給(全供給 − 海洋のみ供給) */
+  supplyLand: Float32Array[];
+  /** [month][cell] ストームトラック渦由来供給 */
+  supplyStorm: Float32Array[];
+  liftItcz: Float32Array[];
+  liftFrontal: Float32Array[];
+  liftOrographic: Float32Array[];
+  /** 亜熱帯沈降の残存倍率(1 = 抑制なし) */
+  subsidenceResidual: Float32Array[];
+  /** 風上山脈の遮蔽倍率(1 = 遮蔽なし) */
+  upwindBlock: Float32Array[];
+  /** その他の倍率の積(ストーム帯持上げ × 寒流沿岸 × 高温湿潤対流) */
+  liftOther: Float32Array[];
+  /** 床再配分・月ブレンド前の降水 mm/月 */
+  preAdjustMm: Float32Array[];
+  /** mm 変換係数(precipScaleMmPerUnit × 気圧係数) — 再構成用 */
+  mmPerSupplyUnit: number;
+}
+
+/** 診断の受け皿。computePrecipitation に渡すと fields が割り当てられる */
+export interface PrecipDiagBox {
+  fields?: PrecipDiagnostics;
+}
+
+interface PrecipDiagMonth {
+  supplyStorm: Float32Array;
+  liftItcz: Float32Array;
+  liftFrontal: Float32Array;
+  liftOrographic: Float32Array;
+  subsidenceResidual: Float32Array;
+  upwindBlock: Float32Array;
+  liftOther: Float32Array;
+  preAdjustMm: Float32Array;
+}
+
 export function computePrecipitation(
   ctx: SimContext,
   itcz: ItczResult,
@@ -35,10 +86,30 @@ export function computePrecipitation(
   ocean: OceanCurrentResult,
   airflow: AirflowResult,
   temperature: TemperatureResult,
+  diagOut?: PrecipDiagBox,
 ): PrecipitationResult {
   const { grid, params, terrain } = ctx;
   const monthlyPrecipMm: Float32Array[] = [];
   const annualPrecipMm = new Float32Array(grid.cellCount);
+  // R1 診断: 要求時のみ割り当て(通常実行はゼロコスト)
+  const diag: PrecipDiagnostics | null = diagOut
+    ? {
+        supplyOcean: [],
+        supplyLand: [],
+        supplyStorm: [],
+        liftItcz: [],
+        liftFrontal: [],
+        liftOrographic: [],
+        subsidenceResidual: [],
+        upwindBlock: [],
+        liftOther: [],
+        preAdjustMm: [],
+        mmPerSupplyUnit:
+          K.precipScaleMmPerUnit *
+          Math.pow(Math.max(0.1, params.atmosphere.surfacePressureBar), 0.5),
+      }
+    : null;
+  if (diag && diagOut) diagOut.fields = diag;
   const dyKm = cellHeightKm(grid, params.body.radiusKm);
   const smallWater = buildSmallWaterMask(ctx);
   const crestElev = buildCrestElev(ctx);
@@ -165,11 +236,59 @@ export function computePrecipitation(
     const pfS = windBelt.monthlyPolarFrontLatSDeg[m] ?? -60;
     if (!tField || !u || !v) {
       monthlyPrecipMm.push(new Float32Array(grid.cellCount));
+      if (diag) {
+        const N = grid.cellCount;
+        diag.supplyOcean.push(new Float32Array(N));
+        diag.supplyLand.push(new Float32Array(N));
+        diag.supplyStorm.push(new Float32Array(N));
+        diag.liftItcz.push(new Float32Array(N));
+        diag.liftFrontal.push(new Float32Array(N));
+        diag.liftOrographic.push(new Float32Array(N));
+        diag.subsidenceResidual.push(new Float32Array(N));
+        diag.upwindBlock.push(new Float32Array(N));
+        diag.liftOther.push(new Float32Array(N));
+        diag.preAdjustMm.push(new Float32Array(N));
+      }
       continue;
     }
     const supply2 = blend(supplies2, m);
-    const precip2 = convertToPrecip(ctx, itcz, m, tField, u, v, supply2, ridgeN, ridgeS, pfN, pfS, dyKm, ocean, eastOceanKm, eastOceanSstA, meanItczCenters, crestElev);
+    let diagM: PrecipDiagMonth | undefined;
+    if (diag) {
+      const N = grid.cellCount;
+      diagM = {
+        supplyStorm: new Float32Array(N),
+        liftItcz: new Float32Array(N),
+        liftFrontal: new Float32Array(N),
+        liftOrographic: new Float32Array(N),
+        subsidenceResidual: new Float32Array(N),
+        upwindBlock: new Float32Array(N),
+        liftOther: new Float32Array(N),
+        preAdjustMm: new Float32Array(N),
+      };
+    }
+    const precip2 = convertToPrecip(ctx, itcz, m, tField, u, v, supply2, ridgeN, ridgeS, pfN, pfS, dyKm, ocean, eastOceanKm, eastOceanSstA, meanItczCenters, crestElev, diagM);
     monthlyPrecipMm.push(precip2);
+    if (diag && diagM) {
+      // 海洋由来 = 海のみトレース(パス 1)、陸面再循環由来 = 全供給 − 海のみ
+      const supply1b = blend(supplies1, m);
+      const N = grid.cellCount;
+      const so = new Float32Array(N);
+      const sl = new Float32Array(N);
+      for (let i = 0; i < N; i++) {
+        so[i] = supply1b[i] ?? 0;
+        sl[i] = (supply2[i] ?? 0) - (supply1b[i] ?? 0);
+      }
+      diag.supplyOcean.push(so);
+      diag.supplyLand.push(sl);
+      diag.supplyStorm.push(diagM.supplyStorm);
+      diag.liftItcz.push(diagM.liftItcz);
+      diag.liftFrontal.push(diagM.liftFrontal);
+      diag.liftOrographic.push(diagM.liftOrographic);
+      diag.subsidenceResidual.push(diagM.subsidenceResidual);
+      diag.upwindBlock.push(diagM.upwindBlock);
+      diag.liftOther.push(diagM.liftOther);
+      diag.preAdjustMm.push(diagM.preAdjustMm);
+    }
   }
 
   // ---- 寒候期の弱前線の床(年総量保存の再配分)----
@@ -492,6 +611,7 @@ function convertToPrecip(
   eastOceanSstA: Float32Array,
   meanItczCenters: Float32Array,
   crestElev: Float32Array,
+  diagM?: PrecipDiagMonth,
 ): Float32Array {
   const { grid, params, terrain } = ctx;
   const W = grid.widthCells;
@@ -526,11 +646,14 @@ function convertToPrecip(
       const gIres = K.equatorialItczResidual * Math.exp(-dMean * dMean);
       const gI = Math.max(gIm, gIres);
       const marineW = Math.min(1, (supply[i] ?? 0) / K.itczLiftSupplyNorm);
-      lift *= 1 + K.itczLiftBoost * gI * marineW;
+      // R1 診断のため各倍率を named 化(乗算の順序・値は従来と同一 — ビット不変)
+      const liftItczF = 1 + K.itczLiftBoost * gI * marineW;
+      lift *= liftItczF;
 
       // 前線収束(WL#29「セル衝突線 = 前線(低圧・湿潤)」の定量化):
       // 湿った空気(高供給)が極向き風で乾いた側へ押し込まれる場所が前線。
       // ITCZ 傘とストーム帯の間(≈25-40°)の梅雨・バイウ前線の空白を埋める
+      let liftFrontalF = 1;
       {
         const north2 = row > 0 ? (row - 1) * W + col : i;
         const south2 = row < H - 1 ? (row + 1) * W + col : i;
@@ -541,7 +664,8 @@ function convertToPrecip(
         const aLat0 = Math.abs(lat);
         if (vPoleward > 0 && gradPoleward > 0 && aLat0 > Math.abs(ridge) - 6 && aLat0 < Math.abs(pf)) {
           const frontW = Math.min(1.5, (vPoleward / 4) * gradPoleward);
-          lift *= 1 + K.frontalLiftBoost * frontW;
+          liftFrontalF = 1 + K.frontalLiftBoost * frontW;
+          lift *= liftFrontalF;
         }
       }
 
@@ -550,11 +674,13 @@ function convertToPrecip(
       const stHi = Math.abs(pf) + 12;
       const aLat = Math.abs(lat);
       let stormW = 0;
+      let liftStormF = 1;
       if (aLat > stLo && aLat < stHi) {
         const riseW = Math.min(1, (aLat - stLo) / 5);
         const fallW = Math.min(1, (stHi - aLat) / 10);
         stormW = Math.min(riseW, fallW);
-        lift *= 1 + (K.stormTrackBoost + K.stormTrackWinterBoost * 1.4 * winterDepth01) * stormW;
+        liftStormF = 1 + (K.stormTrackBoost + K.stormTrackWinterBoost * 1.4 * winterDepth01) * stormW;
+        lift *= liftStormF;
       }
 
       // 地形性上昇 / 局所雨陰(風と標高勾配の内積)
@@ -568,11 +694,14 @@ function convertToPrecip(
       const vv = v[i] ?? 0;
       const upslopeMPerKmPerS = uu * dhdx + vv * dhdy; // m/km × m/s
       const refSlope = 800; // 基準: 8 m/s × 100 m/km
+      let liftOroF = 1;
       if (upslopeMPerKmPerS > 0) {
-        lift *= 1 + K.orographicBoost * Math.min(2.5, upslopeMPerKmPerS / refSlope);
+        liftOroF = 1 + K.orographicBoost * Math.min(2.5, upslopeMPerKmPerS / refSlope);
+        lift *= liftOroF;
       } else if (upslopeMPerKmPerS < 0) {
         const shadow = Math.min(1, -upslopeMPerKmPerS / refSlope);
-        lift *= 1 - (1 - K.rainShadowFloor) * shadow;
+        liftOroF = 1 - (1 - K.rainShadowFloor) * shadow;
+        lift *= liftOroF;
       }
 
       // 風上山脈の遮蔽(広域雨陰): 風上へ遡って自セルより十分高い稜線があれば
@@ -607,16 +736,19 @@ function convertToPrecip(
         supplyGate *
         Math.exp(-(eastOceanKm[i] ?? 1e9) / K.eastCoastSubsidenceDecayKm);
       const subs = descW * (1 - K.subsidenceItczProtection * gI * marineW) * (1 - eastRelief);
-      lift *= 1 - K.subsidenceSuppression * subs;
+      const subsResidualF = 1 - K.subsidenceSuppression * subs;
+      lift *= subsResidualF;
 
       // 寒流沿岸の安定化(亜熱帯〜中緯度の海岸乾燥: 沿岸〜300km。
       // フォークランド型の寒流帰還域まで含めるため上限 50°)
+      let coldCoastF = 1;
       if (terrain.landMask[i] && aLat > 10 && aLat < 50) {
         const coastKm = ctx.landDistToCoastKm[i] ?? 1e9;
         if (coastKm < 300) {
           const cold = nearestOceanAnomaly(ctx, ocean, row, col);
           if (cold < -0.8) {
-            lift *= 1 - K.coldCoastSuppression * Math.min(1, -cold / 2.5);
+            coldCoastF = 1 - K.coldCoastSuppression * Math.min(1, -cold / 2.5);
+            lift *= coldCoastF;
           }
         }
       }
@@ -624,11 +756,13 @@ function convertToPrecip(
       // 高温湿潤の陸での対流性増幅(夏の東岸・熱帯の午後対流)。
       // 分母を 2.8 に上げて高供給の湿潤域だけ発火させる(1.2 では半乾燥内陸まで
       // 飽和して豪州が Aw 化した — 較正記録の撤回理由への対処。レビュー H5)
+      let warmHumidF = 1;
       if (terrain.landMask[i]) {
         const warmth = Math.min(1, Math.max(0, ((_tField[i] ?? 0) - 22) / 8));
         if (warmth > 0) {
           const supplyNorm = Math.min(1, (supply[i] ?? 0) / K.warmHumidSupplyNorm);
-          lift *= 1 + K.warmHumidConvectiveBoost * warmth * supplyNorm * supplyNorm;
+          warmHumidF = 1 + K.warmHumidConvectiveBoost * warmth * supplyNorm * supplyNorm;
+          lift *= warmHumidF;
         }
       }
 
@@ -680,6 +814,16 @@ function convertToPrecip(
         0,
         ((supply[i] ?? 0) + stormSupply) * blockFactor * lift * K.precipScaleMmPerUnit * pressureFactor,
       );
+      if (diagM) {
+        diagM.supplyStorm[i] = stormSupply;
+        diagM.liftItcz[i] = liftItczF;
+        diagM.liftFrontal[i] = liftFrontalF;
+        diagM.liftOrographic[i] = liftOroF;
+        diagM.subsidenceResidual[i] = subsResidualF;
+        diagM.upwindBlock[i] = blockFactor;
+        diagM.liftOther[i] = liftStormF * coldCoastF * warmHumidF;
+        diagM.preAdjustMm[i] = out[i] ?? 0;
+      }
     }
   }
   return out;
