@@ -96,25 +96,25 @@ function preview(name: string, params: PlanetParams, month = -1): void {
   for (const sl of lines) {
     const rgb = COLORS[sl.kind];
     for (const pts of smoothForDrawing(sl.points, 3)) {
-    for (let k = 2; k + 1 < pts.length; k += 2) {
-      const x0 = xOf(pts[k - 1] ?? 0);
-      const y0 = yOf(pts[k - 2] ?? 0);
-      const x1 = xOf(pts[k + 1] ?? 0);
-      const y1 = yOf(pts[k] ?? 0);
-      if (Math.abs(x1 - x0) > png.width / 2) continue; // 経度ラップは分割
-      drawLine(png, x0, y0, x1, y1, rgb);
-      // 陸横断の自動検査(セル単位)
-      const c0 = Math.floor(x0 / SCALE);
-      const r0 = Math.floor(y0 / SCALE);
-      const c1 = Math.floor(x1 / SCALE);
-      const r1 = Math.floor(y1 / SCALE);
-      const steps = Math.max(Math.abs(c1 - c0), Math.abs(r1 - r0), 1);
-      for (let s = 1; s < steps; s++) {
-        const rr = Math.round(r0 + ((r1 - r0) * s) / steps);
-        const cc = Math.round(c0 + ((c1 - c0) * s) / steps);
-        if (rr >= 0 && rr < H && terrain.landMask[rr * W + ((cc + W) % W)]) landHits++;
+      for (let k = 2; k + 1 < pts.length; k += 2) {
+        const x0 = xOf(pts[k - 1] ?? 0);
+        const y0 = yOf(pts[k - 2] ?? 0);
+        const x1 = xOf(pts[k + 1] ?? 0);
+        const y1 = yOf(pts[k] ?? 0);
+        if (Math.abs(x1 - x0) > png.width / 2) continue; // 経度ラップは分割
+        drawLine(png, x0, y0, x1, y1, rgb);
+        // 陸横断の自動検査(セル単位)
+        const c0 = Math.floor(x0 / SCALE);
+        const r0 = Math.floor(y0 / SCALE);
+        const c1 = Math.floor(x1 / SCALE);
+        const r1 = Math.floor(y1 / SCALE);
+        const steps = Math.max(Math.abs(c1 - c0), Math.abs(r1 - r0), 1);
+        for (let s = 1; s < steps; s++) {
+          const rr = Math.round(r0 + ((r1 - r0) * s) / steps);
+          const cc = Math.round(c0 + ((c1 - c0) * s) / steps);
+          if (rr >= 0 && rr < H && terrain.landMask[rr * W + ((cc + W) % W)]) landHits++;
+        }
       }
-    }
     }
   }
   fs.writeFileSync(path.join(OUT_DIR, `streamlines_${name}.png`), PNG.sync.write(png));

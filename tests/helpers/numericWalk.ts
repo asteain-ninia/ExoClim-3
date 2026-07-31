@@ -12,7 +12,11 @@ function isTypedArray(v: unknown): v is ArrayLike<number> {
   return ArrayBuffer.isView(v) && !(v instanceof DataView);
 }
 
-export function collectNumericLeaves(value: unknown, path = '$', out: NumericLeaf[] = []): NumericLeaf[] {
+export function collectNumericLeaves(
+  value: unknown,
+  path = '$',
+  out: NumericLeaf[] = [],
+): NumericLeaf[] {
   if (value === null || value === undefined) return out;
   if (typeof value === 'number') {
     out.push({ path, kind: 'number', value });

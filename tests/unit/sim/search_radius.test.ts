@@ -76,7 +76,12 @@ describe('探索半径の球面角距離化(P2-3)', () => {
     for (const res of [0.5, 1, 2]) {
       const near = makeCtx(res, 30 + res / 2, [{ dLonDeg: 2 }]);
       expect(
-        nearestOceanAnomaly(near.ctx, { sstAnomalyC: near.sstAnomalyC } as never, near.row, near.col),
+        nearestOceanAnomaly(
+          near.ctx,
+          { sstAnomalyC: near.sstAnomalyC } as never,
+          near.row,
+          near.col,
+        ),
       ).toBe(-2);
       const far = makeCtx(res, 30 + res / 2, [{ dLonDeg: 4 }]);
       expect(

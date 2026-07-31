@@ -66,15 +66,22 @@ export function evaluateRegression(
     ['陸平均降水(観測)', m.landMeanObsMm],
   ]);
   if (failures.length > 0) return { pass: false, failures };
-  if (m.majorPct < b.majorPctMin) failures.push(`大分類一致率 ${m.majorPct.toFixed(2)}% < 基準 ${b.majorPctMin}%`);
-  if (m.detailPct < b.detailPctMin) failures.push(`詳細一致率 ${m.detailPct.toFixed(2)}% < 基準 ${b.detailPctMin}%`);
+  if (m.majorPct < b.majorPctMin)
+    failures.push(`大分類一致率 ${m.majorPct.toFixed(2)}% < 基準 ${b.majorPctMin}%`);
+  if (m.detailPct < b.detailPctMin)
+    failures.push(`詳細一致率 ${m.detailPct.toFixed(2)}% < 基準 ${b.detailPctMin}%`);
   if (m.gates < b.gatesMin) failures.push(`地域ゲート ${m.gates} < 基準 ${b.gatesMin}`);
-  if (m.tempRmseC > b.tempRmseMaxC) failures.push(`気温年 RMSE ${m.tempRmseC.toFixed(2)}°C > 基準 ${b.tempRmseMaxC}°C`);
-  if (m.precipRmseMm > b.precipRmseMaxMm) failures.push(`降水年 RMSE ${Math.round(m.precipRmseMm)}mm > 基準 ${b.precipRmseMaxMm}mm`);
-  if (m.itczRmseDeg > b.itczRmseMaxDeg) failures.push(`ITCZ 線 RMSE ${m.itczRmseDeg.toFixed(2)}° > 基準 ${b.itczRmseMaxDeg}°`);
+  if (m.tempRmseC > b.tempRmseMaxC)
+    failures.push(`気温年 RMSE ${m.tempRmseC.toFixed(2)}°C > 基準 ${b.tempRmseMaxC}°C`);
+  if (m.precipRmseMm > b.precipRmseMaxMm)
+    failures.push(`降水年 RMSE ${Math.round(m.precipRmseMm)}mm > 基準 ${b.precipRmseMaxMm}mm`);
+  if (m.itczRmseDeg > b.itczRmseMaxDeg)
+    failures.push(`ITCZ 線 RMSE ${m.itczRmseDeg.toFixed(2)}° > 基準 ${b.itczRmseMaxDeg}°`);
   const ratio = m.landMeanModelMm / Math.max(1e-9, m.landMeanObsMm);
   if (!Number.isFinite(ratio) || ratio < b.landMeanRatioMin || ratio > b.landMeanRatioMax) {
-    failures.push(`陸平均降水比 ${ratio.toFixed(3)} が [${b.landMeanRatioMin}, ${b.landMeanRatioMax}] の外`);
+    failures.push(
+      `陸平均降水比 ${ratio.toFixed(3)} が [${b.landMeanRatioMin}, ${b.landMeanRatioMax}] の外`,
+    );
   }
   return { pass: failures.length === 0, failures };
 }
@@ -109,7 +116,9 @@ function structuralFailures(m: AcceptanceMetrics): string[] {
     failures.push(`地域ゲート総数 ${String(m.gatesTotal)} が正の整数でない — 判定不能として FAIL`);
   }
   if (!Number.isInteger(m.gatesPassed) || m.gatesPassed < 0) {
-    failures.push(`地域ゲート合格数 ${String(m.gatesPassed)} が非負整数でない — 判定不能として FAIL`);
+    failures.push(
+      `地域ゲート合格数 ${String(m.gatesPassed)} が非負整数でない — 判定不能として FAIL`,
+    );
   }
   if (
     Number.isInteger(m.gatesPassed) &&
@@ -119,7 +128,8 @@ function structuralFailures(m: AcceptanceMetrics): string[] {
     failures.push(`地域ゲート合格数 ${m.gatesPassed} > 総数 ${m.gatesTotal} — 不正`);
   }
   if (m.majorAreaGapPt.length === 0) failures.push('大分類面積差の配列が空 — 判定不能として FAIL');
-  if (m.zonalTempAbsDiffsC.length === 0) failures.push('帯状気温差の配列が空 — 判定不能として FAIL');
+  if (m.zonalTempAbsDiffsC.length === 0)
+    failures.push('帯状気温差の配列が空 — 判定不能として FAIL');
   failures.push(
     ...nonFiniteFailures([
       ...m.majorAreaGapPt.map((v, k): [string, number] => [`大分類面積差[${'ABCDE'[k] ?? k}]`, v]),
@@ -157,7 +167,9 @@ export function evaluateAcceptance(
   }
   m.majorAreaGapPt.forEach((gap, k) => {
     if (Math.abs(gap) > c.majorAreaGapMaxPt) {
-      failures.push(`大分類 ${'ABCDE'[k] ?? '?'} の面積差 ${gap.toFixed(1)}pt が ±${c.majorAreaGapMaxPt}pt の外`);
+      failures.push(
+        `大分類 ${'ABCDE'[k] ?? '?'} の面積差 ${gap.toFixed(1)}pt が ±${c.majorAreaGapMaxPt}pt の外`,
+      );
     }
   });
   const worst = m.zonalTempAbsDiffsC.reduce((a, b) => Math.max(a, b), 0);

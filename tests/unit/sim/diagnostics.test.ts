@@ -47,14 +47,8 @@ describe('適用範囲診断(P1-3)', () => {
         '自転方向 0',
         { ...EARTH_PARAMS, body: { ...EARTH_PARAMS.body, rotationDirection: 0 as never } },
       ],
-      [
-        '離心率 1.2',
-        { ...EARTH_PARAMS, orbital: { ...EARTH_PARAMS.orbital, eccentricity: 1.2 } },
-      ],
-      [
-        '傾斜 NaN',
-        { ...EARTH_PARAMS, body: { ...EARTH_PARAMS.body, axialTiltDeg: Number.NaN } },
-      ],
+      ['離心率 1.2', { ...EARTH_PARAMS, orbital: { ...EARTH_PARAMS.orbital, eccentricity: 1.2 } }],
+      ['傾斜 NaN', { ...EARTH_PARAMS, body: { ...EARTH_PARAMS.body, axialTiltDeg: Number.NaN } }],
       [
         '陸面積率 1.5',
         {
@@ -79,7 +73,10 @@ describe('適用範囲診断(P1-3)', () => {
       expect(err.message, label).toMatch(/計算不能な入力/);
       expect(err.message, label).toMatch(/\[invalid_input:/);
       expect(err.issues.length, label).toBeGreaterThan(0);
-      expect(err.issues.every((x) => x.code.startsWith('invalid_input:')), label).toBe(true);
+      expect(
+        err.issues.every((x) => x.code.startsWith('invalid_input:')),
+        label,
+      ).toBe(true);
       // 巨大配列確保・深い計算へ進んでいない(即時に停止する)
       expect(Date.now() - t0, label).toBeLessThan(500);
     }

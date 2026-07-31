@@ -29,7 +29,8 @@ export function syntheticResult(): PipelineResult {
       for (let col = 0; col < grid.widthCells; col++) {
         const i = row * grid.widthCells + col;
         t[i] = 28 * Math.cos((lat * Math.PI) / 180) - 8 + seasonal;
-        p[i] = 30 + 180 * Math.exp(-(((lat - itczLat) / 12) ** 2)) + 10 * Math.sin((col * Math.PI) / 45);
+        p[i] =
+          30 + 180 * Math.exp(-(((lat - itczLat) / 12) ** 2)) + 10 * Math.sin((col * Math.PI) / 45);
       }
     }
     monthlyTemperatureC.push(t);

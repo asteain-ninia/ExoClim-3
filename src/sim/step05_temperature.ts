@@ -76,7 +76,8 @@ export function computeTemperature(
 
   // ---- セル定数 ----
   const atm = params.atmosphere;
-  const aBase = K.olrAWm2 - K.greenhouseDeltaAWm2 * Math.log2(Math.max(0.05, atm.greenhouseStrength));
+  const aBase =
+    K.olrAWm2 - K.greenhouseDeltaAWm2 * Math.log2(Math.max(0.05, atm.greenhouseStrength));
   const gamma = K.lapseRateCPerKm / 1000;
   const heatCap = new Float64Array(N);
   const aEff = new Float64Array(N);
@@ -88,7 +89,10 @@ export function computeTemperature(
     const c = coarse[i];
     if (!c) continue;
     const row = Math.floor(i / CW);
-    const landDepth = Math.max(0.3, K.landEffectiveWaterDepthM + 0.5 * (atm.surfacePressureBar - 1));
+    const landDepth = Math.max(
+      0.3,
+      K.landEffectiveWaterDepthM + 0.5 * (atm.surfacePressureBar - 1),
+    );
     let oceanDepth = atm.oceanMixedLayerDepthM + 2.4 * atm.surfacePressureBar;
     if (rowIsChannel[row]) oceanDepth *= K.channelMixedLayerBoost;
     heatCap[i] = RHO_C_WATER * (c.landFrac * landDepth + (1 - c.landFrac) * oceanDepth);
@@ -169,7 +173,8 @@ export function computeTemperature(
         const subsidenceWeight = K.subsidenceOceanFactor + (1 - K.subsidenceOceanFactor) * landFrac;
         // 寒流上の層積雲デッキ(SST 負偏差の海で雲が増える)
         const sstA = coarse[i]?.sstAnomalyC ?? 0;
-        const scDeck = sstA < 0 ? K.stratocumulusBoostPerNegC * Math.min(1.5, -sstA / 2) * oceanFrac : 0;
+        const scDeck =
+          sstA < 0 ? K.stratocumulusBoostPerNegC * Math.min(1.5, -sstA / 2) * oceanFrac : 0;
         // 周極海峡行は常時ストーム雲(南大洋型。上限も少し引き上げる)
         const chanCloud = rowIsChannel[row] ? K.channelCloudBoost * oceanFrac : 0;
         const factor =
@@ -196,7 +201,10 @@ export function computeTemperature(
   for (let row = 0; row < CH; row++) {
     const phi = (latDegOfRow(cg, row) * Math.PI) / 180;
     cosCenter[row] = Math.cos(phi);
-    metricZonal[row] = Math.min(K.zonalMetricCap, 1 / Math.max(1e-6, Math.cos(phi) * Math.cos(phi)));
+    metricZonal[row] = Math.min(
+      K.zonalMetricCap,
+      1 / Math.max(1e-6, Math.cos(phi) * Math.cos(phi)),
+    );
   }
   const diffFactor = new Float64Array(N);
   for (let i = 0; i < N; i++) {
@@ -247,7 +255,10 @@ export function computeTemperature(
     // 断熱×融解固定の正帰還で南極海リングが夏に融け残り −60S が −14°C へ
     // 暴走(双安定)。温度ランプ近似を維持する(較正記録参照)
     const capEff = new Float64Array(N);
-    const monthAccum: Float64Array[] = Array.from({ length: MONTHS_PER_YEAR }, () => new Float64Array(N));
+    const monthAccum: Float64Array[] = Array.from(
+      { length: MONTHS_PER_YEAR },
+      () => new Float64Array(N),
+    );
     const monthCount = new Array<number>(MONTHS_PER_YEAR).fill(0);
     const totalSteps = K.ebmYears * K.ebmStepsPerYear;
     const spinupSteps = Math.max(0, (K.ebmYears - 2) * K.ebmStepsPerYear);
@@ -270,9 +281,10 @@ export function computeTemperature(
           const i = row * CW + col;
           const tSurf = (t[i] ?? 0) - gamma * (elevM[i] ?? 0);
           const iceW = Math.min(1, Math.max(0, ((iceOnset[i] ?? 0) - tSurf) / K.iceRampWidthC));
-          let aSurf = (surfAlbedoBase[i] ?? 0.15) + (K.albedoIce - (surfAlbedoBase[i] ?? 0.15)) * iceW;
+          let aSurf =
+            (surfAlbedoBase[i] ?? 0.15) + (K.albedoIce - (surfAlbedoBase[i] ?? 0.15)) * iceW;
           if (permanentIce?.[i]) aSurf = Math.max(aSurf, K.permanentIceAlbedo);
-          const cloud = ((cloud0?.[i] ?? 0.2) * (1 - frac) + (cloud1?.[i] ?? 0.2) * frac);
+          const cloud = (cloud0?.[i] ?? 0.2) * (1 - frac) + (cloud1?.[i] ?? 0.2) * frac;
           const albedo = cloud + (1 - cloud) * aSurf;
           // 海氷断熱: 氷結海面は混合層を切り離し実効熱容量が陸並みに落ちる
           // (極域の季節振幅の再現に必須 — constants.seaIceInsulationFactor 参照)
@@ -284,7 +296,9 @@ export function computeTemperature(
             s * (1 - albedo) -
             (aEff[i] ?? K.olrAWm2) +
             (qFlux[i] ?? 0) -
-            (evapAnomWm2 ? (evapAnomWm2[m0]?.[i] ?? 0) * (1 - frac) + (evapAnomWm2[m1]?.[i] ?? 0) * frac : 0);
+            (evapAnomWm2
+              ? (evapAnomWm2[m0]?.[i] ?? 0) * (1 - frac) + (evapAnomWm2[m1]?.[i] ?? 0) * frac
+              : 0);
         }
       }
 
@@ -309,17 +323,25 @@ export function computeTemperature(
           const dMerid = dBase * (1 + K.hadleyDiffusionBoost * hadleyW);
           const phiEdgeN = ((lat + cg.resolutionDeg / 2) * Math.PI) / 180;
           const phiEdgeS = ((lat - cg.resolutionDeg / 2) * Math.PI) / 180;
-          const chanN = rowIsChannel[row] || (row > 0 && rowIsChannel[row - 1]) ? K.circumpolarChannelFactor : 1;
-          const chanS = rowIsChannel[row] || (row < CH - 1 && rowIsChannel[row + 1]) ? K.circumpolarChannelFactor : 1;
+          const chanN =
+            rowIsChannel[row] || (row > 0 && rowIsChannel[row - 1])
+              ? K.circumpolarChannelFactor
+              : 1;
+          const chanS =
+            rowIsChannel[row] || (row < CH - 1 && rowIsChannel[row + 1])
+              ? K.circumpolarChannelFactor
+              : 1;
           const gN = row > 0 ? (chanN * dMerid * Math.cos(phiEdgeN)) / (dPhi * dPhi * cosC) : 0;
-          const gS = row < CH - 1 ? (chanS * dMerid * Math.cos(phiEdgeS)) / (dPhi * dPhi * cosC) : 0;
+          const gS =
+            row < CH - 1 ? (chanS * dMerid * Math.cos(phiEdgeS)) / (dPhi * dPhi * cosC) : 0;
           const seasonFactor = (lat >= 0 ? summerN : summerS) ? K.summerAdvectionFactor : 1;
           // 南北結合はリッジより極側のみ(温帯低気圧の南北混合が実在する帯)。
           // ハドレー域の南北輸送は拡散増強で表現済みで、そこに v 結合を足すと
           // 「冷気コンベア」(シベリア→インド)の二重計上になる(2026-07-30 実測)
           const vBandW = Math.min(1, Math.max(0, (Math.abs(lat) - ridgeAbs) / 10));
           // 冬(月日射 < 年平均)の陸は接地逆転層で移流が地表に届きにくい
-          const isWinterRow = (insolation.monthlyByRow[m0]?.[row] ?? 0) < (insolation.annualMeanByRow[row] ?? 0);
+          const isWinterRow =
+            (insolation.monthlyByRow[m0]?.[row] ?? 0) < (insolation.annualMeanByRow[row] ?? 0);
           for (let col = 0; col < CW; col++) {
             const i = row * CW + col;
             const uMs = uField?.[i] ?? 0;
@@ -404,7 +426,11 @@ export function computeTemperature(
     warmest -= elevOffset;
     // 恒常氷床は陸優勢セルのみ(海氷は薄く季節性で、夏は融解が 0°C 近傍に張り付く)
     const landDominant = (coarse[i]?.landFrac ?? 0) > 0.5;
-    if (landDominant && annual < K.permanentIceAnnualMeanC && warmest < K.permanentIceWarmestMonthC) {
+    if (
+      landDominant &&
+      annual < K.permanentIceAnnualMeanC &&
+      warmest < K.permanentIceWarmestMonthC
+    ) {
       permanentIce[i] = 1;
     }
   }
@@ -515,10 +541,16 @@ function buildEvapCoolingAnomaly(
     const n = new Float32Array(cg.cellCount);
     if (p) {
       for (let row = 0; row < src.heightCells; row++) {
-        const cgRow = Math.min(cg.heightCells - 1, Math.floor((row * src.resolutionDeg) / cg.resolutionDeg));
+        const cgRow = Math.min(
+          cg.heightCells - 1,
+          Math.floor((row * src.resolutionDeg) / cg.resolutionDeg),
+        );
         for (let col = 0; col < src.widthCells; col++) {
           if (!ctx.terrain.landMask[row * src.widthCells + col]) continue;
-          const cgCol = Math.min(cg.widthCells - 1, Math.floor((col * src.resolutionDeg) / cg.resolutionDeg));
+          const cgCol = Math.min(
+            cg.widthCells - 1,
+            Math.floor((col * src.resolutionDeg) / cg.resolutionDeg),
+          );
           const ci = cgRow * cg.widthCells + cgCol;
           field[ci] = (field[ci] ?? 0) + (p[row * src.widthCells + col] ?? 0);
           n[ci] = (n[ci] ?? 0) + 1;
@@ -654,7 +686,12 @@ function downscale(
   return { monthlyTemperatureC, annualMeanC, warmestMonthC, coldestMonthC, monthlyIceMask };
 }
 
-function bilinearSample(cg: Grid, field: Float64Array | undefined, latDeg: number, lonDeg: number): number {
+function bilinearSample(
+  cg: Grid,
+  field: Float64Array | undefined,
+  latDeg: number,
+  lonDeg: number,
+): number {
   if (!field) return 0;
   const CW = cg.widthCells;
   const CH = cg.heightCells;

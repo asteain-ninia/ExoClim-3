@@ -15,8 +15,16 @@ const TERRAIN_PRESETS: Array<{ id: TerrainPresetName; label: string }> = [
 ];
 
 export function ParamsPanel() {
-  const { params, setOrbital, setBody, setAtmosphere, setTerrainPreset, setTerrainProcedural, setGridResolution, reset } =
-    useParamsStore();
+  const {
+    params,
+    setOrbital,
+    setBody,
+    setAtmosphere,
+    setTerrainPreset,
+    setTerrainProcedural,
+    setGridResolution,
+    reset,
+  } = useParamsStore();
   const [confirmingReset, setConfirmingReset] = useState(false);
   const terrain = params.terrain;
 
@@ -29,7 +37,9 @@ export function ParamsPanel() {
             <button
               key={p.id}
               className={
-                terrain.kind === 'preset' && terrain.preset === p.id ? 'preset preset--active' : 'preset'
+                terrain.kind === 'preset' && terrain.preset === p.id
+                  ? 'preset preset--active'
+                  : 'preset'
               }
               onClick={() => setTerrainPreset(p.id)}
             >

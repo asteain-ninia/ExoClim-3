@@ -22,7 +22,8 @@ export const useParamsStore = create<ParamsState>((set) => ({
   params: DEFAULT_PARAMS,
   setOrbital: (patch) =>
     set((s) => ({ params: { ...s.params, orbital: { ...s.params.orbital, ...patch } } })),
-  setBody: (patch) => set((s) => ({ params: { ...s.params, body: { ...s.params.body, ...patch } } })),
+  setBody: (patch) =>
+    set((s) => ({ params: { ...s.params, body: { ...s.params.body, ...patch } } })),
   setAtmosphere: (patch) =>
     set((s) => ({ params: { ...s.params, atmosphere: { ...s.params.atmosphere, ...patch } } })),
   setTerrainPreset: (preset) =>

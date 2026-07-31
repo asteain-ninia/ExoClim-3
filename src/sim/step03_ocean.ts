@@ -16,7 +16,14 @@
 //     - 陸のない緯度帯は風帯ごとの周極流(全海惑星は木星型バンド)
 // 地理決め打ちはしない。逆行自転では帯風の反転だけで全て鏡像になる。
 
-import { latDegOfRow, lonDegOfCol, rowOfLatDeg, cellHeightKm, cellWidthKm, wrapCol } from '@/domain/grid';
+import {
+  latDegOfRow,
+  lonDegOfCol,
+  rowOfLatDeg,
+  cellHeightKm,
+  cellWidthKm,
+  wrapCol,
+} from '@/domain/grid';
 import { MONTHS_PER_YEAR } from '@/domain/insolation';
 import { MODEL_CONSTANTS as K } from './constants';
 import type {
@@ -151,7 +158,7 @@ export function computeOceanCurrent(
     for (let col = 0; col < W; col++) {
       const i = row * W + col;
       if (land[i]) continue;
-      const coastKm = (ctx.oceanDistToLandKm[i] ?? 1e9);
+      const coastKm = ctx.oceanDistToLandKm[i] ?? 1e9;
       if (coastKm > 260) continue;
       const a = sstAnomalyC[i] ?? 0;
       // 湧昇: 寒流沿岸(貿易風〜分離緯度 +5°)
@@ -178,7 +185,14 @@ export function computeOceanCurrent(
     monthlyStreamlines.push(traceStreamlines(ctx, itcz, windBelt, m));
   }
   const streamlines = traceStreamlines(ctx, itcz, windBelt, -1);
-  return { sstAnomalyC, currentClass, upwellingMask, coralReefMask, streamlines, monthlyStreamlines };
+  return {
+    sstAnomalyC,
+    currentClass,
+    upwellingMask,
+    coralReefMask,
+    streamlines,
+    monthlyStreamlines,
+  };
 }
 
 /** 帯 [lo, hi] 内で 1、外側へ幅 edge の余韻で減衰 */
@@ -251,8 +265,10 @@ function traceStreamlines(
   const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
 
   // ---- 季節の帯(月別 or 年平均) ----
-  const ridgeNRaw = month >= 0 ? (windBelt.monthlyRidgeLatNDeg[month] ?? 31) : mean(windBelt.monthlyRidgeLatNDeg);
-  const ridgeSRaw = month >= 0 ? (windBelt.monthlyRidgeLatSDeg[month] ?? -31) : mean(windBelt.monthlyRidgeLatSDeg);
+  const ridgeNRaw =
+    month >= 0 ? (windBelt.monthlyRidgeLatNDeg[month] ?? 31) : mean(windBelt.monthlyRidgeLatNDeg);
+  const ridgeSRaw =
+    month >= 0 ? (windBelt.monthlyRidgeLatSDeg[month] ?? -31) : mean(windBelt.monthlyRidgeLatSDeg);
   const decl = month >= 0 ? (ctx.insolation.monthlyDeclinationDeg[month] ?? 0) : 0;
   const tilt = Math.max(params.body.axialTiltDeg, 1e-6);
   const declNorm = Math.max(-1, Math.min(1, decl / tilt));
@@ -263,8 +279,16 @@ function traceStreamlines(
   // 動画の「40-50°」「70-80°」は CRETÁK の値であり定数にしない:
   //  - 転回緯度 = 「フェレルセルの中程」(WL#28 原文) = リッジ + セル幅 ×(0.40〜0.65)
   //  - 極側到達 = 海氷縁 ≈ 極前線 + 10〜18°(夏ほど極側。地球で 70〜78° に一致)
-  const pfN = Math.abs(month >= 0 ? (windBelt.monthlyPolarFrontLatNDeg[month] ?? 60) : mean(windBelt.monthlyPolarFrontLatNDeg));
-  const pfS = Math.abs(month >= 0 ? (windBelt.monthlyPolarFrontLatSDeg[month] ?? -60) : mean(windBelt.monthlyPolarFrontLatSDeg));
+  const pfN = Math.abs(
+    month >= 0
+      ? (windBelt.monthlyPolarFrontLatNDeg[month] ?? 60)
+      : mean(windBelt.monthlyPolarFrontLatNDeg),
+  );
+  const pfS = Math.abs(
+    month >= 0
+      ? (windBelt.monthlyPolarFrontLatSDeg[month] ?? -60)
+      : mean(windBelt.monthlyPolarFrontLatSDeg),
+  );
   const ridgeNAbs = Math.abs(ridgeNRaw);
   const ridgeSAbs = Math.abs(ridgeSRaw);
   const bands: SeasonBands = {
@@ -344,8 +368,7 @@ function traceStreamlines(
   };
 
   // Node の診断スクリプト専用(ブラウザ/Worker には process が無いので必ずガードする)
-  const debugOn =
-    typeof process !== 'undefined' && !!process.env?.TRACE_DEBUG && month === 0;
+  const debugOn = typeof process !== 'undefined' && !!process.env?.TRACE_DEBUG && month === 0;
   const dbg = (msg: string, row: number, col: number) => {
     if (!debugOn) return;
     const lat = latDegOfRow(grid, row);
@@ -376,7 +399,8 @@ function traceStreamlines(
     const meanCenters = new Float32Array(W);
     for (let m = 0; m < MONTHS_PER_YEAR; m++) {
       const c = itcz.monthlyCenterLatDegByCol[m];
-      for (let col = 0; col < W; col++) meanCenters[col] = (meanCenters[col] ?? 0) + (c?.[col] ?? 0) / MONTHS_PER_YEAR;
+      for (let col = 0; col < W; col++)
+        meanCenters[col] = (meanCenters[col] ?? 0) + (c?.[col] ?? 0) / MONTHS_PER_YEAR;
     }
     centers = meanCenters;
   }
@@ -437,7 +461,10 @@ function traceStreamlines(
       const ridge = sign > 0 ? bands.ridgeN : bands.ridgeS;
       const turn = sign > 0 ? bands.turnN : bands.turnS;
       centersBand.push({ lat: (ridge / 2) * sign, east: bands.tradeDirEast });
-      centersBand.push({ lat: ((turn + (sign > 0 ? bands.polarN : bands.polarS)) / 2) * sign, east: !bands.tradeDirEast });
+      centersBand.push({
+        lat: ((turn + (sign > 0 ? bands.polarN : bands.polarS)) / 2) * sign,
+        east: !bands.tradeDirEast,
+      });
     }
     let groupStart = -1;
     for (let row = 0; row <= H; row++) {
@@ -456,7 +483,8 @@ function traceStreamlines(
         const latLo = latDegOfRow(grid, row - 1);
         if (row - 1 - groupStart >= 2 / grid.resolutionDeg) {
           const hits = centersBand.filter((b) => b.lat <= latHi && b.lat >= latLo);
-          const lines = hits.length > 0 ? hits : [{ lat: (latHi + latLo) / 2, east: bands.tradeDirEast }];
+          const lines =
+            hits.length > 0 ? hits : [{ lat: (latHi + latLo) / 2, east: bands.tradeDirEast }];
           for (const line of lines) {
             queue.push({
               phase: 'zonal',
@@ -481,7 +509,8 @@ function traceStreamlines(
     processed++;
 
     if (t.phase === 'zonal') {
-      const zkey = (row: number, col: number) => (row * W + wrapCol(grid, col)) * 2 + (t.dirEast ? 1 : 0);
+      const zkey = (row: number, col: number) =>
+        (row * W + wrapCol(grid, col)) * 2 + (t.dirEast ? 1 : 0);
       if (zonalVisited.has(zkey(t.row, t.col))) continue;
       const dc = t.dirEast ? 1 : -1;
       const points: number[] = [];
@@ -497,7 +526,8 @@ function traceStreamlines(
         for (let dr = -padCells; dr <= padCells; dr++) {
           if (row + dr >= 0 && row + dr < H) zonalVisited.add(zkey(row + dr, col));
         }
-        if (steps % 2 === 0) points.push(latDegOfRow(grid, row), lonDegOfCol(grid, wrapCol(grid, col)));
+        if (steps % 2 === 0)
+          points.push(latDegOfRow(grid, row), lonDegOfCol(grid, wrapCol(grid, col)));
         // スラント(横断しながら極向きへ 8°/90° 程度)
         if (t.slantRowDir !== 0) {
           slantAcc += 0.09;
@@ -557,8 +587,11 @@ function traceStreamlines(
           // 転回帯の横断は熱を運び続けるので暖(赤)。極東風帯・貿易風帯は中立
           const a = Math.abs(lat);
           const north = lat >= 0;
-          const inWesterly = a >= (north ? bands.turnN : bands.turnS) && a < (north ? bands.polarN : bands.polarS) - 2;
-          const slant: -1 | 0 | 1 = inWesterly || a >= (north ? bands.polarN : bands.polarS) - 2 ? (north ? -1 : 1) : 0;
+          const inWesterly =
+            a >= (north ? bands.turnN : bands.turnS) &&
+            a < (north ? bands.polarN : bands.polarS) - 2;
+          const slant: -1 | 0 | 1 =
+            inWesterly || a >= (north ? bands.polarN : bands.polarS) - 2 ? (north ? -1 : 1) : 0;
           queue.push({
             phase: 'zonal',
             row,

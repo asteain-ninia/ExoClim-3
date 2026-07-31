@@ -36,7 +36,10 @@ export class WorkerBridge implements PipelineBridge {
   private worker: Worker;
   private nextId = 1;
   private latestId = 0;
-  private pending = new Map<number, { resolve: (r: PipelineRunOutput) => void; reject: (e: Error) => void }>();
+  private pending = new Map<
+    number,
+    { resolve: (r: PipelineRunOutput) => void; reject: (e: Error) => void }
+  >();
   private disposed = false;
 
   constructor() {

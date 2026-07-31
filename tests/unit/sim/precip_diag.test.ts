@@ -24,13 +24,15 @@ describe('降水内部要因の診断(R1)', () => {
     expect(digestOf(diagRun.result)).toBe(digestOf(plain));
   });
 
-  it('全因子から再配分前降水を厳密に再構成できる', () => {
+  it('全因子から最終降水を全セル(陸含む)で再構成できる', () => {
     const d = diagRun.precipDiag;
     const scale = d.mmPerSupplyUnit;
     let checked = 0;
-    let maxRelErr = 0;
+    let maxPreRelErr = 0;
+    let maxFinalErrMm = 0;
     for (let m = 0; m < 12; m++) {
       const pre = d.preAdjustMm[m]!;
+      const fin = diagRun.result.precipitation.monthlyPrecipMm[m]!;
       for (let i = 0; i < pre.length; i += 11) {
         const supply =
           (d.supplyOcean[m]?.[i] ?? 0) + (d.supplyLand[m]?.[i] ?? 0) + (d.supplyStorm[m]?.[i] ?? 0);
@@ -43,27 +45,38 @@ describe('降水内部要因の診断(R1)', () => {
           (d.subsidenceResidual[m]?.[i] ?? 1) *
           (d.liftOther[m]?.[i] ?? 1) *
           scale;
-        const actual = pre[i] ?? 0;
-        const err = Math.abs(recon - actual) / Math.max(1, actual);
-        if (err > maxRelErr) maxRelErr = err;
+        const preErr = Math.abs(recon - (pre[i] ?? 0)) / Math.max(1, pre[i] ?? 0);
+        if (preErr > maxPreRelErr) maxPreRelErr = preErr;
+        // 最終降水 = 因子再構成 + 後処理差分(冬季床再配分 + 月ブレンド)
+        const finalRecon = recon + (d.postAdjustDeltaMm[m]?.[i] ?? 0);
+        const fErr = Math.abs(finalRecon - (fin[i] ?? 0));
+        if (fErr > maxFinalErrMm) maxFinalErrMm = fErr;
         checked++;
       }
     }
     expect(checked).toBeGreaterThan(10000);
-    expect(maxRelErr).toBeLessThan(1e-4);
+    expect(maxPreRelErr).toBeLessThan(1e-4); // 因子積の恒等式
+    expect(maxFinalErrMm).toBeLessThan(0.01); // 最終降水の再構成(mm、全セル)
   });
 
-  it('海セルでは最終降水 = 再配分前降水(床・ブレンドは陸のみ)', () => {
+  it('後処理差分は陸のみ(海セルでは 0 = 最終と変換直後が一致)', () => {
     const d = diagRun.precipDiag;
     const land = diagRun.result.context.terrain.landMask;
+    let landDeltaCells = 0;
     for (let m = 0; m < 12; m += 3) {
       const pre = d.preAdjustMm[m]!;
       const fin = diagRun.result.precipitation.monthlyPrecipMm[m]!;
+      const delta = d.postAdjustDeltaMm[m]!;
       for (let i = 0; i < pre.length; i += 13) {
-        if (land[i]) continue;
-        expect(fin[i]).toBe(pre[i]);
+        if (!land[i]) {
+          expect(fin[i]).toBe(pre[i]);
+          expect(delta[i]).toBe(0);
+        } else if (Math.abs(delta[i] ?? 0) > 0.1) {
+          landDeltaCells++;
+        }
       }
     }
+    expect(landDeltaCells).toBeGreaterThan(0); // 後処理が実在することの確認
   });
 
   it('倍率は物理的に妥当な範囲(遮蔽・沈降残存は (0,1]、持上げは ≥1 または雨陰下限以上)', () => {
@@ -77,8 +90,7 @@ describe('降水内部要因の診断(R1)', () => {
         expect(d.liftItcz[m]?.[i] ?? 1).toBeGreaterThanOrEqual(1);
         expect(d.liftFrontal[m]?.[i] ?? 1).toBeGreaterThanOrEqual(1);
         expect(d.liftOrographic[m]?.[i] ?? 1).toBeGreaterThan(0);
-        const supplies =
-          (d.supplyOcean[m]?.[i] ?? 0) + (d.supplyStorm[m]?.[i] ?? 0);
+        const supplies = (d.supplyOcean[m]?.[i] ?? 0) + (d.supplyStorm[m]?.[i] ?? 0);
         expect(Number.isFinite(supplies)).toBe(true);
         expect(d.supplyOcean[m]?.[i] ?? 0).toBeGreaterThanOrEqual(0);
         expect(d.supplyStorm[m]?.[i] ?? 0).toBeGreaterThanOrEqual(0);

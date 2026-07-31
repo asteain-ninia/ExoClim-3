@@ -20,7 +20,7 @@ export function foldOfLatLon(latDeg: number, lonDeg: number): number {
   );
   const blockCol = Math.min(
     360 / HOLDOUT_BLOCK_DEG - 1,
-    Math.max(0, Math.floor((((lonDeg + 540) % 360)) / HOLDOUT_BLOCK_DEG)),
+    Math.max(0, Math.floor(((lonDeg + 540) % 360) / HOLDOUT_BLOCK_DEG)),
   );
   let h = Math.imul(blockRow + 1, 0x9e3779b9) ^ Math.imul(blockCol + 1, 0x85ebca6b);
   h ^= h >>> 13;

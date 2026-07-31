@@ -63,23 +63,151 @@ export interface RegionGate {
 }
 
 export const REGION_GATES: RegionGate[] = [
-  { id: 'sahara_arid', latMin: 18, latMax: 30, lonMin: -15, lonMax: 30, mode: 'major', expect: 'B' },
+  {
+    id: 'sahara_arid',
+    latMin: 18,
+    latMax: 30,
+    lonMin: -15,
+    lonMax: 30,
+    mode: 'major',
+    expect: 'B',
+  },
   { id: 'arabia_arid', latMin: 15, latMax: 30, lonMin: 35, lonMax: 55, mode: 'major', expect: 'B' },
-  { id: 'australia_interior_arid', latMin: -30, latMax: -20, lonMin: 120, lonMax: 145, mode: 'major', expect: 'B' },
-  { id: 'amazon_tropical', latMin: -10, latMax: 5, lonMin: -75, lonMax: -50, mode: 'major', expect: 'A' },
-  { id: 'congo_tropical', latMin: -5, latMax: 5, lonMin: 12, lonMax: 30, mode: 'major', expect: 'A' },
-  { id: 'india_tropical', latMin: 18, latMax: 26, lonMin: 73, lonMax: 87, mode: 'major', expect: 'A' },
-  { id: 'us_southeast_humid', latMin: 30, latMax: 37, lonMin: -95, lonMax: -78, mode: 'major', expect: 'C' },
-  { id: 'east_asia_humid', latMin: 25, latMax: 35, lonMin: 105, lonMax: 122, mode: 'major', expect: 'C' },
-  { id: 'west_europe_temperate', latMin: 47, latMax: 59, lonMin: -5, lonMax: 15, mode: 'major', expect: 'C' },
-  { id: 'europe_russia_continental', latMin: 50, latMax: 65, lonMin: 35, lonMax: 55, mode: 'major', expect: 'D' },
-  { id: 'west_siberia_continental', latMin: 55, latMax: 65, lonMin: 60, lonMax: 90, mode: 'major', expect: 'D' },
-  { id: 'east_siberia_continental', latMin: 55, latMax: 68, lonMin: 100, lonMax: 140, mode: 'major', expect: 'D' },
-  { id: 'mediterranean_cs_present', latMin: 31, latMax: 44, lonMin: -10, lonMax: 35, mode: 'present', expect: 'Cs' },
-  { id: 'california_cs_present', latMin: 33, latMax: 40, lonMin: -124, lonMax: -118, mode: 'present', expect: 'Cs' },
-  { id: 'tibet_cold_highland', latMin: 28, latMax: 36, lonMin: 80, lonMax: 95, mode: 'present', expect: 'ET' },
-  { id: 'patagonia_rainshadow', latMin: -50, latMax: -40, lonMin: -72, lonMax: -65, mode: 'major', expect: 'B' },
-  { id: 'antarctica_ice', latMin: -90, latMax: -75, lonMin: -180, lonMax: 180, mode: 'major', expect: 'E' },
+  {
+    id: 'australia_interior_arid',
+    latMin: -30,
+    latMax: -20,
+    lonMin: 120,
+    lonMax: 145,
+    mode: 'major',
+    expect: 'B',
+  },
+  {
+    id: 'amazon_tropical',
+    latMin: -10,
+    latMax: 5,
+    lonMin: -75,
+    lonMax: -50,
+    mode: 'major',
+    expect: 'A',
+  },
+  {
+    id: 'congo_tropical',
+    latMin: -5,
+    latMax: 5,
+    lonMin: 12,
+    lonMax: 30,
+    mode: 'major',
+    expect: 'A',
+  },
+  {
+    id: 'india_tropical',
+    latMin: 18,
+    latMax: 26,
+    lonMin: 73,
+    lonMax: 87,
+    mode: 'major',
+    expect: 'A',
+  },
+  {
+    id: 'us_southeast_humid',
+    latMin: 30,
+    latMax: 37,
+    lonMin: -95,
+    lonMax: -78,
+    mode: 'major',
+    expect: 'C',
+  },
+  {
+    id: 'east_asia_humid',
+    latMin: 25,
+    latMax: 35,
+    lonMin: 105,
+    lonMax: 122,
+    mode: 'major',
+    expect: 'C',
+  },
+  {
+    id: 'west_europe_temperate',
+    latMin: 47,
+    latMax: 59,
+    lonMin: -5,
+    lonMax: 15,
+    mode: 'major',
+    expect: 'C',
+  },
+  {
+    id: 'europe_russia_continental',
+    latMin: 50,
+    latMax: 65,
+    lonMin: 35,
+    lonMax: 55,
+    mode: 'major',
+    expect: 'D',
+  },
+  {
+    id: 'west_siberia_continental',
+    latMin: 55,
+    latMax: 65,
+    lonMin: 60,
+    lonMax: 90,
+    mode: 'major',
+    expect: 'D',
+  },
+  {
+    id: 'east_siberia_continental',
+    latMin: 55,
+    latMax: 68,
+    lonMin: 100,
+    lonMax: 140,
+    mode: 'major',
+    expect: 'D',
+  },
+  {
+    id: 'mediterranean_cs_present',
+    latMin: 31,
+    latMax: 44,
+    lonMin: -10,
+    lonMax: 35,
+    mode: 'present',
+    expect: 'Cs',
+  },
+  {
+    id: 'california_cs_present',
+    latMin: 33,
+    latMax: 40,
+    lonMin: -124,
+    lonMax: -118,
+    mode: 'present',
+    expect: 'Cs',
+  },
+  {
+    id: 'tibet_cold_highland',
+    latMin: 28,
+    latMax: 36,
+    lonMin: 80,
+    lonMax: 95,
+    mode: 'present',
+    expect: 'ET',
+  },
+  {
+    id: 'patagonia_rainshadow',
+    latMin: -50,
+    latMax: -40,
+    lonMin: -72,
+    lonMax: -65,
+    mode: 'major',
+    expect: 'B',
+  },
+  {
+    id: 'antarctica_ice',
+    latMin: -90,
+    latMax: -75,
+    lonMin: -180,
+    lonMax: 180,
+    mode: 'major',
+    expect: 'E',
+  },
 ];
 
 export interface RegionGateResult {
@@ -114,7 +242,9 @@ export function scoreRegionGates(result: PipelineResult): RegionGateResult[] {
       }
     }
     const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
-    const detail = top.map(([s, c]) => `${s} ${Math.round((c / Math.max(1, total)) * 100)}%`).join(', ');
+    const detail = top
+      .map(([s, c]) => `${s} ${Math.round((c / Math.max(1, total)) * 100)}%`)
+      .join(', ');
     let pass = false;
     if (total === 0) {
       pass = false;
@@ -237,7 +367,12 @@ export function fieldScore(
   let pModelSum = 0;
   let pObsSum = 0;
   // 面積重み付き log 相関の積算
-  let cw = 0, cx = 0, cy = 0, cxx = 0, cyy = 0, cxy = 0;
+  let cw = 0,
+    cx = 0,
+    cy = 0,
+    cxx = 0,
+    cyy = 0,
+    cxy = 0;
   for (let cr = 0; cr < clim.heightCells; cr++) {
     const lat = 89 - cr * 2;
     const w = Math.cos((lat * Math.PI) / 180);
@@ -311,8 +446,7 @@ export function fieldScore(
     }
   }
   const logCorrelation =
-    (cw * cxy - cx * cy) /
-    Math.sqrt(Math.max(1e-9, (cw * cxx - cx * cx) * (cw * cyy - cy * cy)));
+    (cw * cxy - cx * cy) / Math.sqrt(Math.max(1e-9, (cw * cxx - cx * cx) * (cw * cyy - cy * cy)));
   return {
     tempRmseC: Math.sqrt(se / Math.max(1e-9, wsum)),
     tempJanRmseC: Math.sqrt(seJan / Math.max(1e-9, wsum)),
@@ -328,7 +462,10 @@ export function fieldScore(
 // 乾季列の重心はノイジーなため雨量で重み付けする
 let itczObsCache: { centroid: Array<Array<number | null>>; weight: number[][] } | null = null;
 
-function itczObs(clim: ClimateFixture): { centroid: Array<Array<number | null>>; weight: number[][] } {
+function itczObs(clim: ClimateFixture): {
+  centroid: Array<Array<number | null>>;
+  weight: number[][];
+} {
   if (itczObsCache) return itczObsCache;
   const centroid: Array<Array<number | null>> = [];
   const weight: number[][] = [];

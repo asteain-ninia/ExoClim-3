@@ -16,4 +16,10 @@ for (let i = 0; i < r.context.grid.cellCount; i++) {
   }
 }
 console.log('陸セル', landN, '陸平均年降水', Math.round(sum / Math.max(1, landN)), 'mm');
-console.log('流線(年平均)', r.ocean.streamlines.length, '本, 月別', r.ocean.monthlyStreamlines.length, 'か月分');
+console.log(
+  '流線(年平均)',
+  r.ocean.streamlines.length,
+  '本, 月別',
+  r.ocean.monthlyStreamlines.length,
+  'か月分',
+);

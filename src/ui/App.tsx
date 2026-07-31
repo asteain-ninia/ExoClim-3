@@ -27,8 +27,16 @@ export function App() {
   const result = useResultsStore((s) => s.result);
   const stepTimingsMs = useResultsStore((s) => s.stepTimingsMs);
   const outOfDomain = result?.diagnostics?.status === 'out_of_domain';
-  const { overlay, setOverlay, month, setMonth, showItczLine, toggleItczLine, showWindArrows, toggleWindArrows } =
-    useUiStore();
+  const {
+    overlay,
+    setOverlay,
+    month,
+    setMonth,
+    showItczLine,
+    toggleItczLine,
+    showWindArrows,
+    toggleWindArrows,
+  } = useUiStore();
 
   useEffect(() => {
     const disconnect = connectPipeline(new WorkerBridge());
@@ -155,8 +163,8 @@ export function App() {
       </div>
 
       <footer className="app-footer">
-        一次参照: Worldbuilding Pasta ・ 検証データ: Beck et al. 2023 (CC BY 4.0) / NOAA ETOPO 2022 ・
-        月 0 = 北半球の冬至から開始(「7 月」= 北半球の盛夏)
+        一次参照: Worldbuilding Pasta ・ 検証データ: Beck et al. 2023 (CC BY 4.0) / NOAA ETOPO 2022
+        ・ 月 0 = 北半球の冬至から開始(「7 月」= 北半球の盛夏)
       </footer>
     </div>
   );

@@ -31,6 +31,7 @@ const FIELDS = [
   ['upwindBlock', '風上山脈の遮蔽倍率'],
   ['liftOther', 'その他倍率(ストーム帯持上げ×寒流×対流)'],
   ['preAdjustMm', '再配分前降水 mm/月'],
+  ['postAdjustDeltaMm', '後処理差分(冬季床+月ブレンド) mm/月'],
 ] as const;
 
 interface RegionRow {
@@ -78,8 +79,10 @@ for (const reg of DIAG_REGIONS) {
 }
 
 let gitCommit = 'unknown';
+let gitDirty = true; // 判定不能時は「汚れている」と保守的に記録する
 try {
   gitCommit = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
+  gitDirty = execSync('git status --porcelain', { encoding: 'utf8' }).trim().length > 0;
 } catch {
   /* 架空の値を入れない */
 }
@@ -87,6 +90,9 @@ try {
 const output = {
   generatedAt: new Date().toISOString(),
   gitCommit,
+  // 未コミット変更がある状態で生成した成果物は、来歴がコードを表さない
+  // (R1 レビュー指摘の再発防止)
+  gitDirty,
   note:
     'R1 降水内部要因診断(地域降水 FB §5)。1° 陸セル・面積重みの地域月別平均。' +
     '再構成: preAdjustMm ≈ (supplyOcean+supplyLand+supplyStorm) × upwindBlock × ' +

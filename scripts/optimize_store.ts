@@ -74,10 +74,7 @@ export function nextEvalNumber(stateEvals: number, logMaxEval: number): number {
  * (loadStateStrict は本体のみ読む)。
  */
 export function saveStateAtomic(statePath: string, state: unknown): void {
-  const tmp = path.join(
-    path.dirname(statePath),
-    `.${path.basename(statePath)}.tmp`,
-  );
+  const tmp = path.join(path.dirname(statePath), `.${path.basename(statePath)}.tmp`);
   fs.writeFileSync(tmp, JSON.stringify(state, null, 1));
   fs.renameSync(tmp, statePath);
 }

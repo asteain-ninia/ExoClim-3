@@ -36,7 +36,9 @@ for (const [name, lat, lon] of SITES) {
     v.push(Math.round((result.airflow.monthlyWindV[m]?.[i] ?? 0) * 10) / 10);
   }
   const cls = KOPPEN_CLASSES[result.koppen.classId[i] ?? 0];
-  console.log(`\n== ${name} → ${cls} (陸=${result.context.terrain.landMask[i]}, 標高=${Math.round(result.context.terrain.elevationMeters[i] ?? 0)}m)`);
+  console.log(
+    `\n== ${name} → ${cls} (陸=${result.context.terrain.landMask[i]}, 標高=${Math.round(result.context.terrain.elevationMeters[i] ?? 0)}m)`,
+  );
   console.log('  T:', t.join(' '));
   console.log('  P:', p.join(' '));
   console.log('  u(1月/7月):', u[0], u[6], ' v(1月/7月):', v[0], v[6]);
@@ -45,7 +47,11 @@ for (const [name, lat, lon] of SITES) {
 
 // ITCZ 中心の確認(インド・アフリカ・豪州の経度)
 console.log('\n== ITCZ 中心緯度(7月 = m6 / 1月 = m0)');
-for (const [label, lon] of [['アフリカ 10E', 10], ['インド 77E', 77], ['豪州 135E', 135]] as Array<[string, number]>) {
+for (const [label, lon] of [
+  ['アフリカ 10E', 10],
+  ['インド 77E', 77],
+  ['豪州 135E', 135],
+] as Array<[string, number]>) {
   const col = colOfLonDeg(grid, lon);
   const jul = result.itcz.monthlyCenterLatDegByCol[6]?.[col];
   const jan = result.itcz.monthlyCenterLatDegByCol[0]?.[col];

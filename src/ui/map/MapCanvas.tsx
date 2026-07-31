@@ -73,7 +73,11 @@ export function MapCanvas() {
     // 観測地球(Beck 2023)の参照レイヤー: モデルとは独立の 1° ラスタを
     // そのまま描く(どのプリセットでも同じ「お手本」— 目視比較用)
     if (overlay === 'koppenObs') {
-      const obs = earthKoppenObs as { widthCells: number; heightCells: number; classRaster: number[] };
+      const obs = earthKoppenObs as {
+        widthCells: number;
+        heightCells: number;
+        classRaster: number[];
+      };
       const imgObs = new ImageData(obs.widthCells, obs.heightCells);
       for (let i = 0; i < obs.widthCells * obs.heightCells; i++) {
         const id = obs.classRaster[i] ?? 0;
@@ -132,7 +136,8 @@ export function MapCanvas() {
           let p: number;
           if (month < 0) {
             let sum = 0;
-            for (let m = 0; m < 12; m++) sum += result.windBelt.monthlyPressureAnomalyHpa[m]?.[i] ?? 0;
+            for (let m = 0; m < 12; m++)
+              sum += result.windBelt.monthlyPressureAnomalyHpa[m]?.[i] ?? 0;
             p = sum / 12;
           } else {
             p = result.windBelt.monthlyPressureAnomalyHpa[month]?.[i] ?? 0;
@@ -203,18 +208,31 @@ export function MapCanvas() {
           const i = row * W + col;
           if (result.ocean.upwellingMask[i]) {
             ctx2d.fillStyle = 'rgba(90, 240, 255, 0.75)';
-            ctx2d.fillRect(col * cellW + cellW * 0.3, row * cellH + cellH * 0.3, cellW * 0.4, cellH * 0.4);
+            ctx2d.fillRect(
+              col * cellW + cellW * 0.3,
+              row * cellH + cellH * 0.3,
+              cellW * 0.4,
+              cellH * 0.4,
+            );
           } else if (result.ocean.coralReefMask[i]) {
             ctx2d.fillStyle = 'rgba(120, 255, 150, 0.7)';
             ctx2d.beginPath();
-            ctx2d.arc(col * cellW + cellW / 2, row * cellH + cellH / 2, Math.max(1.2, cellW * 0.22), 0, Math.PI * 2);
+            ctx2d.arc(
+              col * cellW + cellW / 2,
+              row * cellH + cellH / 2,
+              Math.max(1.2, cellW * 0.22),
+              0,
+              Math.PI * 2,
+            );
             ctx2d.fill();
           }
         }
       }
 
       const lines =
-        month >= 0 ? (result.ocean.monthlyStreamlines[month] ?? result.ocean.streamlines) : result.ocean.streamlines;
+        month >= 0
+          ? (result.ocean.monthlyStreamlines[month] ?? result.ocean.streamlines)
+          : result.ocean.streamlines;
       for (const sl of lines) {
         ctx2d.strokeStyle = colors[sl.kind];
         ctx2d.fillStyle = colors[sl.kind];
@@ -271,7 +289,8 @@ export function MapCanvas() {
               const v10 = (field[row * W + colE] ?? 0) - level;
               const v01 = (field[(row + 1) * W + col] ?? 0) - level;
               const v11 = (field[(row + 1) * W + colE] ?? 0) - level;
-              const caseId = (v00 > 0 ? 1 : 0) | (v10 > 0 ? 2 : 0) | (v11 > 0 ? 4 : 0) | (v01 > 0 ? 8 : 0);
+              const caseId =
+                (v00 > 0 ? 1 : 0) | (v10 > 0 ? 2 : 0) | (v11 > 0 ? 4 : 0) | (v01 > 0 ? 8 : 0);
               if (caseId === 0 || caseId === 15) continue;
               const x0 = (col + 0.5) * cw;
               const y0 = (row + 0.5) * ch;
@@ -284,14 +303,38 @@ export function MapCanvas() {
                 ctx2d.lineTo(b[0], b[1]);
               };
               switch (caseId) {
-                case 1: case 14: seg(left, top); break;
-                case 2: case 13: seg(top, right); break;
-                case 3: case 12: seg(left, right); break;
-                case 4: case 11: seg(right, bottom); break;
-                case 6: case 9: seg(top, bottom); break;
-                case 7: case 8: seg(left, bottom); break;
-                case 5: seg(left, top); seg(right, bottom); break;
-                case 10: seg(top, right); seg(left, bottom); break;
+                case 1:
+                case 14:
+                  seg(left, top);
+                  break;
+                case 2:
+                case 13:
+                  seg(top, right);
+                  break;
+                case 3:
+                case 12:
+                  seg(left, right);
+                  break;
+                case 4:
+                case 11:
+                  seg(right, bottom);
+                  break;
+                case 6:
+                case 9:
+                  seg(top, bottom);
+                  break;
+                case 7:
+                case 8:
+                  seg(left, bottom);
+                  break;
+                case 5:
+                  seg(left, top);
+                  seg(right, bottom);
+                  break;
+                case 10:
+                  seg(top, right);
+                  seg(left, bottom);
+                  break;
               }
             }
           }
@@ -325,7 +368,8 @@ export function MapCanvas() {
       for (let i = 0; i < W * H; i++) {
         if (month < 0) {
           let sum = 0;
-          for (let mm = 0; mm < 12; mm++) sum += result.windBelt.monthlyPressureAnomalyHpa[mm]?.[i] ?? 0;
+          for (let mm = 0; mm < 12; mm++)
+            sum += result.windBelt.monthlyPressureAnomalyHpa[mm]?.[i] ?? 0;
           field[i] = sum / 12;
         } else {
           field[i] = result.windBelt.monthlyPressureAnomalyHpa[m]?.[i] ?? 0;
@@ -388,9 +432,15 @@ export function MapCanvas() {
             const ang = Math.atan2(dy, dx);
             ctx2d.beginPath();
             ctx2d.moveTo(x + dx / 2, y + dy / 2);
-            ctx2d.lineTo(x + dx / 2 - 4 * Math.cos(ang - 0.4), y + dy / 2 - 4 * Math.sin(ang - 0.4));
+            ctx2d.lineTo(
+              x + dx / 2 - 4 * Math.cos(ang - 0.4),
+              y + dy / 2 - 4 * Math.sin(ang - 0.4),
+            );
             ctx2d.moveTo(x + dx / 2, y + dy / 2);
-            ctx2d.lineTo(x + dx / 2 - 4 * Math.cos(ang + 0.4), y + dy / 2 - 4 * Math.sin(ang + 0.4));
+            ctx2d.lineTo(
+              x + dx / 2 - 4 * Math.cos(ang + 0.4),
+              y + dy / 2 - 4 * Math.sin(ang + 0.4),
+            );
             ctx2d.stroke();
           }
         }
@@ -464,7 +514,7 @@ export function MapCanvas() {
           const lat = Math.asin(Math.min(1, Math.max(-1, wz)));
           const lon = Math.atan2(wy, wx);
           let u = Math.floor(((lon / Math.PI + 1) / 2) * CANVAS_W);
-          let v = Math.floor(((0.5 - lat / Math.PI) * CANVAS_H));
+          let v = Math.floor((0.5 - lat / Math.PI) * CANVAS_H);
           u = Math.min(CANVAS_W - 1, Math.max(0, u));
           v = Math.min(CANVAS_H - 1, Math.max(0, v));
           const si = (v * CANVAS_W + u) * 4;
@@ -519,8 +569,7 @@ export function MapCanvas() {
       const φ0 = (globeLat0 * Math.PI) / 180;
       const λ0 = (globeLon0 * Math.PI) / 180;
       const p = [Math.cos(lat) * Math.cos(lon), Math.cos(lat) * Math.sin(lon), Math.sin(lat)];
-      const e =
-        (p[0] ?? 0) * -Math.sin(λ0) + (p[1] ?? 0) * Math.cos(λ0);
+      const e = (p[0] ?? 0) * -Math.sin(λ0) + (p[1] ?? 0) * Math.cos(λ0);
       const n =
         (p[0] ?? 0) * -Math.sin(φ0) * Math.cos(λ0) +
         (p[1] ?? 0) * -Math.sin(φ0) * Math.sin(λ0) +

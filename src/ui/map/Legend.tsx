@@ -17,7 +17,9 @@ export function Legend() {
     return (
       <div className="legend" data-testid="legend">
         {overlay === 'koppenObs' && (
-          <span className="legend-caption">観測 = Beck et al. 2023(実在地球 1°、目視比較用のお手本)</span>
+          <span className="legend-caption">
+            観測 = Beck et al. 2023(実在地球 1°、目視比較用のお手本)
+          </span>
         )}
         {KOPPEN_GROUPS.map((g) => (
           <div key={g.title} className="legend-group">
@@ -40,9 +42,7 @@ export function Legend() {
     return (
       <div className="legend">
         <span className="legend-gradient legend-gradient--temp" />
-        <span className="legend-caption">
-          −45°C 〜 +45°C ・ 細線 = 等温線(6°C 刻み、白 = 0°C)
-        </span>
+        <span className="legend-caption">−45°C 〜 +45°C ・ 細線 = 等温線(6°C 刻み、白 = 0°C)</span>
       </div>
     );
   }
@@ -59,9 +59,9 @@ export function Legend() {
       <div className="legend">
         <span className="legend-gradient legend-gradient--currents" />
         <span className="legend-caption">
-          流線 = 環流の演繹(矢印 = 流向): 赤 = 暖流、青 = 寒流、白 = 中立。
-          シアン角点 = 沿岸湧昇(好漁場)、緑丸 = サンゴ礁候補。背景色 = 海面温度偏差
-          −3.5 〜 +3.5°C。月切替で季節の環流・海氷縁が変わる
+          流線 = 環流の演繹(矢印 = 流向): 赤 = 暖流、青 = 寒流、白 = 中立。 シアン角点 =
+          沿岸湧昇(好漁場)、緑丸 = サンゴ礁候補。背景色 = 海面温度偏差 −3.5 〜
+          +3.5°C。月切替で季節の環流・海氷縁が変わる
         </span>
       </div>
     );
@@ -71,8 +71,8 @@ export function Legend() {
       <div className="legend">
         <span className="legend-gradient legend-gradient--pressure" />
         <span className="legend-caption">
-          気圧偏差 −8(橙 = 低圧)〜 +8 hPa(青 = 高圧)・ H/L = 高低気圧中心 ・
-          水色破線 = 亜熱帯高圧帯(ハドレー端)・ 紫破線 = 極前線 ・「風」で地表風を重畳
+          気圧偏差 −8(橙 = 低圧)〜 +8 hPa(青 = 高圧)・ H/L = 高低気圧中心 ・ 水色破線 =
+          亜熱帯高圧帯(ハドレー端)・ 紫破線 = 極前線 ・「風」で地表風を重畳
         </span>
       </div>
     );

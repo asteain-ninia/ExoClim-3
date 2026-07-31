@@ -25,7 +25,13 @@ for (const [name, lat, lon] of sites) {
     t.push((r.temperature.monthlyTemperatureC[m]?.[i] ?? 0).toFixed(0));
     p.push((r.precipitation.monthlyPrecipMm[m]?.[i] ?? 0).toFixed(0));
   }
-  console.log(name, '→', KOPPEN_CLASSES[r.koppen.classId[i] ?? 0], '陸', r.context.terrain.landMask[i]);
+  console.log(
+    name,
+    '→',
+    KOPPEN_CLASSES[r.koppen.classId[i] ?? 0],
+    '陸',
+    r.context.terrain.landMask[i],
+  );
   console.log('  T:', t.join(' '), ' 年平均', (r.temperature.annualMeanC[i] ?? 0).toFixed(1));
   console.log('  P:', p.join(' '), ' 年', (r.precipitation.annualPrecipMm[i] ?? 0).toFixed(0));
 }

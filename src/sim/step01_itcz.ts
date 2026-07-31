@@ -76,7 +76,7 @@ export function computeItcz(ctx: SimContext, hemisOffsetDeg = 0): ItczResult {
     for (let col = 0; col < W; col++) {
       // 海上の ITCZ は熱慣性でほとんど動かず、陸上では太陽を大きく追う
       // (Log/Pasta の明示規則)。経度列の帯内陸率で季節追従を減衰する
-      const landness = Math.min(1, ((landFracN[col] ?? 0) + (landFracS[col] ?? 0)));
+      const landness = Math.min(1, (landFracN[col] ?? 0) + (landFracS[col] ?? 0));
       const followDamp = K.itczOceanFollowDamp + (1 - K.itczOceanFollowDamp) * landness;
       const base = K.itczDeclinationFollowRatio * decl * followDamp;
       // 夏半球の大陸が ITCZ を引き寄せる(高所加熱で増強、冬半球の大陸は押し返す)

@@ -40,11 +40,7 @@ export interface AtmosphereOceanParams {
 }
 
 export type TerrainPresetName =
-  | 'earth'
-  | 'idealized_continent'
-  | 'two_continents'
-  | 'aquaplanet'
-  | 'all_land';
+  'earth' | 'idealized_continent' | 'two_continents' | 'aquaplanet' | 'all_land';
 
 export type TerrainSource =
   | { kind: 'preset'; preset: TerrainPresetName }

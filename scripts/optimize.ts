@@ -241,7 +241,10 @@ async function main(): Promise<void> {
         continue;
       }
       // 並列幅ぶんの定数をまとめて ± スクリーニング(基準は固定 → 完全並列可)
-      const batchParams = SPACE.slice(state.screenCursor, state.screenCursor + Math.max(1, Math.ceil(parallel / 2)));
+      const batchParams = SPACE.slice(
+        state.screenCursor,
+        state.screenCursor + Math.max(1, Math.ceil(parallel / 2)),
+      );
       const items: Array<{ tag: string; vector: Record<string, number>; name: string }> = [];
       for (const [name, lo, hi] of batchParams) {
         const base = state.best[name] ?? 0;
@@ -280,7 +283,10 @@ async function main(): Promise<void> {
       const jitter = { ...state.best };
       for (const [name, lo, hi] of top) {
         const span = hi - lo;
-        jitter[name] = Math.min(hi, Math.max(lo, (jitter[name] ?? 0) + (rand() - 0.5) * span * 0.1));
+        jitter[name] = Math.min(
+          hi,
+          Math.max(lo, (jitter[name] ?? 0) + (rand() - 0.5) * span * 0.1),
+        );
       }
       const [s] = await backend.evalBatch([{ tag: `jitter:sweep${state.sweep}`, vector: jitter }]);
       if (s) accept(jitter, s);
@@ -296,7 +302,10 @@ async function main(): Promise<void> {
       for (const dir of [1, -1]) {
         const v = clampTo(name, base + dir * span * state.stepFrac);
         if (v === base) continue;
-        items.push({ tag: `descent:s${state.sweep}:${name}`, vector: { ...state.best, [name]: v } });
+        items.push({
+          tag: `descent:s${state.sweep}:${name}`,
+          vector: { ...state.best, [name]: v },
+        });
       }
     }
     const scores = await backend.evalBatch(items);
@@ -325,7 +334,9 @@ async function main(): Promise<void> {
   console.log(
     `終了: evals=${state.evals} sweep=${state.sweep} phase=${state.phase} ` +
       `best fit=${state.bestFit.toFixed(2)}` +
-      (b ? ` 大分類=${b.majorPct.toFixed(2)} 詳細=${b.detailPct.toFixed(2)} ゲート=${b.gates} 気温RMSE=${b.tempRmse.toFixed(2)}` : ''),
+      (b
+        ? ` 大分類=${b.majorPct.toFixed(2)} 詳細=${b.detailPct.toFixed(2)} ゲート=${b.gates} 気温RMSE=${b.tempRmse.toFixed(2)}`
+        : ''),
   );
   fs.writeFileSync(
     path.join(OUT_DIR, `best${FILE_SUFFIX}.json`),

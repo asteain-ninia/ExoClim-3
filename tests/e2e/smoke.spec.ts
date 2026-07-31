@@ -61,7 +61,8 @@ test('ドラッグ周回・360°超スパン・球体表示が動く', async ({ 
       let sum = 0;
       for (let i = 0; i < data.length; i += 16 * 4) {
         const w = 1 + ((i / 4) % 997);
-        sum = (sum + w * ((data[i] ?? 0) + (data[i + 1] ?? 0) + (data[i + 2] ?? 0))) % 1_000_000_007;
+        sum =
+          (sum + w * ((data[i] ?? 0) + (data[i + 1] ?? 0) + (data[i + 2] ?? 0))) % 1_000_000_007;
       }
       return sum;
     });

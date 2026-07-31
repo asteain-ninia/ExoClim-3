@@ -44,17 +44,71 @@ export const INPUT_DOMAIN: Array<{
   max: number;
   get: (p: PlanetParams) => number;
 }> = [
-  { code: 'starLuminositySolar', label: '主星光度(太陽=1)', min: 0.01, max: 100, get: (p) => p.orbital.starLuminositySolar },
-  { code: 'semiMajorAxisAu', label: '軌道長半径(AU)', min: 0.05, max: 50, get: (p) => p.orbital.semiMajorAxisAu },
-  { code: 'eccentricity', label: '軌道離心率', min: 0, max: 0.9, get: (p) => p.orbital.eccentricity },
+  {
+    code: 'starLuminositySolar',
+    label: '主星光度(太陽=1)',
+    min: 0.01,
+    max: 100,
+    get: (p) => p.orbital.starLuminositySolar,
+  },
+  {
+    code: 'semiMajorAxisAu',
+    label: '軌道長半径(AU)',
+    min: 0.05,
+    max: 50,
+    get: (p) => p.orbital.semiMajorAxisAu,
+  },
+  {
+    code: 'eccentricity',
+    label: '軌道離心率',
+    min: 0,
+    max: 0.9,
+    get: (p) => p.orbital.eccentricity,
+  },
   { code: 'radiusKm', label: '惑星半径(km)', min: 1000, max: 20000, get: (p) => p.body.radiusKm },
-  { code: 'rotationPeriodHours', label: '自転周期(時間)', min: 4, max: 10000, get: (p) => p.body.rotationPeriodHours },
+  {
+    code: 'rotationPeriodHours',
+    label: '自転周期(時間)',
+    min: 4,
+    max: 10000,
+    get: (p) => p.body.rotationPeriodHours,
+  },
   { code: 'axialTiltDeg', label: '地軸傾斜(度)', min: 0, max: 90, get: (p) => p.body.axialTiltDeg },
-  { code: 'surfacePressureBar', label: '表面気圧(bar)', min: 0.1, max: 10, get: (p) => p.atmosphere.surfacePressureBar },
-  { code: 'greenhouseStrength', label: '温室効果強度', min: 0, max: 5, get: (p) => p.atmosphere.greenhouseStrength },
-  { code: 'cloudAlbedo', label: '雲アルベド', min: 0, max: 0.6, get: (p) => p.atmosphere.cloudAlbedo },
-  { code: 'oceanMixedLayerDepthM', label: '海洋混合層深(m)', min: 5, max: 500, get: (p) => p.atmosphere.oceanMixedLayerDepthM },
-  { code: 'heatTransportStrength', label: '熱輸送強度', min: 0.1, max: 5, get: (p) => p.atmosphere.heatTransportStrength },
+  {
+    code: 'surfacePressureBar',
+    label: '表面気圧(bar)',
+    min: 0.1,
+    max: 10,
+    get: (p) => p.atmosphere.surfacePressureBar,
+  },
+  {
+    code: 'greenhouseStrength',
+    label: '温室効果強度',
+    min: 0,
+    max: 5,
+    get: (p) => p.atmosphere.greenhouseStrength,
+  },
+  {
+    code: 'cloudAlbedo',
+    label: '雲アルベド',
+    min: 0,
+    max: 0.6,
+    get: (p) => p.atmosphere.cloudAlbedo,
+  },
+  {
+    code: 'oceanMixedLayerDepthM',
+    label: '海洋混合層深(m)',
+    min: 5,
+    max: 500,
+    get: (p) => p.atmosphere.oceanMixedLayerDepthM,
+  },
+  {
+    code: 'heatTransportStrength',
+    label: '熱輸送強度',
+    min: 0.1,
+    max: 5,
+    get: (p) => p.atmosphere.heatTransportStrength,
+  },
 ];
 
 // ---- 計算可能性の事前検査(変更レビュー FB「P1 適用範囲の事前診断」) ----
@@ -116,7 +170,8 @@ export function invalidInputIssues(params: PlanetParams): DiagnosticIssue[] {
   // 地形
   const t = params.terrain;
   if (t.kind === 'preset') {
-    if (!TERRAIN_PRESETS.has(t.preset)) bad('terrainPreset', `未知の地形プリセット ${String(t.preset)}`);
+    if (!TERRAIN_PRESETS.has(t.preset))
+      bad('terrainPreset', `未知の地形プリセット ${String(t.preset)}`);
   } else {
     if (!Number.isFinite(t.seed)) bad('terrainSeed', '手続き地形の種子が有限値ではない');
     if (!Number.isFinite(t.landFraction) || t.landFraction < 0 || t.landFraction > 1) {

@@ -16,7 +16,10 @@ export function computeWindBelt(ctx: SimContext, itcz: ItczResult): WindBeltResu
   // ハドレー端: 自転が遅いほど極側へ広がる(P^n)。[18°, 78°] にクランプ
   const rotFactor = Math.pow(params.body.rotationPeriodHours / 24, K.hadleyRotationExponent);
   const ridgeBase = Math.min(78, Math.max(18, K.hadleyEdgeBaseDeg * rotFactor));
-  const polarFrontBase = Math.min(85, Math.max(ridgeBase + 12, K.polarFrontBaseDeg * Math.sqrt(rotFactor)));
+  const polarFrontBase = Math.min(
+    85,
+    Math.max(ridgeBase + 12, K.polarFrontBaseDeg * Math.sqrt(rotFactor)),
+  );
 
   const monthlyRidgeLatNDeg: number[] = [];
   const monthlyRidgeLatSDeg: number[] = [];
@@ -45,7 +48,7 @@ export function computeWindBelt(ctx: SimContext, itcz: ItczResult): WindBeltResu
           continue;
         }
         for (let d = 1; d <= maxScan; d++) {
-          const j = row * W + (((col + dir * d) % W) + W) % W;
+          const j = row * W + ((((col + dir * d) % W) + W) % W);
           if (terrain.landMask[j]) {
             eastLandKm[i] = d * dxKm;
             break;
@@ -110,7 +113,8 @@ export function computeWindBelt(ctx: SimContext, itcz: ItczResult): WindBeltResu
         // ITCZ トラフ(陸の多い経度では深いモンスーントラフになる)
         const c = centers?.[col] ?? 0;
         const dI = (lat - c) / (itcz.halfWidthDeg * 1.2);
-        const troughDepth = K.itczTroughHpa * (1 + K.monsoonTroughDeepening * (troughLandFrac[col] ?? 0));
+        const troughDepth =
+          K.itczTroughHpa * (1 + K.monsoonTroughDeepening * (troughLandFrac[col] ?? 0));
         v += -troughDepth * Math.exp(-dI * dI);
         // 冬の亜寒帯海上低気圧(WL#32/#34): 寒候期に極前線付近の海上へ
         // 半永続低気圧(アリューシャン/アイスランド低相当)。海氷縁は

@@ -93,10 +93,7 @@ function earthTerrain(grid: Grid): TerrainField {
     for (let row = 0; row < grid.heightCells; row++) {
       const srcRow = Math.min(src.heightCells - 1, Math.floor((90 - latDegOfRow(grid, row)) / 1));
       for (let col = 0; col < grid.widthCells; col++) {
-        const srcCol = Math.min(
-          src.widthCells - 1,
-          Math.floor((lonDegOfCol(grid, col) + 180) / 1),
-        );
+        const srcCol = Math.min(src.widthCells - 1, Math.floor((lonDegOfCol(grid, col) + 180) / 1));
         const si = srcRow * src.widthCells + srcCol;
         const i = cellIndex(grid, row, col);
         elevationMeters[i] = src.elevationMeters[si] ?? OCEAN_FLOOR_M;

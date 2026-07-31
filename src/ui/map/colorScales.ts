@@ -23,11 +23,7 @@ export function temperatureColor(tempC: number): Rgb {
 export function precipitationColor(mmPerYear: number, isLand: boolean): Rgb {
   if (!isLand) return OCEAN_COLOR;
   const x = Math.min(1, Math.log1p(mmPerYear) / Math.log1p(4000));
-  return [
-    Math.round(250 - 215 * x),
-    Math.round(247 - 122 * x),
-    Math.round(230 - 40 * x),
-  ];
+  return [Math.round(250 - 215 * x), Math.round(247 - 122 * x), Math.round(230 - 40 * x)];
 }
 
 /** 海流: SST 偏差の発散配色(暖流 = 赤系、寒流 = 青系)。陸は薄い中立色 */
@@ -35,11 +31,7 @@ export function currentColor(sstAnomalyC: number, isLand: boolean): Rgb {
   if (isLand) return [52, 62, 74];
   const x = Math.max(-3.5, Math.min(3.5, sstAnomalyC)) / 3.5;
   if (x >= 0) {
-    return [
-      Math.round(40 + 205 * x),
-      Math.round(60 + 30 * (1 - x)),
-      Math.round(90 - 40 * x),
-    ];
+    return [Math.round(40 + 205 * x), Math.round(60 + 30 * (1 - x)), Math.round(90 - 40 * x)];
   }
   return [Math.round(30 + 10 * (1 + x)), Math.round(70 + 60 * -x), Math.round(120 + 110 * -x)];
 }

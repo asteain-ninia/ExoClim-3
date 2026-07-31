@@ -60,8 +60,7 @@ if (
 ) {
   throw new Error(`--holdout-fold は 0〜4 の整数(指定値: ${String(HOLDOUT_FOLD)})`);
 }
-const EXPERIMENT =
-  EXPERIMENT_ARG ?? (HOLDOUT_FOLD !== null ? `holdout-fold${HOLDOUT_FOLD}` : null);
+const EXPERIMENT = EXPERIMENT_ARG ?? (HOLDOUT_FOLD !== null ? `holdout-fold${HOLDOUT_FOLD}` : null);
 const OUT_DIR = EXPERIMENT
   ? path.join(process.cwd(), 'out', 'experiments', EXPERIMENT)
   : path.join(process.cwd(), 'out', 'validate');
@@ -71,6 +70,15 @@ function gitCommitId(): string {
     return execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
   } catch {
     return 'unknown'; // 取得できない環境では架空の値を入れない(FB P0-1)
+  }
+}
+
+/** 未コミット変更の有無(判定不能時は true と保守的に扱う — R1 レビュー再発防止) */
+function gitIsDirty(): boolean {
+  try {
+    return execSync('git status --porcelain', { encoding: 'utf8' }).trim().length > 0;
+  } catch {
+    return true;
   }
 }
 
@@ -139,6 +147,7 @@ function main(): void {
     generatedAt: new Date().toISOString(),
     // 来歴(FB P0-1): どのコード・どの定数で出した成果物かを機械判別可能に
     gitCommit: gitCommitId(),
+    gitDirty: gitIsDirty(),
     runLabel: EXPERIMENT ?? 'baseline',
     constantsDigest: constantsDigest(),
     stepTimingsMs,
@@ -201,7 +210,8 @@ function main(): void {
         const kOther = koppenScore(result, koppenObs, keepExcludingFold(fold));
         const kSlice = koppenScore(result, koppenObs, keepOnlyFold(fold));
         const fSlice = fieldScore(result, climObs, keepOnlyFold(fold));
-        const pct = (x: number, total: number) => Math.round((x / Math.max(1e-9, total)) * 1000) / 10;
+        const pct = (x: number, total: number) =>
+          Math.round((x / Math.max(1e-9, total)) * 1000) / 10;
         return {
           fold,
           trainingGateCount: regionGates.length - sliceGates.length,
@@ -377,7 +387,8 @@ function scoreTemperatureNonWeighted(result: PipelineResult, clim: ClimateFixtur
           if (!result.context.terrain.landMask[gi]) continue;
           n++;
           for (let m = 0; m < 12; m++) {
-            modelMonthly[m] = (modelMonthly[m] ?? 0) + (result.temperature.monthlyTemperatureC[m]?.[gi] ?? 0);
+            modelMonthly[m] =
+              (modelMonthly[m] ?? 0) + (result.temperature.monthlyTemperatureC[m]?.[gi] ?? 0);
           }
         }
       }
@@ -393,8 +404,7 @@ function scoreTemperatureNonWeighted(result: PipelineResult, clim: ClimateFixtur
         rmseByMonth[key] = (rmseByMonth[key] ?? 0) + d * d;
       }
       const latBand = Math.round((89 - cr * 2) / 10) * 10;
-      const acc =
-        zonalAcc.get(latBand) ?? { o: 0, m: 0, oJan: 0, mJan: 0, oJul: 0, mJul: 0, n: 0 };
+      const acc = zonalAcc.get(latBand) ?? { o: 0, m: 0, oJan: 0, mJan: 0, oJul: 0, mJul: 0, n: 0 };
       acc.o += obsAnnual;
       acc.m += modelAnnual;
       acc.oJan += obsMonthly[0] ?? 0;
@@ -419,8 +429,10 @@ function scoreTemperatureNonWeighted(result: PipelineResult, clim: ClimateFixtur
   }
   return {
     annualRmseC: Math.round(Math.sqrt(annualSse / Math.max(1, annualN)) * 100) / 100,
-    janRmseC: Math.round(Math.sqrt((rmseByMonth['month0'] ?? 0) / Math.max(1, annualN)) * 100) / 100,
-    julRmseC: Math.round(Math.sqrt((rmseByMonth['month6'] ?? 0) / Math.max(1, annualN)) * 100) / 100,
+    janRmseC:
+      Math.round(Math.sqrt((rmseByMonth['month0'] ?? 0) / Math.max(1, annualN)) * 100) / 100,
+    julRmseC:
+      Math.round(Math.sqrt((rmseByMonth['month6'] ?? 0) / Math.max(1, annualN)) * 100) / 100,
     zonalAnnual: zonal,
   };
 }
@@ -434,7 +446,11 @@ function scorePrecipitationNonWeighted(result: PipelineResult, clim: ClimateFixt
   let n = 0;
   let sse = 0;
   let corrN = 0;
-  let sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+  let sx = 0,
+    sy = 0,
+    sxx = 0,
+    syy = 0,
+    sxy = 0;
   for (let cr = 0; cr < clim.heightCells; cr++) {
     for (let cc = 0; cc < clim.widthCells; cc++) {
       const ci = cr * clim.widthCells + cc;
@@ -470,7 +486,11 @@ function scorePrecipitationNonWeighted(result: PipelineResult, clim: ClimateFixt
       n++;
       const lx = Math.log1p(obsAnnual);
       const ly = Math.log1p(modelAnnual);
-      sx += lx; sy += ly; sxx += lx * lx; syy += ly * ly; sxy += lx * ly;
+      sx += lx;
+      sy += ly;
+      sxx += lx * lx;
+      syy += ly * ly;
+      sxy += lx * ly;
       corrN++;
     }
   }
@@ -607,10 +627,18 @@ function renderAll(result: PipelineResult, obs: KoppenFixture): void {
     if (id === 0) return [15, 30, 55];
     return (KOPPEN_COLORS[id] ?? [0, 0, 0]) as unknown as [number, number, number];
   });
-  renderPng('temp_annual.png', W, H, (i) => tempColor(result.temperature.annualMeanC[i] ?? 0, land[i] === 1));
-  renderPng('temp_jan.png', W, H, (i) => tempColor(result.temperature.monthlyTemperatureC[0]?.[i] ?? 0, land[i] === 1));
-  renderPng('temp_jul.png', W, H, (i) => tempColor(result.temperature.monthlyTemperatureC[6]?.[i] ?? 0, land[i] === 1));
-  renderPng('precip_annual.png', W, H, (i) => precipColor(result.precipitation.annualPrecipMm[i] ?? 0, land[i] === 1));
+  renderPng('temp_annual.png', W, H, (i) =>
+    tempColor(result.temperature.annualMeanC[i] ?? 0, land[i] === 1),
+  );
+  renderPng('temp_jan.png', W, H, (i) =>
+    tempColor(result.temperature.monthlyTemperatureC[0]?.[i] ?? 0, land[i] === 1),
+  );
+  renderPng('temp_jul.png', W, H, (i) =>
+    tempColor(result.temperature.monthlyTemperatureC[6]?.[i] ?? 0, land[i] === 1),
+  );
+  renderPng('precip_annual.png', W, H, (i) =>
+    precipColor(result.precipitation.annualPrecipMm[i] ?? 0, land[i] === 1),
+  );
   renderPng('terrain.png', W, H, (i) => {
     const e = result.context.terrain.elevationMeters[i] ?? 0;
     if (!land[i]) return [20, 40 + Math.max(0, 60 + e / 100), 120];
@@ -712,8 +740,14 @@ function printSummary(report: {
   console.log(
     `  Am 最多雨月平均 ${ls.amWettestMonthMeanMm}mm(Pasta 目安 500mm 級)・Cwa 最多/最少雨月比 ${ls.cwaWetDryRatioMean}(目安 ~10)`,
   );
-  console.log('\nモデル上位クラス:', report.koppen.topClassesModel.map((e) => `${e.cls} ${e.pct}%`).join(', '));
-  console.log('観測上位クラス:', report.koppen.topClassesObs.map((e) => `${e.cls} ${e.pct}%`).join(', '));
+  console.log(
+    '\nモデル上位クラス:',
+    report.koppen.topClassesModel.map((e) => `${e.cls} ${e.pct}%`).join(', '),
+  );
+  console.log(
+    '観測上位クラス:',
+    report.koppen.topClassesObs.map((e) => `${e.cls} ${e.pct}%`).join(', '),
+  );
   console.log(`\nPNG とレポート: ${OUT_DIR}`);
 }
 

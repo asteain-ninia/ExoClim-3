@@ -59,6 +59,11 @@ export interface PrecipDiagnostics {
   liftOther: Float32Array[];
   /** 床再配分・月ブレンド前の降水 mm/月 */
   preAdjustMm: Float32Array[];
+  /**
+   * 後処理(冬季床再配分 + 月ブレンド、陸のみ)による差分 mm/月。
+   * 最終降水 = preAdjustMm + postAdjustDeltaMm(全セルで厳密)
+   */
+  postAdjustDeltaMm: Float32Array[];
   /** mm 変換係数(precipScaleMmPerUnit × 気圧係数) — 再構成用 */
   mmPerSupplyUnit: number;
 }
@@ -104,6 +109,7 @@ export function computePrecipitation(
         upwindBlock: [],
         liftOther: [],
         preAdjustMm: [],
+        postAdjustDeltaMm: [],
         mmPerSupplyUnit:
           K.precipScaleMmPerUnit *
           Math.pow(Math.max(0.1, params.atmosphere.surfacePressureBar), 0.5),
@@ -202,7 +208,25 @@ export function computePrecipitation(
       continue;
     }
     const supply1 = blend(supplies1, m);
-    const precip1 = convertToPrecip(ctx, itcz, m, tField, u, v, supply1, ridgeN, ridgeS, pfN, pfS, dyKm, ocean, eastOceanKm, eastOceanSstA, meanItczCenters, crestElev);
+    const precip1 = convertToPrecip(
+      ctx,
+      itcz,
+      m,
+      tField,
+      u,
+      v,
+      supply1,
+      ridgeN,
+      ridgeS,
+      pfN,
+      pfS,
+      dyKm,
+      ocean,
+      eastOceanKm,
+      eastOceanSstA,
+      meanItczCenters,
+      crestElev,
+    );
     precip1ByMonth.push(precip1);
 
     // ---- パス 2: 陸面再蒸発を供給源に加えて再追跡(反復)----
@@ -220,7 +244,25 @@ export function computePrecipitation(
       }
       supplyIter = traceMoistureSupply(ctx, smallWater, crestElev, tField, u, v, landSource, 0);
       if (it < K.recyclingIterations - 1) {
-        precipIter = convertToPrecip(ctx, itcz, m, tField, u, v, supplyIter, ridgeN, ridgeS, pfN, pfS, dyKm, ocean, eastOceanKm, eastOceanSstA, meanItczCenters, crestElev);
+        precipIter = convertToPrecip(
+          ctx,
+          itcz,
+          m,
+          tField,
+          u,
+          v,
+          supplyIter,
+          ridgeN,
+          ridgeS,
+          pfN,
+          pfS,
+          dyKm,
+          ocean,
+          eastOceanKm,
+          eastOceanSstA,
+          meanItczCenters,
+          crestElev,
+        );
       }
     }
     supplies2.push(supplyIter);
@@ -266,7 +308,26 @@ export function computePrecipitation(
         preAdjustMm: new Float32Array(N),
       };
     }
-    const precip2 = convertToPrecip(ctx, itcz, m, tField, u, v, supply2, ridgeN, ridgeS, pfN, pfS, dyKm, ocean, eastOceanKm, eastOceanSstA, meanItczCenters, crestElev, diagM);
+    const precip2 = convertToPrecip(
+      ctx,
+      itcz,
+      m,
+      tField,
+      u,
+      v,
+      supply2,
+      ridgeN,
+      ridgeS,
+      pfN,
+      pfS,
+      dyKm,
+      ocean,
+      eastOceanKm,
+      eastOceanSstA,
+      meanItczCenters,
+      crestElev,
+      diagM,
+    );
     monthlyPrecipMm.push(precip2);
     if (diag && diagM) {
       // 海洋由来 = 海のみトレース(パス 1)、陸面再循環由来 = 全供給 − 海のみ
@@ -324,8 +385,14 @@ export function computePrecipitation(
           const summerNorm =
             (lat >= 0 ? (decls[m] ?? 0) : -(decls[m] ?? 0)) /
             Math.max(1e-6, ctx.params.body.axialTiltDeg);
-          const ridge = lat >= 0 ? (windBelt.monthlyRidgeLatNDeg[m] ?? 31) : (windBelt.monthlyRidgeLatSDeg[m] ?? -31);
-          const pf = lat >= 0 ? (windBelt.monthlyPolarFrontLatNDeg[m] ?? 60) : (windBelt.monthlyPolarFrontLatSDeg[m] ?? -60);
+          const ridge =
+            lat >= 0
+              ? (windBelt.monthlyRidgeLatNDeg[m] ?? 31)
+              : (windBelt.monthlyRidgeLatSDeg[m] ?? -31);
+          const pf =
+            lat >= 0
+              ? (windBelt.monthlyPolarFrontLatNDeg[m] ?? 60)
+              : (windBelt.monthlyPolarFrontLatSDeg[m] ?? -60);
           const inBand = aLat > Math.abs(ridge) + 1 && aLat < Math.abs(pf) + 12;
           const f = summerNorm < 0.5 && inBand ? floorMm : 0;
           floors.push(f);
@@ -376,6 +443,19 @@ export function computePrecipitation(
     if (!arr) continue;
     for (let i = 0; i < grid.cellCount; i++) {
       annualPrecipMm[i] = (annualPrecipMm[i] ?? 0) + (arr[i] ?? 0);
+    }
+  }
+  // R1 診断: 後処理差分(最終 − 変換直後)。全セルで 最終 = pre + delta が成立
+  if (diag) {
+    for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+      const N = grid.cellCount;
+      const delta = new Float32Array(N);
+      const fin = monthlyPrecipMm[m];
+      const pre = diag.preAdjustMm[m];
+      for (let i = 0; i < N; i++) {
+        delta[i] = (fin?.[i] ?? 0) - (pre?.[i] ?? 0);
+      }
+      diag.postAdjustDeltaMm.push(delta);
     }
   }
   return { monthlyPrecipMm, annualPrecipMm };
@@ -662,7 +742,12 @@ function convertToPrecip(
         const gradPoleward = Math.max(0, (supply[eqNb] ?? 0) - (supply[polNb] ?? 0));
         const vPoleward = lat >= 0 ? (v[i] ?? 0) : -(v[i] ?? 0);
         const aLat0 = Math.abs(lat);
-        if (vPoleward > 0 && gradPoleward > 0 && aLat0 > Math.abs(ridge) - 6 && aLat0 < Math.abs(pf)) {
+        if (
+          vPoleward > 0 &&
+          gradPoleward > 0 &&
+          aLat0 > Math.abs(ridge) - 6 &&
+          aLat0 < Math.abs(pf)
+        ) {
           const frontW = Math.min(1.5, (vPoleward / 4) * gradPoleward);
           liftFrontalF = 1 + K.frontalLiftBoost * frontW;
           lift *= liftFrontalF;
@@ -679,7 +764,8 @@ function convertToPrecip(
         const riseW = Math.min(1, (aLat - stLo) / 5);
         const fallW = Math.min(1, (stHi - aLat) / 10);
         stormW = Math.min(riseW, fallW);
-        liftStormF = 1 + (K.stormTrackBoost + K.stormTrackWinterBoost * 1.4 * winterDepth01) * stormW;
+        liftStormF =
+          1 + (K.stormTrackBoost + K.stormTrackWinterBoost * 1.4 * winterDepth01) * stormW;
         lift *= liftStormF;
       }
 
@@ -780,7 +866,7 @@ function convertToPrecip(
         );
         const coastKm = ctx.landDistToCoastKm[i] ?? 1e9;
         const oceanT = nearestOceanTempC(ctx, _tField, row, col);
-        const qBaseT = oceanT !== null ? Math.max(oceanT, (_tField[i] ?? 0)) : (_tField[i] ?? 0);
+        const qBaseT = oceanT !== null ? Math.max(oceanT, _tField[i] ?? 0) : (_tField[i] ?? 0);
         const qRel = Math.max(
           K.stormMinQRel,
           saturationVaporPressureHpa(qBaseT + 3) / saturationVaporPressureHpa(20),
@@ -805,14 +891,22 @@ function convertToPrecip(
         const onshore01 = oceanSteps / 5;
         const decayKm = K.stormMoistureDecayKm * (0.5 + 0.5 * onshore01);
         stormSupply =
-          K.stormMoistureSupply * supplyW * qRel * Math.exp(-coastKm / decayKm) * (1 + 0.55 * winterDepth01);
+          K.stormMoistureSupply *
+          supplyW *
+          qRel *
+          Math.exp(-coastKm / decayKm) *
+          (1 + 0.55 * winterDepth01);
       }
 
       // 供給 × 持ち上げ × 遮蔽 → mm/月(気圧が低い惑星は降水効率も下がる)
       const pressureFactor = Math.pow(Math.max(0.1, params.atmosphere.surfacePressureBar), 0.5);
       out[i] = Math.max(
         0,
-        ((supply[i] ?? 0) + stormSupply) * blockFactor * lift * K.precipScaleMmPerUnit * pressureFactor,
+        ((supply[i] ?? 0) + stormSupply) *
+          blockFactor *
+          lift *
+          K.precipScaleMmPerUnit *
+          pressureFactor,
       );
       if (diagM) {
         diagM.supplyStorm[i] = stormSupply;

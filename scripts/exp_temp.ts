@@ -44,7 +44,13 @@ console.log(
 console.log('lat | 観測年平均 | モデル年平均 | 観測1月 | モデル1月 | 観測7月 | モデル7月');
 const f = Math.round(2 / grid.resolutionDeg);
 for (let band = 80; band >= -80; band -= 10) {
-  let oA = 0, mA = 0, o1 = 0, m1 = 0, o7 = 0, m7 = 0, n = 0;
+  let oA = 0,
+    mA = 0,
+    o1 = 0,
+    m1 = 0,
+    o7 = 0,
+    m7 = 0,
+    n = 0;
   for (let cr = 0; cr < clim.heightCells; cr++) {
     const lat = 89 - cr * 2;
     if (Math.abs(lat - band) > 5) continue;
@@ -54,30 +60,40 @@ for (let band = 80; band >= -80; band -= 10) {
       let ok = true;
       for (let m = 0; m < 12; m++) {
         const v = clim.monthlyTemperatureDeciC[m]?.[ci] ?? -9999;
-        if (v === -9999) { ok = false; break; }
+        if (v === -9999) {
+          ok = false;
+          break;
+        }
         obsMonthly.push(v / 10);
       }
       if (!ok) continue;
       const mm = new Array<number>(12).fill(0);
       let nn = 0;
-      for (let dr = 0; dr < f; dr++) for (let dc = 0; dc < f; dc++) {
-        const gr = cr * f + dr, gc = cc * f + dc;
-        if (gr >= grid.heightCells || gc >= grid.widthCells) continue;
-        const gi = gr * grid.widthCells + gc;
-        if (!ctx.terrain.landMask[gi]) continue;
-        nn++;
-        for (let m = 0; m < 12; m++) mm[m] = (mm[m] ?? 0) + (temp.monthlyTemperatureC[m]?.[gi] ?? 0);
-      }
+      for (let dr = 0; dr < f; dr++)
+        for (let dc = 0; dc < f; dc++) {
+          const gr = cr * f + dr,
+            gc = cc * f + dc;
+          if (gr >= grid.heightCells || gc >= grid.widthCells) continue;
+          const gi = gr * grid.widthCells + gc;
+          if (!ctx.terrain.landMask[gi]) continue;
+          nn++;
+          for (let m = 0; m < 12; m++)
+            mm[m] = (mm[m] ?? 0) + (temp.monthlyTemperatureC[m]?.[gi] ?? 0);
+        }
       if (nn === 0) continue;
       for (let m = 0; m < 12; m++) mm[m] = (mm[m] ?? 0) / nn;
       oA += obsMonthly.reduce((a, b) => a + b, 0) / 12;
       mA += mm.reduce((a, b) => a + b, 0) / 12;
-      o1 += obsMonthly[0] ?? 0; m1 += mm[0] ?? 0;
-      o7 += obsMonthly[6] ?? 0; m7 += mm[6] ?? 0;
+      o1 += obsMonthly[0] ?? 0;
+      m1 += mm[0] ?? 0;
+      o7 += obsMonthly[6] ?? 0;
+      m7 += mm[6] ?? 0;
       n++;
     }
   }
   if (n === 0) continue;
   const r = (x: number) => (x / n).toFixed(1).padStart(6);
-  console.log(`${String(band).padStart(3)} | ${r(oA)} | ${r(mA)} | ${r(o1)} | ${r(m1)} | ${r(o7)} | ${r(m7)}`);
+  console.log(
+    `${String(band).padStart(3)} | ${r(oA)} | ${r(mA)} | ${r(o1)} | ${r(m1)} | ${r(o7)} | ${r(m7)}`,
+  );
 }

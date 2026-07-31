@@ -3,13 +3,7 @@
 import { create } from 'zustand';
 
 export type OverlayKind =
-  | 'terrain'
-  | 'currents'
-  | 'pressure'
-  | 'temperature'
-  | 'precipitation'
-  | 'koppen'
-  | 'koppenObs';
+  'terrain' | 'currents' | 'pressure' | 'temperature' | 'precipitation' | 'koppen' | 'koppenObs';
 
 /** -1 = 年平均、0-11 = 月 */
 export type MonthSelection = number;
@@ -60,8 +54,7 @@ export const useUiStore = create<UiState>((set) => ({
   toggleWindArrows: () => set((s) => ({ showWindArrows: !s.showWindArrows })),
   setViewMode: (viewMode) => set({ viewMode }),
   setPanLonDeg: (panLonDeg) => set({ panLonDeg }),
-  setViewSpanDeg: (viewSpanDeg) =>
-    set({ viewSpanDeg: Math.min(1440, Math.max(360, viewSpanDeg)) }),
+  setViewSpanDeg: (viewSpanDeg) => set({ viewSpanDeg: Math.min(1440, Math.max(360, viewSpanDeg)) }),
   setGlobeRotation: (globeLon0, globeLat0) =>
     set({ globeLon0, globeLat0: Math.min(85, Math.max(-85, globeLat0)) }),
 }));

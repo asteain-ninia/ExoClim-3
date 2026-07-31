@@ -26,7 +26,10 @@ export function solveEccentricAnomaly(meanAnomalyRad: number, eccentricity: numb
   return e0;
 }
 
-export function trueAnomalyFromEccentric(eccentricAnomalyRad: number, eccentricity: number): number {
+export function trueAnomalyFromEccentric(
+  eccentricAnomalyRad: number,
+  eccentricity: number,
+): number {
   const cosE = Math.cos(eccentricAnomalyRad);
   const sinE = Math.sin(eccentricAnomalyRad);
   const denom = 1 - eccentricity * cosE;
@@ -76,13 +79,20 @@ export function sampleOrbit(
 }
 
 /** 日平均日射(W/m²)。S0 は距離補正済みの恒星定数。 */
-export function dailyMeanInsolationWm2(latDeg: number, declinationDeg: number, s0Wm2: number): number {
+export function dailyMeanInsolationWm2(
+  latDeg: number,
+  declinationDeg: number,
+  s0Wm2: number,
+): number {
   const phi = latDeg * DEG;
   const delta = declinationDeg * DEG;
   const cosH0 = -Math.tan(phi) * Math.tan(delta);
   if (cosH0 >= 1) return 0; // 極夜
   const h0 = cosH0 <= -1 ? Math.PI : Math.acos(cosH0); // 極昼は H0 = π
-  return (s0Wm2 / Math.PI) * (h0 * Math.sin(phi) * Math.sin(delta) + Math.cos(phi) * Math.cos(delta) * Math.sin(h0));
+  return (
+    (s0Wm2 / Math.PI) *
+    (h0 * Math.sin(phi) * Math.sin(delta) + Math.cos(phi) * Math.cos(delta) * Math.sin(h0))
+  );
 }
 
 export interface InsolationField {
@@ -131,7 +141,8 @@ export function computeInsolation(
     monthlyByRow.push(byRow);
     monthlyDeclinationDeg.push(declSum / SUBSAMPLES_PER_MONTH);
     monthlyDistanceFactor.push(distSum / SUBSAMPLES_PER_MONTH);
-    for (let row = 0; row < rows; row++) annual[row] = (annual[row] ?? 0) + (byRow[row] ?? 0) / MONTHS_PER_YEAR;
+    for (let row = 0; row < rows; row++)
+      annual[row] = (annual[row] ?? 0) + (byRow[row] ?? 0) / MONTHS_PER_YEAR;
   }
   return { monthlyByRow, monthlyDeclinationDeg, monthlyDistanceFactor, annualMeanByRow: annual };
 }
