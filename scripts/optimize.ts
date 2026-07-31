@@ -16,6 +16,7 @@ import { runPipeline } from '../src/sim/pipeline';
 import { MODEL_CONSTANTS } from '../src/sim/constants';
 import { EARTH_PARAMS } from '../src/domain/planetParams';
 import { SPACE, evaluateResult, type Scores } from './optimize_lib';
+import { loadStateStrict, nextEvalNumber, readEvalLog, saveStateAtomic } from './optimize_store';
 
 const OUT_DIR = path.join(process.cwd(), 'out', 'optimize');
 fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -43,9 +44,8 @@ function currentVector(): Record<string, number> {
 }
 
 function loadState(): OptState {
-  if (fs.existsSync(STATE_PATH)) {
-    return JSON.parse(fs.readFileSync(STATE_PATH, 'utf8')) as OptState;
-  }
+  const existing = loadStateStrict<OptState>(STATE_PATH);
+  if (existing) return existing;
   return {
     best: currentVector(),
     bestFit: -Infinity,
@@ -62,7 +62,15 @@ function loadState(): OptState {
 }
 
 function saveState(s: OptState): void {
-  fs.writeFileSync(STATE_PATH, JSON.stringify(s, null, 1));
+  saveStateAtomic(STATE_PATH, s);
+}
+
+// 評価番号の正本はログ(P0-2)。起動時に照合し、必ず最大値 + 1 から採番する
+let evalCounter = 0;
+function initEvalCounter(state: OptState): void {
+  const log = readEvalLog(LOG_PATH);
+  for (const w of log.warnings) console.warn(`[optimize] ${w}`);
+  evalCounter = nextEvalNumber(state.evals, log.maxEval) - 1;
 }
 
 function mulberry32(seed: number): () => number {
@@ -155,11 +163,12 @@ function poolBackend(state: OptState, n: number): Backend {
 }
 
 function logEval(state: OptState, tag: string, s: Scores, sec: number): void {
-  state.evals++;
+  evalCounter++;
+  state.evals = evalCounter;
   fs.appendFileSync(
     LOG_PATH,
     JSON.stringify({
-      i: state.evals,
+      i: evalCounter,
       tag,
       fit: Math.round(s.fitness * 1000) / 1000,
       major: Math.round(s.majorPct * 100) / 100,
@@ -188,6 +197,7 @@ async function main(): Promise<void> {
   const parallel = Math.max(1, Math.round(arg('--parallel', 1)));
   const deadline = Date.now() + budgetMin * 60_000;
   const state = loadState();
+  initEvalCounter(state);
   const rand = mulberry32(state.seed + state.sweep * 977 + state.evals);
   const backend = parallel > 1 ? poolBackend(state, parallel) : sequentialBackend(state);
 

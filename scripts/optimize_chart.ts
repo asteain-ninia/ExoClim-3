@@ -61,7 +61,7 @@ const runSpecs: RunSpec[] = [
 function readRows(logPath: string): Row[] {
   if (!fs.existsSync(logPath)) return [];
 
-  return fs
+  const rows = fs
     .readFileSync(logPath, 'utf8')
     .split('\n')
     .filter((line) => line.trim().length > 0)
@@ -73,6 +73,19 @@ function readRows(logPath: string): Row[] {
         return [];
       }
     });
+  // P0-2: 評価番号の重複を検知して警告(既存 v1 ログの 364-366 重複の再発監視)
+  const seen = new Set<number>();
+  const dups = new Set<number>();
+  for (const r of rows) {
+    if (seen.has(r.i)) dups.add(r.i);
+    seen.add(r.i);
+  }
+  if (dups.size > 0) {
+    console.warn(
+      `[chart] ${path.basename(logPath)}: 評価番号の重複 ${[...dups].slice(0, 10).join(', ')}${dups.size > 10 ? ' …' : ''}`,
+    );
+  }
+  return rows;
 }
 
 function buildRun(spec: RunSpec): Run | null {
