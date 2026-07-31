@@ -119,6 +119,70 @@ const REGION_GATES: RegionGate[] = [
   { id: 'antarctica_ice', latMin: -90, latMax: -75, lonMin: -180, lonMax: 180, mode: 'major', expect: 'E' },
 ];
 
+// ---- 観測 ITCZ 代理(月別・2°経度列の熱帯降水重心、雨量重み付き)----
+// v2 目的関数用。乾季列の重心はノイジーなため雨量で重み付けする
+const obsItczCentroid: Array<Array<number | null>> = [];
+const obsItczWeight: number[][] = [];
+{
+  for (let m = 0; m < 12; m++) {
+    const cRow: Array<number | null> = [];
+    const wRow: number[] = [];
+    for (let cc = 0; cc < climObs.widthCells; cc++) {
+      let s = 0;
+      let sw = 0;
+      let nValid = 0;
+      for (let cr = 0; cr < climObs.heightCells; cr++) {
+        const lat = 89 - cr * 2;
+        if (Math.abs(lat) > 30) continue;
+        const p = climObs.monthlyPrecipitationMm[m]?.[cr * climObs.widthCells + cc] ?? -9999;
+        if (p < 0) continue;
+        nValid++;
+        s += lat * p;
+        sw += p;
+      }
+      if (nValid >= 5 && sw > 10) {
+        cRow.push(s / sw);
+        wRow.push(sw);
+      } else {
+        cRow.push(null);
+        wRow.push(0);
+      }
+    }
+    obsItczCentroid.push(cRow);
+    obsItczWeight.push(wRow);
+  }
+}
+
+/** ITCZ 線と観測降水重心の雨量重み付き RMSE(度) */
+export function itczLineRmse(result: PipelineResult): number {
+  const grid = result.context.grid;
+  const colsPer2 = Math.round(2 / grid.resolutionDeg);
+  let se = 0;
+  let wsum = 0;
+  for (let m = 0; m < 12; m++) {
+    const centers = result.itcz.monthlyCenterLatDegByCol[m];
+    if (!centers) continue;
+    for (let cc = 0; cc < climObs.widthCells; cc++) {
+      const obs = obsItczCentroid[m]?.[cc];
+      const w = obsItczWeight[m]?.[cc] ?? 0;
+      if (obs === null || obs === undefined || w <= 0) continue;
+      let lineSum = 0;
+      let n = 0;
+      for (let dc = 0; dc < colsPer2; dc++) {
+        const gc = cc * colsPer2 + dc;
+        if (gc >= grid.widthCells) continue;
+        lineSum += centers[gc] ?? 0;
+        n++;
+      }
+      if (n === 0) continue;
+      const d = lineSum / n - obs;
+      se += w * d * d;
+      wsum += w;
+    }
+  }
+  return Math.sqrt(se / Math.max(1e-9, wsum));
+}
+
 function majorClassOf(id: number): number {
   if (id >= 1 && id <= 3) return 0;
   if (id >= 4 && id <= 7) return 1;
@@ -135,6 +199,7 @@ export interface Scores {
   tempRmse: number;
   precipRmse: number;
   landMeanMm: number;
+  itczRmse: number;
   fitness: number;
 }
 
@@ -262,12 +327,16 @@ export function evaluateResult(result: PipelineResult): Scores {
   const landMeanMm = pModelSum / Math.max(1e-9, pw);
   const landMeanObs = pObsSum / Math.max(1e-9, pw);
 
+  // v2(2026-07-31 に再登録 — ユーザー指示で ITCZ 線の観測一致を追加):
+  //   v1 の項 − 0.3 × ITCZ 線 RMSE(雨量重み付き、度)
+  const itczRmse = itczLineRmse(result);
   const fitness =
     majorPct +
     1.1 * gates +
     0.25 * detailPct -
     0.35 * tempRmse -
     0.004 * precipRmse -
-    (0.02 * Math.abs(landMeanMm - landMeanObs)) / 10;
-  return { majorPct, detailPct, gates, tempRmse, precipRmse, landMeanMm, fitness };
+    (0.02 * Math.abs(landMeanMm - landMeanObs)) / 10 -
+    0.3 * itczRmse;
+  return { majorPct, detailPct, gates, tempRmse, precipRmse, landMeanMm, itczRmse, fitness };
 }

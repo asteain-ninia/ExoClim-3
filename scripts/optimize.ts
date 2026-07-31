@@ -167,6 +167,7 @@ function logEval(state: OptState, tag: string, s: Scores, sec: number): void {
       gates: s.gates,
       tRmse: Math.round(s.tempRmse * 100) / 100,
       pRmse: Math.round(s.precipRmse),
+      iRmse: Math.round(s.itczRmse * 100) / 100,
       sec: Math.round(sec * 10) / 10,
     }) + '\n',
   );
