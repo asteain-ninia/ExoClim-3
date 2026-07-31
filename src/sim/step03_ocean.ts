@@ -491,7 +491,10 @@ function traceStreamlines(
       if (!isOpen(row, col)) continue;
       for (let steps = 0; steps <= W + H; steps++) {
         if (steps > 0 && zonalVisited.has(zkey(row, col))) break; // 合流
-        for (let dr = -3; dr <= 3; dr++) {
+        // 重複防止の縦パディングは角距離 3° 基準(P1-2: 固定セル数だと解像度で
+        // 平行海流の間引き幅が 4 倍変わる)。1° では従来どおり ±3 セル
+        const padCells = Math.max(1, Math.round(3 / grid.resolutionDeg));
+        for (let dr = -padCells; dr <= padCells; dr++) {
           if (row + dr >= 0 && row + dr < H) zonalVisited.add(zkey(row + dr, col));
         }
         if (steps % 2 === 0) points.push(latDegOfRow(grid, row), lonDegOfCol(grid, wrapCol(grid, col)));

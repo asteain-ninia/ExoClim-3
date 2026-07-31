@@ -732,12 +732,23 @@ function upwindMountainFactor(
 }
 
 /** 近傍(半径 3 セル)の海セル SST 偏差の最小値(寒流検出用) */
+// 対応 spec: FB 2026-07-31 P1-2。探索半径は固定セル数ではなく角距離で定義する
+// (解像度を変えても同じ地形で同じ探索対象距離になる)。値は旧実装 ±6/±3 セルの
+// 1° 地球での実効角半径をそのまま仕様化したもの — 地球 1° の結果は不変。
+export const WARM_OCEAN_SEARCH_RADIUS_DEG = 6;
+export const COLD_COAST_SEARCH_RADIUS_DEG = 3;
+
+/** 角半径 → 探索セル数(最低 1)。緯度・経度とも角度基準の正方窓 */
+export function searchRadiusCells(resolutionDeg: number, radiusDeg: number): number {
+  return Math.max(1, Math.round(radiusDeg / resolutionDeg));
+}
+
 /**
- * 近傍(±6 セル)で最も暖かい海セルの気温(°C)。渦供給の水蒸気量の基準。
+ * 近傍(角半径 6°)で最も暖かい海セルの気温(°C)。渦供給の水蒸気量の基準。
  * 冬の東岸の移動性低気圧は局所の陸気温ではなく暖流の海面から水蒸気を汲む
  * (湾流・黒潮の冬の東岸降水 — 2026-07-30 レビュー H1)
  */
-function nearestOceanTempC(
+export function nearestOceanTempC(
   ctx: SimContext,
   tField: Float32Array,
   row: number,
@@ -745,11 +756,12 @@ function nearestOceanTempC(
 ): number | null {
   const { grid, terrain } = ctx;
   const W = grid.widthCells;
+  const R = searchRadiusCells(grid.resolutionDeg, WARM_OCEAN_SEARCH_RADIUS_DEG);
   let best: number | null = null;
-  for (let dr = -6; dr <= 6; dr++) {
+  for (let dr = -R; dr <= R; dr++) {
     const r = row + dr;
     if (r < 0 || r >= grid.heightCells) continue;
-    for (let dc = -6; dc <= 6; dc++) {
+    for (let dc = -R; dc <= R; dc++) {
       const i = r * W + wrapCol(grid, col + dc);
       if (terrain.landMask[i]) continue;
       const t = tField[i] ?? 0;
@@ -759,7 +771,8 @@ function nearestOceanTempC(
   return best;
 }
 
-function nearestOceanAnomaly(
+/** 近傍(角半径 3°)で最も冷たい海面偏差(寒流沿岸判定) */
+export function nearestOceanAnomaly(
   ctx: SimContext,
   ocean: OceanCurrentResult,
   row: number,
@@ -767,11 +780,12 @@ function nearestOceanAnomaly(
 ): number {
   const { grid, terrain } = ctx;
   const W = grid.widthCells;
+  const R = searchRadiusCells(grid.resolutionDeg, COLD_COAST_SEARCH_RADIUS_DEG);
   let minA = 0;
-  for (let dr = -3; dr <= 3; dr++) {
+  for (let dr = -R; dr <= R; dr++) {
     const r = row + dr;
     if (r < 0 || r >= grid.heightCells) continue;
-    for (let dc = -3; dc <= 3; dc++) {
+    for (let dc = -R; dc <= R; dc++) {
       const i = r * W + wrapCol(grid, col + dc);
       if (terrain.landMask[i]) continue;
       const a = ocean.sstAnomalyC[i] ?? 0;
