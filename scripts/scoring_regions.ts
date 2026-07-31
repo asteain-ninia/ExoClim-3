@@ -145,19 +145,31 @@ export interface RegionalTarget {
   firstGoal: number;
   /** '>=' = 大きいほど良い、'<=' = 小さいほど良い */
   dir: '>=' | '<=';
+  /** 基準を凍結したコミット(版管理 — 再凍結時は previousBaseline に旧値を残す) */
+  baselineCommit: string;
+  previousBaseline?: { value: number; commit: string; reason: string };
 }
 
 export const REGIONAL_TARGETS: RegionalTarget[] = [
-  { id: 'amazon', metric: 'annualMm', label: 'アマゾン年降水', baseline: 1770, firstGoal: 2100, dir: '>=' },
-  { id: 'amazon', metric: 'driestMm', label: 'アマゾン最乾月', baseline: 40, firstGoal: 70, dir: '>=' },
-  { id: 'amazon', metric: 'afAmPct', label: 'アマゾン Af+Am', baseline: 37.2, firstGoal: 60, dir: '>=' },
-  { id: 'east_china', metric: 'annualMm', label: '中国東部年降水', baseline: 401, firstGoal: 750, dir: '>=' },
-  // 基準 15.7 → 14.5 に再凍結(2026-07-31 変更レビュー FB P2-3 の球面探索窓を
-  // 全球退行ゲート内で採用した結果。結果を見た緩和ではなく採用モデルの追随)
-  { id: 'east_china', metric: 'cSharePct', label: '中国東部 C 群', baseline: 14.5, firstGoal: 60, dir: '>=' },
-  { id: 'la_plata', metric: 'annualMm', label: 'ラプラタ年降水', baseline: 444, firstGoal: 700, dir: '>=' },
-  { id: 'patagonia_east', metric: 'annualMm', label: 'パタゴニア東部年降水', baseline: 1942, firstGoal: 900, dir: '<=' },
-  { id: 'patagonia_east', metric: 'bSharePct', label: 'パタゴニア東部 B 群', baseline: 0, firstGoal: 50, dir: '>=' },
+  { id: 'amazon', metric: 'annualMm', label: 'アマゾン年降水', baseline: 1770, firstGoal: 2100, dir: '>=', baselineCommit: '2ba804a' },
+  { id: 'amazon', metric: 'driestMm', label: 'アマゾン最乾月', baseline: 40, firstGoal: 70, dir: '>=', baselineCommit: '2ba804a' },
+  { id: 'amazon', metric: 'afAmPct', label: 'アマゾン Af+Am', baseline: 37.2, firstGoal: 60, dir: '>=', baselineCommit: '2ba804a' },
+  { id: 'east_china', metric: 'annualMm', label: '中国東部年降水', baseline: 401, firstGoal: 750, dir: '>=', baselineCommit: '2ba804a' },
+  {
+    id: 'east_china',
+    metric: 'cSharePct',
+    label: '中国東部 C 群',
+    baseline: 14.5,
+    firstGoal: 60,
+    dir: '>=',
+    baselineCommit: '8afa590',
+    // 球面探索窓(変更レビュー FB P2-3)を全球退行ゲート内で正式採用した
+    // 新基準として再凍結。結果を見た緩和ではなく採用モデルへの追随
+    previousBaseline: { value: 15.7, commit: '2ba804a', reason: 'P2-3 球面探索窓の採用に伴う再凍結' },
+  },
+  { id: 'la_plata', metric: 'annualMm', label: 'ラプラタ年降水', baseline: 444, firstGoal: 700, dir: '>=', baselineCommit: '2ba804a' },
+  { id: 'patagonia_east', metric: 'annualMm', label: 'パタゴニア東部年降水', baseline: 1942, firstGoal: 900, dir: '<=', baselineCommit: '2ba804a' },
+  { id: 'patagonia_east', metric: 'bSharePct', label: 'パタゴニア東部 B 群', baseline: 0, firstGoal: 50, dir: '>=', baselineCommit: '2ba804a' },
 ];
 
 export interface RegionTargetStatus extends RegionalTarget {

@@ -82,6 +82,21 @@ export function saveStateAtomic(statePath: string, state: unknown): void {
   fs.renameSync(tmp, statePath);
 }
 
+/**
+ * 保留較正の最良定数を読む(validate --holdout-fold の未見評価用)。
+ * state が無い・best が空なら明示エラー(未較正の fold を未見評価と
+ * 誤表示しないため)
+ */
+export function loadFoldBest(statePath: string): Record<string, number> {
+  const state = loadStateStrict<{ best?: Record<string, number>; bestFit?: number }>(statePath);
+  if (!state || !state.best || Object.keys(state.best).length === 0) {
+    throw new Error(
+      `保留較正の状態が読めない(${statePath})。先に npx tsx scripts/optimize.ts --holdout-fold N で較正すること`,
+    );
+  }
+  return state.best;
+}
+
 /** 状態の読込。破損時は黙って初期化せず明示エラー */
 export function loadStateStrict<T>(statePath: string): T | null {
   if (!fs.existsSync(statePath)) return null;

@@ -375,10 +375,32 @@ fsync を追加せず、文書を正確化: 「プロセス中断に対する原
 ### 第三 §6. R0 の第一目標判定 — 完了
 
 scoring_regions.ts に REGIONAL_TARGETS(基準 = 2026-07-31 凍結実測:
-アマゾン 1,770/40mm/Af+Am 37.2%、中国東部 401mm/C 群 15.7%、ラプラタ 444mm、
+アマゾン 1,770/40mm/Af+Am 37.2%、中国東部 401mm、ラプラタ 444mm、
 パタゴニア東部 1,942mm/B 群 0% / 第一目標 = 地域降水 FB §12)を凍結。
+基準はコミット識別子つきで版管理する(baselineCommit / previousBaseline)。
+**中国東部 C 群のみ 15.7%(2ba804a、正方窓)→ 14.5%(8afa590)へ再凍結** —
+P2-3 の球面探索窓を全球退行ゲート内で正式採用したことに伴う追随であり、
+旧値と理由は previousBaseline に保持(結果を見た緩和ではない)。
 validate が地域別に 現在/基準/第一目標 と 合否・基準からの退行(±2% 許容)を
 報告。**凍結目的関数(17 ゲート)には一切混入させない**。
+
+### 第三 FB レビュー指摘の残件 3 点 — 完了(2026-07-31)
+
+1. **真の保留評価経路**: `npx tsx scripts/validate.ts --holdout-fold N` が
+   state_foldN.json の最良定数(fold N 除外で較正)を適用して評価する経路を
+   実装。このときのみ trainedExcludingFold=N / isUnseenEvaluation=true となり、
+   fold N 行だけが真の保留(未見)成績としてサマリに ★ 表示される。
+   出力は自動で out/experiments/holdout-foldN/ へ(標準成果物を汚さない)。
+   state が無い/best が空なら明示エラー(未較正 fold の未見評価詐称を防止 —
+   実機でエラー経路を確認済み)。fold 行に trainingGatesPassed を追加。
+   定数読込は optimize_store.loadFoldBest(テスト付き)。
+2. **診断コードの保持**: InvalidInputError(診断 issues を構造で保持し、
+   message にも `[invalid_input:コード]` を含む)を新設。ワーカー境界を
+   文字列で越えても UI とヘッドレスが同一コードを表示できる。テストで
+   型・コード・message の三点を検査。
+3. **中国東部 C 群の基準版管理**: RegionalTarget に baselineCommit /
+   previousBaseline を追加。14.5%(8afa590)へ再凍結し、旧値 15.7%
+   (2ba804a)と理由を previousBaseline に保持。本記録の §6 も同期修正。
 
 ## P2-2. EBM 界面係数 — 最小再現調査完了(採用は再較正とセット)
 

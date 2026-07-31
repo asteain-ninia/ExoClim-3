@@ -130,13 +130,27 @@ export function invalidInputIssues(params: PlanetParams): DiagnosticIssue[] {
 }
 
 /**
+ * 計算不能入力の専用エラー型。診断コード(invalid_input:*)を構造のまま保持し、
+ * message にも同じコードを含める — ワーカー境界を文字列で越えても、UI と
+ * ヘッドレス実行が同一の診断コードを表示できる(変更レビュー FB の受入条件)
+ */
+export class InvalidInputError extends Error {
+  readonly issues: DiagnosticIssue[];
+  constructor(issues: DiagnosticIssue[]) {
+    super(`計算不能な入力: ${issues.map((x) => `[${x.code}] ${x.message}`).join(' / ')}`);
+    this.name = 'InvalidInputError';
+    this.issues = issues;
+  }
+}
+
+/**
  * 計算不能な入力があれば明示エラー(パイプライン冒頭で必ず呼ぶ)。
  * 巨大配列確保・深い計算へ進む前に止める
  */
 export function assertComputableInputs(params: PlanetParams): void {
   const issues = invalidInputIssues(params);
   if (issues.length > 0) {
-    throw new Error(`計算不能な入力: ${issues.map((x) => x.message).join(' / ')}`);
+    throw new InvalidInputError(issues);
   }
 }
 

@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   FIELD_DOMAIN,
+  InvalidInputError,
   assertComputableInputs,
   buildDiagnostics,
   diagnoseFields,
@@ -65,7 +66,20 @@ describe('適用範囲診断(P1-3)', () => {
     for (const [label, p] of cases) {
       expect(invalidInputIssues(p).length, label).toBeGreaterThan(0);
       const t0 = Date.now();
-      expect(() => runPipeline(p), label).toThrow(/計算不能な入力/);
+      // 専用エラー型が診断コードを構造・message の両方で保持する
+      // (UI とヘッドレスが同一コードを表示できる)
+      let caught: unknown = null;
+      try {
+        runPipeline(p);
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught, label).toBeInstanceOf(InvalidInputError);
+      const err = caught as InvalidInputError;
+      expect(err.message, label).toMatch(/計算不能な入力/);
+      expect(err.message, label).toMatch(/\[invalid_input:/);
+      expect(err.issues.length, label).toBeGreaterThan(0);
+      expect(err.issues.every((x) => x.code.startsWith('invalid_input:')), label).toBe(true);
       // 巨大配列確保・深い計算へ進んでいない(即時に停止する)
       expect(Date.now() - t0, label).toBeLessThan(500);
     }

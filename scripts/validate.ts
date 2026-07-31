@@ -31,6 +31,7 @@ import {
   evaluateRegression,
 } from './validate_criteria';
 import { regionKoppenDiag, regionPrecipDiag, regionTargetStatus } from './scoring_regions';
+import { loadFoldBest } from './optimize_store';
 import { HOLDOUT_FOLDS, gateFoldAssignments, keepExcludingFold, keepOnlyFold } from './holdout';
 
 // 採点定義は scripts/scoring.ts に一元化(P0-3)。ここでは複製しない。
@@ -42,10 +43,25 @@ import { HOLDOUT_FOLDS, gateFoldAssignments, keepExcludingFold, keepOnlyFold } f
 // 標準成果物を汚さない。レポートにはコミット識別子・実験名・定数ダイジェスト
 // を含め、採用/棄却と実行条件を後から判別できるようにする。
 const expIdx = process.argv.indexOf('--experiment');
-const EXPERIMENT = expIdx >= 0 ? (process.argv[expIdx + 1] ?? '') : null;
-if (EXPERIMENT !== null && !/^[a-z0-9][a-z0-9-_]*$/i.test(EXPERIMENT)) {
+const EXPERIMENT_ARG = expIdx >= 0 ? (process.argv[expIdx + 1] ?? '') : null;
+if (EXPERIMENT_ARG !== null && !/^[a-z0-9][a-z0-9-_]*$/i.test(EXPERIMENT_ARG)) {
   throw new Error('--experiment には英数字・ハイフン・下線の名前を指定する');
 }
+
+// 変更レビュー FB 残件①: 真の保留評価経路。`--holdout-fold N` で
+// state_foldN.json の最良定数(fold N を除外して較正)を適用し、fold N を
+// 未見データとして評価する。このときだけ isUnseenEvaluation=true になる。
+// 標準成果物を汚さないため、出力先は自動的に out/experiments/ へ切り替わる。
+const hfIdx = process.argv.indexOf('--holdout-fold');
+const HOLDOUT_FOLD = hfIdx >= 0 ? Number(process.argv[hfIdx + 1]) : null;
+if (
+  HOLDOUT_FOLD !== null &&
+  (!Number.isInteger(HOLDOUT_FOLD) || HOLDOUT_FOLD < 0 || HOLDOUT_FOLD > 4)
+) {
+  throw new Error(`--holdout-fold は 0〜4 の整数(指定値: ${String(HOLDOUT_FOLD)})`);
+}
+const EXPERIMENT =
+  EXPERIMENT_ARG ?? (HOLDOUT_FOLD !== null ? `holdout-fold${HOLDOUT_FOLD}` : null);
 const OUT_DIR = EXPERIMENT
   ? path.join(process.cwd(), 'out', 'experiments', EXPERIMENT)
   : path.join(process.cwd(), 'out', 'validate');
@@ -70,6 +86,15 @@ function constantsDigest(): string {
 
 function main(): void {
   fs.mkdirSync(OUT_DIR, { recursive: true });
+  if (HOLDOUT_FOLD !== null) {
+    const statePath = path.join(process.cwd(), 'out', 'optimize', `state_fold${HOLDOUT_FOLD}.json`);
+    const best = loadFoldBest(statePath);
+    Object.assign(MODEL_CONSTANTS, best);
+    console.log(
+      `未見評価モード: fold ${HOLDOUT_FOLD} を除外して較正された定数(${statePath})を適用。` +
+        `fold ${HOLDOUT_FOLD} の区画成績が真の保留評価`,
+    );
+  }
   const t0 = Date.now();
   console.log('パイプライン実行中(実在地球 1°)…');
   const { result, stepTimingsMs } = runPipelineTimed(EARTH_PARAMS);
@@ -158,10 +183,13 @@ function main(): void {
     // 評価(trainedExcludingFold ≠ null)にのみ使う。
     spatialSliceMetrics: {
       note:
-        '全球学習済みモデルの区画別診断(空間 5 分割 = 30° 粗ブロック、決定的ハッシュ、' +
-        '凍結 2026-07-31 — scripts/holdout.ts)。未見評価ではない。全球値は本レポートの正本欄',
-      trainedExcludingFold: null as number | null,
-      isUnseenEvaluation: false,
+        HOLDOUT_FOLD === null
+          ? '全球学習済みモデルの区画別診断(空間 5 分割 = 30° 粗ブロック、決定的ハッシュ、' +
+            '凍結 2026-07-31 — scripts/holdout.ts)。未見評価ではない。全球値は本レポートの正本欄'
+          : `fold ${HOLDOUT_FOLD} を除外して較正した定数での評価。` +
+            `fold ${HOLDOUT_FOLD} の行だけが真の保留(未見)成績で、他は訓練域`,
+      trainedExcludingFold: HOLDOUT_FOLD as number | null,
+      isUnseenEvaluation: HOLDOUT_FOLD !== null,
       gateNote:
         '地域ゲートは枠中心の fold に完全所属(訓練時は保留所属ゲートを丸ごと除外し、' +
         '訓練所属ゲートはその地域全体のセルで判定する)。保留較正のゲート項は ' +
@@ -177,6 +205,7 @@ function main(): void {
         return {
           fold,
           trainingGateCount: regionGates.length - sliceGates.length,
+          trainingGatesPassed: regionGates.filter((g) => gf[g.id] !== fold && g.pass).length,
           sliceGateCount: sliceGates.length,
           sliceGatesPassed: sliceGates.filter((g) => g.pass).length,
           sliceLandSharePct: pct(kSlice.wTotal, k.wTotal),
@@ -218,7 +247,21 @@ function main(): void {
   }
   printSummary(report);
 
-  console.log('区画別診断(全球学習済みモデルのスライス — 未見評価ではない):');
+  if (HOLDOUT_FOLD !== null) {
+    const un = report.spatialSliceMetrics.folds[HOLDOUT_FOLD];
+    if (un) {
+      console.log(
+        `\n★ 真の保留評価(fold ${HOLDOUT_FOLD}、未見): 大分類 ${un.sliceMajorPct}% / 詳細 ${un.sliceDetailPct}%` +
+          ` / 気温RMSE ${un.sliceTempRmseC}°C / 降水RMSE ${un.slicePrecipRmseMm}mm` +
+          ` / 保留ゲート ${un.sliceGatesPassed}/${un.sliceGateCount}(訓練 ${un.trainingGatesPassed}/${un.trainingGateCount})`,
+      );
+    }
+  }
+  console.log(
+    HOLDOUT_FOLD === null
+      ? '区画別診断(全球学習済みモデルのスライス — 未見評価ではない):'
+      : `区画別診断(fold ${HOLDOUT_FOLD} 除外較正の定数 — fold ${HOLDOUT_FOLD} 行のみ未見):`,
+  );
   for (const h of report.spatialSliceMetrics.folds) {
     console.log(
       `  fold ${h.fold}: 陸 ${h.sliceLandSharePct}% 他区画大分類 ${h.otherFoldsMajorPct}% / 当区画 ${h.sliceMajorPct}%` +

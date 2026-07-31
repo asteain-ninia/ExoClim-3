@@ -5,6 +5,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
+  loadFoldBest,
   loadStateStrict,
   nextEvalNumber,
   readEvalLog,
@@ -70,5 +71,15 @@ describe('再開整合性(P0-2)', () => {
     const p = path.join(dir, 'state.json');
     fs.writeFileSync(p, '{"evals": 1');
     expect(() => loadStateStrict(p)).toThrow(/破損/);
+  });
+
+  it('保留較正の最良定数を読める(未見評価用)。無い/空は明示エラー', () => {
+    const p = path.join(dir, 'state_fold2.json');
+    saveStateAtomic(p, { best: { olrAWm2: 203.5, tradeWindMs: 6 }, bestFit: 90 });
+    expect(loadFoldBest(p)).toEqual({ olrAWm2: 203.5, tradeWindMs: 6 });
+    expect(() => loadFoldBest(path.join(dir, 'missing.json'))).toThrow(/保留較正の状態/);
+    const empty = path.join(dir, 'state_fold3.json');
+    saveStateAtomic(empty, { best: {} });
+    expect(() => loadFoldBest(empty)).toThrow(/保留較正の状態/);
   });
 });
