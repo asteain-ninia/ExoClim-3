@@ -28,6 +28,7 @@ import {
   evaluateRegression,
 } from './validate_criteria';
 import { regionKoppenDiag, regionPrecipDiag } from './scoring_regions';
+import { HOLDOUT_FOLDS, gateFoldAssignments, keepExcludingFold, keepOnlyFold } from './holdout';
 
 const OUT_DIR = path.join(process.cwd(), 'out', 'validate');
 // 採点定義は scripts/scoring.ts に一元化(P0-3)。ここでは複製しない。
@@ -106,6 +107,30 @@ function main(): void {
       lineRmseRainWeightedDeg: round2(itczRmseDeg),
     },
     regionGates,
+    // P1-1: 空間ホールドアウトの区画別報告(訓練/保留/全球を混同しない)
+    holdout: {
+      note:
+        '空間 5 分割(30° 粗ブロック、決定的ハッシュ、凍結 2026-07-31 — scripts/holdout.ts)。' +
+        '各行は「fold N を保留検証にした場合」の訓練側と保留側の主要指標。全球値は本レポートの正本欄',
+      gateFolds: gateFoldAssignments(),
+      folds: Array.from({ length: HOLDOUT_FOLDS }, (_, fold) => {
+        const kTrain = koppenScore(result, koppenObs, keepExcludingFold(fold));
+        const kHold = koppenScore(result, koppenObs, keepOnlyFold(fold));
+        const fHold = fieldScore(result, climObs, keepOnlyFold(fold));
+        const pct = (x: number, total: number) => Math.round((x / Math.max(1e-9, total)) * 1000) / 10;
+        return {
+          fold,
+          holdoutLandSharePct: pct(kHold.wTotal, k.wTotal),
+          holdoutMajorSharesObsPct: kHold.majorAreaObsW.map((w) => pct(w, kHold.wTotal)),
+          trainMajorPct: round2(kTrain.majorPct),
+          trainDetailPct: round2(kTrain.detailPct),
+          holdoutMajorPct: round2(kHold.majorPct),
+          holdoutDetailPct: round2(kHold.detailPct),
+          holdoutTempRmseC: round2(fHold.tempRmseC),
+          holdoutPrecipRmseMm: Math.round(fHold.precipRmseMm),
+        };
+      }),
+    },
     // R0(地域降水 FB): 報告専用の地域診断。目的関数には入れない
     regionDiagnostics: {
       note:
@@ -122,6 +147,13 @@ function main(): void {
   fs.writeFileSync(path.join(OUT_DIR, 'report.json'), JSON.stringify(report, null, 2));
   printSummary(report);
 
+  console.log('空間ホールドアウト区画別(P1-1、fold を保留検証にした場合):');
+  for (const h of report.holdout.folds) {
+    console.log(
+      `  fold ${h.fold}: 陸 ${h.holdoutLandSharePct}% 訓練大分類 ${h.trainMajorPct}% / 保留大分類 ${h.holdoutMajorPct}%` +
+        ` 保留気温RMSE ${h.holdoutTempRmseC}°C 保留降水RMSE ${h.holdoutPrecipRmseMm}mm`,
+    );
+  }
   console.log('地域降水診断(R0、報告のみ — モデル/観測):');
   for (const p of report.regionDiagnostics.precip) {
     const kd = report.regionDiagnostics.koppen.find((x) => x.id === p.id);

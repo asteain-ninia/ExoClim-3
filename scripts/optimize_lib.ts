@@ -5,6 +5,7 @@
 import { MODEL_CONSTANTS } from '../src/sim/constants';
 import type { PipelineResult } from '../src/sim/types';
 import { fieldScore, itczLineRmse, koppenScore, scoreRegionGates } from './scoring';
+import { gateFoldAssignments, keepExcludingFold } from './holdout';
 
 export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['moistureDecayOceanKm', 1500, 3200],
@@ -85,11 +86,17 @@ export interface Scores {
 //             − 0.35×気温年RMSE − 0.004×降水年RMSE − 0.02×|陸平均降水偏差|/10
 //             − 0.3×ITCZ 線 RMSE(雨量重み付き、度)
 // 全指標は scoring.ts の面積重み付き定義(P0-3 で validate と共通化)。
-export function evaluateResult(result: PipelineResult): Scores {
-  const k = koppenScore(result);
-  const gates = scoreRegionGates(result).filter((g) => g.pass).length;
-  const f = fieldScore(result);
-  const itczRmse = itczLineRmse(result);
+// holdoutFold 指定時(P1-1)は該当区画のセルと、区画に事前登録された
+// 地域ゲートを目的関数から除外する(空間保留検証)。未指定 = 従来どおり全球。
+export function evaluateResult(result: PipelineResult, holdoutFold?: number): Scores {
+  const keep = keepExcludingFold(holdoutFold);
+  const gateFolds = holdoutFold === undefined ? null : gateFoldAssignments();
+  const k = koppenScore(result, undefined, keep);
+  const gates = scoreRegionGates(result).filter(
+    (g) => g.pass && (gateFolds === null || gateFolds[g.id] !== holdoutFold),
+  ).length;
+  const f = fieldScore(result, undefined, keep);
+  const itczRmse = itczLineRmse(result, undefined, keep);
   const fitness =
     k.majorPct +
     1.1 * gates +

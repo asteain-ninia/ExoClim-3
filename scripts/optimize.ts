@@ -20,8 +20,20 @@ import { loadStateStrict, nextEvalNumber, readEvalLog, saveStateAtomic } from '.
 
 const OUT_DIR = path.join(process.cwd(), 'out', 'optimize');
 fs.mkdirSync(OUT_DIR, { recursive: true });
-const STATE_PATH = path.join(OUT_DIR, 'state.json');
-const LOG_PATH = path.join(OUT_DIR, 'log.jsonl');
+
+// P1-1: --holdout-fold N(0〜4)で空間保留検証区画を目的関数から除外する。
+// 目的関数が変わるため、状態とログは区画別ファイルに分離し全球版と混ぜない。
+const holdoutArgIdx = process.argv.indexOf('--holdout-fold');
+const HOLDOUT_FOLD = holdoutArgIdx >= 0 ? Number(process.argv[holdoutArgIdx + 1]) : undefined;
+if (
+  HOLDOUT_FOLD !== undefined &&
+  (!Number.isInteger(HOLDOUT_FOLD) || HOLDOUT_FOLD < 0 || HOLDOUT_FOLD > 4)
+) {
+  throw new Error(`--holdout-fold は 0〜4 の整数(指定値: ${String(HOLDOUT_FOLD)})`);
+}
+const FILE_SUFFIX = HOLDOUT_FOLD === undefined ? '' : `_fold${HOLDOUT_FOLD}`;
+const STATE_PATH = path.join(OUT_DIR, `state${FILE_SUFFIX}.json`);
+const LOG_PATH = path.join(OUT_DIR, `log${FILE_SUFFIX}.jsonl`);
 
 interface OptState {
   best: Record<string, number>;
@@ -98,7 +110,7 @@ function sequentialBackend(state: OptState): Backend {
         Object.assign(MODEL_CONSTANTS, it.vector);
         const t0 = Date.now();
         const result = runPipeline(EARTH_PARAMS);
-        const s = evaluateResult(result);
+        const s = evaluateResult(result, HOLDOUT_FOLD);
         logEval(state, it.tag, s, (Date.now() - t0) / 1000);
         out.push(s);
       }
@@ -139,7 +151,7 @@ function poolBackend(state: OptState, n: number): Backend {
         }
       };
       w.rl.on('line', onLine);
-      w.proc.stdin!.write(JSON.stringify({ id: 0, vector }) + '\n');
+      w.proc.stdin!.write(JSON.stringify({ id: 0, vector, holdoutFold: HOLDOUT_FOLD }) + '\n');
     });
   return {
     async evalBatch(items) {
@@ -169,6 +181,7 @@ function logEval(state: OptState, tag: string, s: Scores, sec: number): void {
     LOG_PATH,
     JSON.stringify({
       i: evalCounter,
+      ...(HOLDOUT_FOLD !== undefined ? { fold: HOLDOUT_FOLD } : {}),
       tag,
       fit: Math.round(s.fitness * 1000) / 1000,
       major: Math.round(s.majorPct * 100) / 100,
@@ -314,7 +327,10 @@ async function main(): Promise<void> {
       `best fit=${state.bestFit.toFixed(2)}` +
       (b ? ` 大分類=${b.majorPct.toFixed(2)} 詳細=${b.detailPct.toFixed(2)} ゲート=${b.gates} 気温RMSE=${b.tempRmse.toFixed(2)}` : ''),
   );
-  fs.writeFileSync(path.join(OUT_DIR, 'best.json'), JSON.stringify(state.best, null, 2));
+  fs.writeFileSync(
+    path.join(OUT_DIR, `best${FILE_SUFFIX}.json`),
+    JSON.stringify(state.best, null, 2),
+  );
 }
 
 void main();

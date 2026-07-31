@@ -10,11 +10,15 @@ import { evaluateResult } from './optimize_lib';
 const rl = readline.createInterface({ input: process.stdin });
 rl.on('line', (line) => {
   try {
-    const msg = JSON.parse(line) as { id: number; vector: Record<string, number> };
+    const msg = JSON.parse(line) as {
+      id: number;
+      vector: Record<string, number>;
+      holdoutFold?: number;
+    };
     Object.assign(MODEL_CONSTANTS, msg.vector);
     const t0 = Date.now();
     const result = runPipeline(EARTH_PARAMS);
-    const scores = evaluateResult(result);
+    const scores = evaluateResult(result, msg.holdoutFold);
     process.stdout.write(
       JSON.stringify({ id: msg.id, scores, sec: Math.round((Date.now() - t0) / 100) / 10 }) + '\n',
     );

@@ -133,3 +133,41 @@
 4. **注記**: この診断は報告専用で、最適化の目的関数(凍結中)には入れない。
    FB の新ゲート案(amazon_rainforest 等)の合否化は、実験段階(R2 以降)の
    基準凍結時に §12 第一目標と併せて確定する。
+
+## P1-1. 空間ホールドアウト — 完了(分割定義を本節で凍結)
+
+1. **根本原因**: 較正と検証が同じ観測データ・同じ地域ゲートを使うため、
+   73%台は訓練成績であり一般化性能ではなかった。採点にセルマスクの
+   仕組みが無く、空間保留検証が構造的に不可能だった。
+2. **変更ファイル**: `scripts/holdout.ts`(新設 — 分割定義と地域ゲートの
+   事前登録)、`scripts/scoring.ts`(koppenScore / fieldScore / itczLineRmse に
+   CellFilter を追加。未指定は従来どおり)、`scripts/optimize_lib.ts`
+   (evaluateResult(result, holdoutFold?) — 区画セルと登録ゲートを除外)、
+   `scripts/optimize.ts` + `optimize_worker.ts`(--holdout-fold N。状態/ログ/best
+   は state_foldN.json 等へ分離し、凍結中の全球版 v1/v2 成果物と混ぜない)、
+   `scripts/validate.ts`(訓練/保留/全球の区画別報告)。
+3. **凍結する分割定義(2026-07-31)**: 30°×30° 粗ブロック(6×12 = 72 個)を
+   決定的ハッシュ(holdout.ts の foldOfLatLon)で 5 区画へ割当。
+   バランス実測(観測陸・面積重み): 陸面積シェア 15.6〜23.0%、全区画に
+   A〜E の全大分類が存在。地域ゲートの事前登録(枠中心の区画):
+   fold0 = sahara / amazon / india / us_southeast / west_siberia / tibet、
+   fold1 = west_europe / europe_russia / east_siberia / mediterranean、
+   fold2 = congo / california、fold3 = australia、
+   fold4 = arabia / east_asia / patagonia / antarctica。
+4. **追加テスト**: `tests/unit/scripts/holdout.test.ts`(5 件): 全点が
+   ちょうど 1 区画・フィルタ相補、区画和 = 全球(重み分割の完全性)、
+   陸面積バランス 10〜35%、ゲート 17 件の事前登録と決定性、
+   holdoutFold 指定で目的関数からセル・ゲートが除外され未指定は同値。
+   計 64 PASS。
+5. **証拠と現状の一般化ギャップ**: 既定経路はビット一致(fit 93.09 ほか全成分)。
+   validate の区画別報告(現行採用モデル): 保留大分類 61.7%(fold4)〜
+   82.1%(fold2)、訓練側 71.9〜77.0%。fold4(アラビア・東アジア・
+   パタゴニア側)が最弱で、全球 73.9% が過大評価であることが数値化された。
+6. **0.5°/1°/2° の差**: 分割は角度定義のため解像度非依存(foldOfLatLon は
+   セル中心座標のみ使用)。
+7. **空間保留検証**: 基盤導入完了。FB の注のとおり、現行定数は全球で選ばれて
+   いるため真の未見評価には「分割凍結後の再較正」が必要 — これは §6 探索器
+   比較・再較正の段階で実施する(定数凍結中のため今は回さない)。
+8. **残る制約**: ITCZ 線 RMSE の区画判定は観測重心の位置で行う(線は経度連続の
+   ため列単位の除外)。ホールドアウト較正の fitness は全球版と絶対値比較
+   できない(ゲート数・セル集合が異なる)— 比較は必ず同一区画同士で行う。

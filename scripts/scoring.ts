@@ -27,6 +27,12 @@ export interface ClimateFixture {
   monthlyPrecipitationMm: number[][];
 }
 
+/**
+ * セルフィルタ(P1-1 空間ホールドアウト用)。セル中心の緯度経度を受け取り、
+ * false のセルは採点から除外する。undefined = 全セル採点(既定・従来どおり)
+ */
+export type CellFilter = (latDeg: number, lonDeg: number) => boolean;
+
 let koppenObsCache: KoppenFixture | null = null;
 let climObsCache: ClimateFixture | null = null;
 
@@ -143,7 +149,11 @@ export interface KoppenScore {
   confusionW: number[][];
 }
 
-export function koppenScore(result: PipelineResult, obs: KoppenFixture = getKoppenObs()): KoppenScore {
+export function koppenScore(
+  result: PipelineResult,
+  obs: KoppenFixture = getKoppenObs(),
+  keep?: CellFilter,
+): KoppenScore {
   const grid = result.context.grid;
   const land = result.context.terrain.landMask;
   const model = result.koppen.classId;
@@ -158,7 +168,9 @@ export function koppenScore(result: PipelineResult, obs: KoppenFixture = getKopp
 
   for (let row = 0; row < grid.heightCells; row++) {
     const w = areaWeightOfRow(grid, row);
+    const lat = latDegOfRow(grid, row);
     for (let col = 0; col < grid.widthCells; col++) {
+      if (keep && !keep(lat, -180 + (col + 0.5) * grid.resolutionDeg)) continue;
       const i = row * grid.widthCells + col;
       const o = obs.classRaster[i] ?? 0;
       if (!land[i] || o === 0) continue; // 共通陸セル(モデル陸 ∩ 観測陸)のみ採点
@@ -208,7 +220,11 @@ export interface FieldScore {
   logCorrelation: number;
 }
 
-export function fieldScore(result: PipelineResult, clim: ClimateFixture = getClimObs()): FieldScore {
+export function fieldScore(
+  result: PipelineResult,
+  clim: ClimateFixture = getClimObs(),
+  keep?: CellFilter,
+): FieldScore {
   const grid = result.context.grid;
   const land = result.context.terrain.landMask;
   const f = Math.round(2 / grid.resolutionDeg);
@@ -226,6 +242,7 @@ export function fieldScore(result: PipelineResult, clim: ClimateFixture = getCli
     const lat = 89 - cr * 2;
     const w = Math.cos((lat * Math.PI) / 180);
     for (let cc = 0; cc < clim.widthCells; cc++) {
+      if (keep && !keep(lat, -179 + cc * 2)) continue;
       const ci = cr * clim.widthCells + cc;
       let tObsSum = 0;
       let ok = true;
@@ -346,8 +363,12 @@ function itczObs(clim: ClimateFixture): { centroid: Array<Array<number | null>>;
   return itczObsCache;
 }
 
-/** ITCZ 線と観測降水重心の雨量重み付き RMSE(度) */
-export function itczLineRmse(result: PipelineResult, clim: ClimateFixture = getClimObs()): number {
+/** ITCZ 線と観測降水重心の雨量重み付き RMSE(度)。keep は観測重心の位置で判定 */
+export function itczLineRmse(
+  result: PipelineResult,
+  clim: ClimateFixture = getClimObs(),
+  keep?: CellFilter,
+): number {
   const { centroid, weight } = itczObs(clim);
   const grid = result.context.grid;
   const colsPer2 = Math.round(2 / grid.resolutionDeg);
@@ -360,6 +381,7 @@ export function itczLineRmse(result: PipelineResult, clim: ClimateFixture = getC
       const obs = centroid[m]?.[cc];
       const w = weight[m]?.[cc] ?? 0;
       if (obs === null || obs === undefined || w <= 0) continue;
+      if (keep && !keep(obs, -179 + cc * 2)) continue;
       let lineSum = 0;
       let n = 0;
       for (let dc = 0; dc < colsPer2; dc++) {
