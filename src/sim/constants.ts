@@ -151,7 +151,7 @@ export const MODEL_CONSTANTS = {
    * 赤道常湿帯: 年平均 ITCZ 線の残留影響(0〜1)。実物の熱赤道近傍は年 2 回の
    * 通過と近接で乾季にも雨が残る(赤道 = 雨林の定量化)。幅は半幅 ×0.7
    */
-  equatorialItczResidual: 0.666,
+  equatorialItczResidual: 0.482,
   /** 経度方向平滑化の半幅(度)。広すぎるとモンスーンの経度応答が希釈される */
   itczSmoothingHalfWidthDeg: 12,
 
@@ -213,7 +213,7 @@ export const MODEL_CONSTANTS = {
   /** 水蒸気供給の海上減衰距離(km) */
   moistureDecayOceanKm: 1758,
   /** 陸上減衰距離(km、再循環なしの素の値) */
-  moistureDecayLandKm: 1804,
+  moistureDecayLandKm: 1908,
   /** 陸面再蒸発の強さ(0〜1、二回目のパスで局所降水に比例) */
   landRecyclingStrength: 0.35,
   /**
@@ -246,7 +246,7 @@ export const MODEL_CONSTANTS = {
    * (特に春)が 0 に陥没し、タイガが夏乾 Ds に誤判定される対策。
    * 乾季が連続する所(サバナ等)は隣接月も乾いており不変
    */
-  precipMonthBlend: 0.1952,
+  precipMonthBlend: 0.2,
   /** 風上追跡の最大距離(km) */
   moistureTraceMaxKm: 5200,
   /**
@@ -261,24 +261,24 @@ export const MODEL_CONSTANTS = {
    * ITCZ 傘の海洋性ゲート: 供給(無次元)がこの値で傘が全開。乾燥内陸の
    * トラフ直下(アラビア型)では傘が開かず、湿潤収束(ベンガル型)では開く
    */
-  itczLiftSupplyNorm: 1.35,
+  itczLiftSupplyNorm: 0.92664,
   /** ストームトラック(温帯低気圧帯)の増幅 */
   stormTrackBoost: 0.705,
   /** 寒候期のストームトラック追加増幅 */
   stormTrackWinterBoost: 0.15,
   /** 地形性上昇の増幅(基準勾配あたり) */
-  orographicBoost: 1.184,
+  orographicBoost: 0.9,
   /** 風下雨陰の最大抑制(0〜1 が残存率の下限) */
-  rainShadowFloor: 0.2562,
+  rainShadowFloor: 0.27888,
   /** 亜熱帯高圧帯(沈降域)の抑制率(0〜1)。下降枝全域(リッジ−16°〜+5°)に適用 */
   subsidenceSuppression: 0.7632,
   /** 沈降抑制に対する ITCZ 影響の防護係数(1 = 完全防護) */
-  subsidenceItczProtection: 0.8587,
+  subsidenceItczProtection: 0.92732,
   /**
    * 亜熱帯高気圧の西翼(大陸東岸側)の湿潤化: 順行自転では東に海が近いセルほど
    * 沈降抑制を緩める(バミューダ高気圧西縁の湿潤流の相当物)。減衰距離 km。
    */
-  eastCoastSubsidenceRelief: 0.764,
+  eastCoastSubsidenceRelief: 0.647,
   eastCoastSubsidenceDecayKm: 844,
   /** \u6771\u5cb8\u7de9\u548c\u306e\u4f9b\u7d66\u5b9f\u7e3e\u30b2\u30fc\u30c8(\u3053\u306e\u4f9b\u7d66\u3067\u5168\u958b\u3002\u4e7e\u3044\u305f\u6d41\u5165\u306e\u6d77\u3092\u9664\u5916) */
   eastReliefSupplyNorm: 0.476,
@@ -298,7 +298,7 @@ export const MODEL_CONSTANTS = {
    * (最多雨月のこの割合、上限 mm)。年総量は保存(湿潤月から比例控除)。
    * タイガの Dw 化(実物は Df)と Cwa 最多/最少比 276 への対策
    */
-  winterFloorFracOfWettest: 0.3908,
+  winterFloorFracOfWettest: 0.40376,
   winterFloorMaxMm: 34,
   /** 夏半球の偏西風移流の弱化率(ジェットの季節弱化) */
   summerAdvectionFactor: 0.5932,
@@ -308,7 +308,7 @@ export const MODEL_CONSTANTS = {
    * 中緯度の冬雨・内陸湿潤が出ない」への対応。
    */
   stormMoistureSupply: 1.964,
-  stormMoistureDecayKm: 1768,
+  stormMoistureDecayKm: 1848,
   /**
    * 経路上昇の脱水スケール(m)。風上追跡の前方経路で空気がこの高度を上るごとに
    * 水蒸気が e 分の 1 に減る(風上斜面で雨として落ちた分。パタゴニア・チベット
@@ -322,7 +322,7 @@ export const MODEL_CONSTANTS = {
   upwindBlockScanKm: 900,
   upwindBlockFloor: 0.1826,
   /** 寒流沿岸の追加抑制率 */
-  coldCoastSuppression: 0.415,
+  coldCoastSuppression: 0.352,
   /** 全球スケール係数(供給×持ち上げ → mm/月) */
   precipScaleMmPerUnit: 8.2,
 
