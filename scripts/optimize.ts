@@ -10,7 +10,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execSync, spawn, type ChildProcess } from 'node:child_process';
 import * as readline from 'node:readline';
 import { runPipeline } from '../src/sim/pipeline';
 import { MODEL_CONSTANTS } from '../src/sim/constants';
@@ -214,6 +214,37 @@ async function main(): Promise<void> {
     const i = process.argv.indexOf(flag);
     return i >= 0 ? Number(process.argv[i + 1] ?? dflt) : dflt;
   };
+  // run メタ(第四 FB P1): チャートが系列を自動認識できるようにする。
+  // run ごとにチャートのコードへ系列を足し続けない
+  if (RUN_NAME) {
+    const metaPath = path.join(OUT_DIR, `run_${RUN_NAME}.meta.json`);
+    if (!fs.existsSync(metaPath)) {
+      let gitCommit = 'unknown';
+      let gitDirty = true;
+      try {
+        gitCommit = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
+        gitDirty = execSync('git status --porcelain', { encoding: 'utf8' }).trim().length > 0;
+      } catch {
+        /* 架空の値を入れない */
+      }
+      fs.writeFileSync(
+        metaPath,
+        JSON.stringify(
+          {
+            runName: RUN_NAME,
+            label: RUN_NAME,
+            objectiveBasis: 'v2_itcz',
+            gitCommit,
+            gitDirty,
+            startedAt: new Date().toISOString(),
+            holdoutFold: HOLDOUT_FOLD ?? null,
+          },
+          null,
+          2,
+        ),
+      );
+    }
+  }
   const budgetMin = arg('--minutes', 45);
   const parallel = Math.max(1, Math.round(arg('--parallel', 1)));
   const deadline = Date.now() + budgetMin * 60_000;

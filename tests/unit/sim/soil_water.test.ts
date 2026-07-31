@@ -24,7 +24,7 @@ function forcing(): { precip: Float32Array[]; temp: Float32Array[] } {
   return { precip, temp };
 }
 
-function annual(res: SoilWaterResult, key: keyof SoilWaterResult, cell: number): number {
+function annual(res: SoilWaterResult, key: 'actualEtMm' | 'runoffMm', cell: number): number {
   let s = 0;
   for (let m = 0; m < 12; m++) s += res[key][m]?.[cell] ?? 0;
   return s;

@@ -87,8 +87,7 @@ export interface PrecipDiagBox {
 export function potentialEtMmPerMonth(tempC: number): number {
   if (tempC <= 0) return 0;
   return (
-    (K.soilPetScaleMmPerMonth * saturationVaporPressureHpa(tempC)) /
-    saturationVaporPressureHpa(20)
+    (K.soilPetScaleMmPerMonth * saturationVaporPressureHpa(tempC)) / saturationVaporPressureHpa(20)
   );
 }
 
@@ -99,17 +98,38 @@ export interface SoilWaterResult {
   storageMm: Float32Array[];
   /** [month][cell] 流出 mm/月 */
   runoffMm: Float32Array[];
-  /**
-   * [month][cell] 月初の土壌湿り度 S/容量(0〜1)= 実蒸発散 / 可能蒸発散。
-   * 陸面水蒸気供給はこれに比例させる — 「湿った土は蒸発が可能蒸発散に近い」
-   * という無次元量で、気温スケール(可能蒸発散の絶対値)と混ざらない
-   */
+  /** [month][cell] 利用可能水(前月貯水 + 当月降水)/ 容量の 0〜1 クランプ */
   wetness01: Float32Array[];
+  /** [cell] 記録年の貯水変化(年末 − 年初)。周期定常なら 0 */
+  storageChangeMm: Float32Array;
+  /** 実施した空回し年数 */
+  spinupYears: number;
+  /** 最終年の年間貯水変化の陸セル平均絶対値(mm)— 周期定常への到達度 */
+  meanAnnualStorageDriftMm: number;
+  /** 同・最大絶対値(mm)。中立帯のセルに支配されるため参考値 */
+  maxAnnualStorageDriftMm: number;
+  /** 周期定常解へ収束したか(上限年数に達した場合は false) */
+  converged: boolean;
 }
 
 /**
- * 土壌水分の周期定常解。降水場・気温場を固定して years 年空回しする。
- * 決定的(乱数なし・固定反復)。initialFillFrac は収束検証用の初期値指定。
+ * 周期定常判定の許容差(mm/年)。結果を見る前に固定 — 較正つまみではない。
+ * 判定は陸セルの**平均**絶対ドリフトで行う(2026-07-31 に統計量を最大値から
+ * 平均へ変更。理由: 利用可能水が容量〜容量+可能蒸発散の帯にある月は
+ * ET が貯水に依存せず写像の傾きが 1 になり、中立(縮小しない)固定点の
+ * 連続族ができる。この帯のセルではドリフトが線形にしか減らず、最大値は
+ * 数百年でも 2mm/年程度で下げ止まる。バケツモデル固有の縮退であり、
+ * 収支・場の値には効かない[実測: 面積重み ΔS = 0.006mm/年]。
+ * 閾値そのものは緩めていない。最大値も併せて報告する)
+ */
+export const SOIL_SPINUP_TOLERANCE_MM = 0.05;
+
+/**
+ * 土壌水分の周期定常解。降水場・気温場を固定し、年間の貯水変化が
+ * SOIL_SPINUP_TOLERANCE_MM を下回るまで空回しする(上限 maxYears)。
+ * 決定的(乱数なし)。initialFillFrac は収束検証用の初期値指定。
+ * 極寒・極乾など蒸発散が極端に小さい惑星では収束に多くの年数を要するため、
+ * 固定年数ではなくドリフト判定にしている(第四 FB の退化条件対応)。
  */
 export function solveSoilWater(
   cellCount: number,
@@ -117,7 +137,7 @@ export function solveSoilWater(
   precipByMonth: Float32Array[],
   tempByMonth: Float32Array[],
   capacityMm: number,
-  years: number,
+  maxYears: number,
   initialFillFrac = 0,
 ): SoilWaterResult {
   const storage = new Float64Array(cellCount);
@@ -136,20 +156,47 @@ export function solveSoilWater(
     runoffMm.push(new Float32Array(cellCount));
     wetness01.push(new Float32Array(cellCount));
   }
-  if (capacityMm <= 0) return { actualEtMm, storageMm, runoffMm, wetness01 };
-  const totalYears = Math.max(1, Math.round(years));
-  for (let y = 0; y < totalYears; y++) {
-    const record = y === totalYears - 1;
+  const storageChangeMm = new Float32Array(cellCount);
+  if (capacityMm <= 0) {
+    return {
+      actualEtMm,
+      storageMm,
+      runoffMm,
+      wetness01,
+      storageChangeMm,
+      spinupYears: 0,
+      meanAnnualStorageDriftMm: 0,
+      maxAnnualStorageDriftMm: 0,
+      converged: true,
+    };
+  }
+  const limitYears = Math.max(1, Math.round(maxYears));
+  const yearStart = new Float64Array(cellCount);
+  let drift = Number.POSITIVE_INFINITY;
+  let maxDrift = Number.POSITIVE_INFINITY;
+  let usedYears = 0;
+  let converged = false;
+  for (let y = 0; y < limitYears; y++) {
+    usedYears = y + 1;
+    yearStart.set(storage);
+    // 年間ドリフトが許容内に入った次の年を記録年にする(前年の判定結果で決める
+    // ため、記録年そのものが周期定常であることが保証される)
+    const record = converged || y === limitYears - 1;
     for (let m = 0; m < MONTHS_PER_YEAR; m++) {
       const p = precipByMonth[m];
       const t = tempByMonth[m];
       for (let i = 0; i < cellCount; i++) {
         if (!isLand(i)) continue;
+        // 第四 FB P0-2: 前月貯水へ**当月降水を加えてから**湿り度を決める。
+        // 降水前の s0 で湿り度を測ると、空の土壌に大雨が降っても当月 ET が 0 に
+        // なり、季節記憶ではなく 1 か月の位相ずれで乾季が改善してしまう
+        const available = (storage[i] ?? 0) + (p?.[i] ?? 0);
         const pet = potentialEtMmPerMonth(t?.[i] ?? 0);
-        const s0 = storage[i] ?? 0;
-        // 供給律速: 貯水が少ないほど蒸発散が減る(乾季の自己制限)
-        const et = Math.min(s0 + (p?.[i] ?? 0), pet * (s0 / capacityMm));
-        let s = s0 + (p?.[i] ?? 0) - et;
+        // 供給律速: 利用可能水が少ないほど蒸発散が減る(乾季の自己制限)
+        const wet = Math.min(1, Math.max(0, available / capacityMm));
+        const et = Math.min(available, pet * wet);
+        const remaining = available - et;
+        let s = remaining;
         let runoff = 0;
         if (s > capacityMm) {
           runoff = s - capacityMm;
@@ -161,21 +208,57 @@ export function solveSoilWater(
           actualEtMm[m]![i] = et;
           storageMm[m]![i] = s;
           runoffMm[m]![i] = runoff;
-          wetness01[m]![i] = Math.min(1, s0 / capacityMm);
+          wetness01[m]![i] = wet;
         }
       }
     }
+    // 年間ドリフト(年末 − 年初)。判定は陸セル平均、最大値も記録する
+    let sum = 0;
+    let count = 0;
+    maxDrift = 0;
+    for (let i = 0; i < cellCount; i++) {
+      if (!isLand(i)) continue;
+      const d = (storage[i] ?? 0) - (yearStart[i] ?? 0);
+      if (record) storageChangeMm[i] = d;
+      const ad = Math.abs(d);
+      sum += ad;
+      count++;
+      if (ad > maxDrift) maxDrift = ad;
+    }
+    drift = count > 0 ? sum / count : 0;
+    if (record) break; // 周期定常の年を記録し終えた
+    if (drift <= SOIL_SPINUP_TOLERANCE_MM) converged = true; // 次の年を記録年にする
   }
-  return { actualEtMm, storageMm, runoffMm, wetness01 };
+  return {
+    actualEtMm,
+    storageMm,
+    runoffMm,
+    wetness01,
+    storageChangeMm,
+    spinupYears: usedYears,
+    meanAnnualStorageDriftMm: drift,
+    maxAnnualStorageDriftMm: maxDrift,
+    converged,
+  };
 }
 
-/** 全球陸の水収支(mm/年、面積重みなしのセル平均 — 収支の閉じ方の確認用) */
-export interface WaterBudget {
-  precipMm: number;
-  evapotranspirationMm: number;
-  runoffMm: number;
-  storageChangeMm: number;
-  landCells: number;
+// ---- 結合反復の収束(第四 FB P0-1、2026-07-31 事前登録)----
+// 土壌水分 → 実蒸発散 → 陸面供給 → 月ブレンド → 変換 → 後処理(冬季床・
+// 月平滑)までを一つの演算子とし、その固定点を求める。反復内と最終出力で
+// 同じ演算子を使う(旧実装は反復内が月ブレンドと後処理を欠いており、
+// 土壌が収支計算に使った降水と最終降水が一致しなかった = 構造的残差 6.2%)。
+// 許容差と上限は結果を見る前に固定する(較正つまみにしない)。
+export const COUPLING_TOLERANCE_MM_PER_MONTH = 0.2;
+export const COUPLING_MAX_ITERATIONS = 8;
+
+export interface PrecipCouplingDiagnostics {
+  /** 実施した結合反復回数 */
+  iterations: number;
+  maxIterations: number;
+  toleranceMmPerMonth: number;
+  /** 最終反復での陸面積重み付き平均 |ΔP|(mm/月) */
+  finalResidualMmPerMonth: number;
+  converged: boolean;
 }
 
 // ---- R2(地域降水 FB §6): 供給場の循環 3 点月ブレンド ----
@@ -347,20 +430,130 @@ export function computePrecipitation(
     );
   };
 
+  // ---- 後処理: 冬季の弱前線の床 + 降水の月平滑(いずれも陸のみ)----
+  // 第四 FB P0-1: これらは結合演算子の一部であり、反復の中でも最終出力と
+  // 同じものを適用する(旧実装は反復内で欠けており、土壌が収支に使った降水と
+  // 最終降水が別物になっていた)。どちらもセル年総量を保存する。
+  const applyPostAdjust = (arr: Float32Array[]): void => {
+    // 冬季の弱前線の床(年総量保存の再配分)。最乾月が 0mm に張り付く癖
+    // (Cwa 最多/最少比)への対策。熱帯のサバナ乾季には掛からない
+    {
+      const W = grid.widthCells;
+      const decls = ctx.insolation.monthlyDeclinationDeg;
+      for (let row = 0; row < grid.heightCells; row++) {
+        const lat = latDegOfRow(grid, row);
+        const aLat = Math.abs(lat);
+        for (let col = 0; col < W; col++) {
+          const i = row * W + col;
+          if (!terrain.landMask[i]) continue;
+          let wettest = 0;
+          for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+            const p = arr[m]?.[i] ?? 0;
+            if (p > wettest) wettest = p;
+          }
+          const floorMm = Math.min(K.winterFloorMaxMm, K.winterFloorFracOfWettest * wettest);
+          if (floorMm < 0.5) continue;
+          let deficit = 0;
+          let surplus = 0;
+          const floors: number[] = [];
+          for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+            // 適用月 = 盛夏以外(正規化赤緯 < 0.5)。冬限定だと 4〜5 月の
+            // 「春の谷」が夏半年の最乾月になり、秋こぶ(10 月)との組で
+            // タイガが夏乾 Ds に誤判定される(s 条件: 4月 < 10月/3)
+            const summerNorm =
+              (lat >= 0 ? (decls[m] ?? 0) : -(decls[m] ?? 0)) /
+              Math.max(1e-6, ctx.params.body.axialTiltDeg);
+            const ridge =
+              lat >= 0
+                ? (windBelt.monthlyRidgeLatNDeg[m] ?? 31)
+                : (windBelt.monthlyRidgeLatSDeg[m] ?? -31);
+            const pf =
+              lat >= 0
+                ? (windBelt.monthlyPolarFrontLatNDeg[m] ?? 60)
+                : (windBelt.monthlyPolarFrontLatSDeg[m] ?? -60);
+            const inBand = aLat > Math.abs(ridge) + 1 && aLat < Math.abs(pf) + 12;
+            const f = summerNorm < 0.5 && inBand ? floorMm : 0;
+            floors.push(f);
+            const p = arr[m]?.[i] ?? 0;
+            if (p < f) deficit += f - p;
+            else surplus += p - f;
+          }
+          if (deficit <= 0 || surplus <= 0) continue;
+          // 移転は湿潤月の余剰の 35% まで(無制限だと夏の雨をほぼ全部持って
+          // いき、タイガが夏乾の Ds に化ける — 実測)
+          const transfer = Math.min(deficit, surplus * 0.35);
+          const k = transfer / surplus;
+          const fill = transfer / deficit;
+          for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+            const a = arr[m];
+            if (!a) continue;
+            const p = a[i] ?? 0;
+            const f = floors[m] ?? 0;
+            a[i] = p < f ? p + (f - p) * fill : p - (p - f) * k;
+          }
+        }
+      }
+    }
+    // 降水の月平滑(循環 3 点)。風向の月替わりで遷移月が 0 近くまで陥没し
+    // 「夏半年の最乾月」になってタイガが夏乾 Ds に誤判定される対策。
+    // 乾季が連続する所(サバナ・地中海の夏)は隣接月も乾いており不変
+    if (K.precipMonthBlend > 0) {
+      const b = K.precipMonthBlend;
+      const before = arr.map((a) => Float32Array.from(a));
+      for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+        const cur = arr[m];
+        const prev = before[(m + MONTHS_PER_YEAR - 1) % MONTHS_PER_YEAR];
+        const next = before[(m + 1) % MONTHS_PER_YEAR];
+        if (!cur || !prev || !next) continue;
+        for (let i = 0; i < grid.cellCount; i++) {
+          if (!terrain.landMask[i]) continue;
+          cur[i] = (1 - 2 * b) * (before[m]?.[i] ?? 0) + b * (prev[i] ?? 0) + b * (next[i] ?? 0);
+        }
+      }
+    }
+  };
+
+  /** 陸面積重み付き平均 |ΔP|(mm/月) — 結合反復の収束指標 */
+  const meanAbsChange = (a: Float32Array[], b: Float32Array[]): number => {
+    let acc = 0;
+    let wsum = 0;
+    for (let row = 0; row < grid.heightCells; row++) {
+      const w = Math.cos((latDegOfRow(grid, row) * Math.PI) / 180);
+      for (let col = 0; col < grid.widthCells; col++) {
+        const i = row * grid.widthCells + col;
+        if (!terrain.landMask[i]) continue;
+        wsum += w;
+        for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+          acc += w * Math.abs((a[m]?.[i] ?? 0) - (b[m]?.[i] ?? 0));
+        }
+      }
+    }
+    return wsum > 0 ? acc / (wsum * MONTHS_PER_YEAR) : 0;
+  };
+
   const supplies2: Float32Array[] = [];
-  const precipEst: Float32Array[] = [];
+  for (let m = 0; m < MONTHS_PER_YEAR; m++) supplies2.push(new Float32Array(grid.cellCount));
+
+  // 初期推定: 海洋のみ供給 → 変換 → 後処理(演算子は反復内と同一)
+  let precipEst: Float32Array[] = [];
   for (let m = 0; m < MONTHS_PER_YEAR; m++) {
     const tField = temperature.monthlyTemperatureC[m];
     const u = airflow.monthlyWindU[m];
     const v = airflow.monthlyWindV[m];
-    supplies2.push(new Float32Array(grid.cellCount));
-    precipEst.push(tField && u && v ? monthlyConvert(m, blend(supplies1, m)) : new Float32Array(grid.cellCount));
+    precipEst.push(
+      tField && u && v ? monthlyConvert(m, blend(supplies1, m)) : new Float32Array(grid.cellCount),
+    );
   }
+  applyPostAdjust(precipEst);
 
   const soilOn = K.soilWaterCapacityMm > 0;
   const isLand = (i: number): boolean => terrain.landMask[i] === 1;
   let soil: SoilWaterResult | null = null;
-  for (let it = 0; it < K.recyclingIterations; it++) {
+  let iterations = 0;
+  let residual = Number.POSITIVE_INFINITY;
+  let converged = false;
+  for (let it = 1; it <= COUPLING_MAX_ITERATIONS; it++) {
+    iterations = it;
     if (soilOn) {
       soil = solveSoilWater(
         grid.cellCount,
@@ -391,37 +584,52 @@ export function computePrecipitation(
           : Math.min(1, (precipEst[m]?.[i] ?? 0) / 40);
         landSource[i] = K.landRecyclingStrength * wetness;
       }
-      supplies2[m] = traceMoistureSupply(
-        ctx,
-        smallWater,
-        crestElev,
-        tField,
-        u,
-        v,
-        landSource,
-        0,
-      );
+      supplies2[m] = traceMoistureSupply(ctx, smallWater, crestElev, tField, u, v, landSource, 0);
     }
-    if (it < K.recyclingIterations - 1) {
-      for (let m = 0; m < MONTHS_PER_YEAR; m++) {
-        precipEst[m] = monthlyConvert(m, supplies2[m] ?? new Float32Array(grid.cellCount));
-      }
+    const next: Float32Array[] = [];
+    for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+      next.push(monthlyConvert(m, blend(supplies2, m)));
+    }
+    applyPostAdjust(next);
+    residual = meanAbsChange(next, precipEst);
+    precipEst = next;
+    if (residual <= COUPLING_TOLERANCE_MM_PER_MONTH) {
+      converged = true;
+      break;
     }
   }
+  // 最終の土壌診断は収束後の最終降水場で解き直す(返す ET・流出・貯水が
+  // 最終降水と同じ周期解になり、統合水収支が閉じる)
+  if (soilOn) {
+    soil = solveSoilWater(
+      grid.cellCount,
+      isLand,
+      precipEst,
+      temperature.monthlyTemperatureC,
+      K.soilWaterCapacityMm,
+      K.soilSpinupYears,
+    );
+  }
   if (diagOut && soil) diagOut.soil = soil;
+  const coupling: PrecipCouplingDiagnostics = {
+    iterations,
+    maxIterations: COUPLING_MAX_ITERATIONS,
+    toleranceMmPerMonth: COUPLING_TOLERANCE_MM_PER_MONTH,
+    finalResidualMmPerMonth: residual,
+    converged,
+  };
 
-  for (let m = 0; m < MONTHS_PER_YEAR; m++) {
-    const tField = temperature.monthlyTemperatureC[m];
-    const u = airflow.monthlyWindU[m];
-    const v = airflow.monthlyWindV[m];
-    const ridgeN = windBelt.monthlyRidgeLatNDeg[m] ?? 31;
-    const ridgeS = windBelt.monthlyRidgeLatSDeg[m] ?? -31;
-    const pfN = windBelt.monthlyPolarFrontLatNDeg[m] ?? 60;
-    const pfS = windBelt.monthlyPolarFrontLatSDeg[m] ?? -60;
-    if (!tField || !u || !v) {
-      monthlyPrecipMm.push(new Float32Array(grid.cellCount));
-      if (diag) {
-        const N = grid.cellCount;
+  for (let m = 0; m < MONTHS_PER_YEAR; m++) monthlyPrecipMm.push(precipEst[m]!);
+
+  // R1 診断: 収束後の供給からもう一度変換して因子分解を捕捉する
+  // (後処理前の値なので preAdjustMm と一致する)
+  if (diag) {
+    for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+      const tField = temperature.monthlyTemperatureC[m];
+      const u = airflow.monthlyWindU[m];
+      const v = airflow.monthlyWindV[m];
+      const N = grid.cellCount;
+      if (!tField || !u || !v) {
         diag.supplyOcean.push(new Float32Array(N));
         diag.supplyLand.push(new Float32Array(N));
         diag.supplyStorm.push(new Float32Array(N));
@@ -432,14 +640,10 @@ export function computePrecipitation(
         diag.upwindBlock.push(new Float32Array(N));
         diag.liftOther.push(new Float32Array(N));
         diag.preAdjustMm.push(new Float32Array(N));
+        continue;
       }
-      continue;
-    }
-    const supply2 = blend(supplies2, m);
-    let diagM: PrecipDiagMonth | undefined;
-    if (diag) {
-      const N = grid.cellCount;
-      diagM = {
+      const supply2 = blend(supplies2, m);
+      const diagM: PrecipDiagMonth = {
         supplyStorm: new Float32Array(N),
         liftItcz: new Float32Array(N),
         liftFrontal: new Float32Array(N),
@@ -449,32 +653,28 @@ export function computePrecipitation(
         liftOther: new Float32Array(N),
         preAdjustMm: new Float32Array(N),
       };
-    }
-    const precip2 = convertToPrecip(
-      ctx,
-      itcz,
-      m,
-      tField,
-      u,
-      v,
-      supply2,
-      ridgeN,
-      ridgeS,
-      pfN,
-      pfS,
-      dyKm,
-      ocean,
-      eastOceanKm,
-      eastOceanSstA,
-      meanItczCenters,
-      crestElev,
-      diagM,
-    );
-    monthlyPrecipMm.push(precip2);
-    if (diag && diagM) {
+      convertToPrecip(
+        ctx,
+        itcz,
+        m,
+        tField,
+        u,
+        v,
+        supply2,
+        windBelt.monthlyRidgeLatNDeg[m] ?? 31,
+        windBelt.monthlyRidgeLatSDeg[m] ?? -31,
+        windBelt.monthlyPolarFrontLatNDeg[m] ?? 60,
+        windBelt.monthlyPolarFrontLatSDeg[m] ?? -60,
+        dyKm,
+        ocean,
+        eastOceanKm,
+        eastOceanSstA,
+        meanItczCenters,
+        crestElev,
+        diagM,
+      );
       // 海洋由来 = 海のみトレース(パス 1)、陸面再循環由来 = 全供給 − 海のみ
       const supply1b = blend(supplies1, m);
-      const N = grid.cellCount;
       const so = new Float32Array(N);
       const sl = new Float32Array(N);
       for (let i = 0; i < N; i++) {
@@ -491,92 +691,6 @@ export function computePrecipitation(
       diag.upwindBlock.push(diagM.upwindBlock);
       diag.liftOther.push(diagM.liftOther);
       diag.preAdjustMm.push(diagM.preAdjustMm);
-    }
-  }
-
-  // ---- 寒候期の弱前線の床(年総量保存の再配分)----
-  // 最乾月が 0mm に張り付く癖(検証観点: Cwa 最多/最少比 276 vs 実物 ~10)への
-  // 対策。冬のストーム帯内では弱い前線・降雪が最乾月にも数〜十数 mm 残る。
-  // 湿潤月から比例控除して年総量を保存する(B 閾値の年量判定を動かさない。
-  // 夏集中率だけが下がり、実物どおり閾値 2T+28→2T+21 に戻る)。
-  // 熱帯のサバナ乾季(ストーム帯外)には掛からない。
-  {
-    const W = grid.widthCells;
-    const decls = ctx.insolation.monthlyDeclinationDeg;
-    for (let row = 0; row < grid.heightCells; row++) {
-      const lat = latDegOfRow(grid, row);
-      const aLat = Math.abs(lat);
-      for (let col = 0; col < W; col++) {
-        const i = row * W + col;
-        if (!terrain.landMask[i]) continue;
-        let wettest = 0;
-        for (let m = 0; m < MONTHS_PER_YEAR; m++) {
-          const p = monthlyPrecipMm[m]?.[i] ?? 0;
-          if (p > wettest) wettest = p;
-        }
-        const floorMm = Math.min(K.winterFloorMaxMm, K.winterFloorFracOfWettest * wettest);
-        if (floorMm < 0.5) continue;
-        let deficit = 0;
-        let surplus = 0;
-        const floors: number[] = [];
-        for (let m = 0; m < MONTHS_PER_YEAR; m++) {
-          // 適用月 = 盛夏以外(正規化赤緯 < 0.5)。冬限定だと 4〜5 月の「春の谷」
-          // が夏半年の最乾月になり、秋こぶ(10 月)との組でタイガが夏乾 Ds に
-          // 誤判定される(s 条件: 4月 < 10月/3)。初回試験(07-31 未明)は
-          // −0.7pt だったが再循環再較正後の地形で再試験して採用判断する
-          const summerNorm =
-            (lat >= 0 ? (decls[m] ?? 0) : -(decls[m] ?? 0)) /
-            Math.max(1e-6, ctx.params.body.axialTiltDeg);
-          const ridge =
-            lat >= 0
-              ? (windBelt.monthlyRidgeLatNDeg[m] ?? 31)
-              : (windBelt.monthlyRidgeLatSDeg[m] ?? -31);
-          const pf =
-            lat >= 0
-              ? (windBelt.monthlyPolarFrontLatNDeg[m] ?? 60)
-              : (windBelt.monthlyPolarFrontLatSDeg[m] ?? -60);
-          const inBand = aLat > Math.abs(ridge) + 1 && aLat < Math.abs(pf) + 12;
-          const f = summerNorm < 0.5 && inBand ? floorMm : 0;
-          floors.push(f);
-          const p = monthlyPrecipMm[m]?.[i] ?? 0;
-          if (p < f) deficit += f - p;
-          else surplus += p - f;
-        }
-        if (deficit <= 0 || surplus <= 0) continue;
-        // 移転は湿潤月の余剰の 35% まで(無制限だと不足 ≈ 余剰のセルで k→1 と
-        // なり夏の雨をほぼ全部持っていき、タイガが夏乾の Ds に化ける — 実測)。
-        // 足りない分は床の部分充足に留める(季節性の保存が最優先)
-        const transfer = Math.min(deficit, surplus * 0.35);
-        const k = transfer / surplus;
-        const fill = transfer / deficit;
-        for (let m = 0; m < MONTHS_PER_YEAR; m++) {
-          const arr = monthlyPrecipMm[m];
-          if (!arr) continue;
-          const p = arr[i] ?? 0;
-          const f = floors[m] ?? 0;
-          arr[i] = p < f ? p + (f - p) * fill : p - (p - f) * k;
-        }
-      }
-    }
-  }
-
-  // ---- 降水の月ブレンド(陸のみ、軽め)----
-  // 風向の月替わりで遷移月(特に春)が 0 近くまで陥没し、「夏半年の最乾月」に
-  // なってタイガが夏乾 Ds に誤判定される(西シベリア 4 月 7mm vs 実測 31mm)。
-  // 月平均は実際には隣接月と重なる分布の平均なので、軽い 3 点平滑で谷を埋める。
-  // 乾季が連続している所(サバナ・地中海の夏)は隣接月も乾いており不変
-  if (K.precipMonthBlend > 0) {
-    const b = K.precipMonthBlend;
-    const before = monthlyPrecipMm.map((arr) => Float32Array.from(arr));
-    for (let m = 0; m < MONTHS_PER_YEAR; m++) {
-      const cur = monthlyPrecipMm[m];
-      const prev = before[(m + MONTHS_PER_YEAR - 1) % MONTHS_PER_YEAR];
-      const next = before[(m + 1) % MONTHS_PER_YEAR];
-      if (!cur || !prev || !next) continue;
-      for (let i = 0; i < grid.cellCount; i++) {
-        if (!terrain.landMask[i]) continue;
-        cur[i] = (1 - 2 * b) * (before[m]?.[i] ?? 0) + b * (prev[i] ?? 0) + b * (next[i] ?? 0);
-      }
     }
   }
 
@@ -600,7 +714,7 @@ export function computePrecipitation(
       diag.postAdjustDeltaMm.push(delta);
     }
   }
-  return { monthlyPrecipMm, annualPrecipMm };
+  return { monthlyPrecipMm, annualPrecipMm, coupling };
 }
 
 /**

@@ -16,9 +16,60 @@ const OUT_DIR = path.join(process.cwd(), 'out', 'experiments', 'r1-precip-diag')
 fs.mkdirSync(OUT_DIR, { recursive: true });
 
 console.log('パイプライン実行中(実在地球 1°、R1 診断つき)…');
-const { result, precipDiag } = runPipelineWithPrecipDiag(EARTH_PARAMS);
+const { result, precipDiag, soil } = runPipelineWithPrecipDiag(EARTH_PARAMS);
 const grid = result.context.grid;
 const land = result.context.terrain.landMask;
+
+// ---- 統合水収支(第四 FB P0-3): 面積重み付き全球陸 ----
+// 土壌無効時は null(ゼロ収支を成功したように見せない)
+const waterBudget = (() => {
+  if (!soil) return { status: 'disabled' as const };
+  let wsum = 0;
+  let p = 0;
+  let et = 0;
+  let ro = 0;
+  let ds = 0;
+  let absRes = 0;
+  for (let row = 0; row < grid.heightCells; row++) {
+    const w = Math.cos((latDegOfRow(grid, row) * Math.PI) / 180);
+    for (let col = 0; col < grid.widthCells; col++) {
+      const i = row * grid.widthCells + col;
+      if (!land[i]) continue;
+      let cp = 0;
+      let cet = 0;
+      let cro = 0;
+      for (let m = 0; m < 12; m++) {
+        cp += result.precipitation.monthlyPrecipMm[m]?.[i] ?? 0;
+        cet += soil.actualEtMm[m]?.[i] ?? 0;
+        cro += soil.runoffMm[m]?.[i] ?? 0;
+      }
+      const cds = soil.storageChangeMm[i] ?? 0;
+      wsum += w;
+      p += w * cp;
+      et += w * cet;
+      ro += w * cro;
+      ds += w * cds;
+      absRes += w * Math.abs(cp - cet - cro - cds);
+    }
+  }
+  const n = Math.max(1e-9, wsum);
+  const r3 = (x: number) => Math.round(x * 1000) / 1000;
+  return {
+    status: 'ok' as const,
+    note: '面積重み付き全球陸の年収支(mm/年)。P − ET − 流出 − ΔS = 残差',
+    precipMmPerYear: r3(p / n),
+    evapotranspirationMmPerYear: r3(et / n),
+    runoffMmPerYear: r3(ro / n),
+    storageChangeMmPerYear: r3(ds / n),
+    signedResidualMmPerYear: r3((p - et - ro - ds) / n),
+    meanAbsResidualMmPerYear: r3(absRes / n),
+    soilSpinupYears: soil.spinupYears,
+    soilMeanAnnualDriftMm: r3(soil.meanAnnualStorageDriftMm),
+    soilMaxAnnualDriftMm: r3(soil.maxAnnualStorageDriftMm),
+    soilConverged: soil.converged,
+    coupling: result.precipitation.coupling,
+  };
+})();
 
 const FIELDS = [
   ['supplyOcean', '海洋由来供給'],
@@ -100,12 +151,24 @@ const output = {
     `mmPerSupplyUnit(${Math.round(precipDiag.mmPerSupplyUnit * 100) / 100})。` +
     'finalPrecipMm との差は冬季床再配分・月ブレンド(陸のみ)による',
   mmPerSupplyUnit: precipDiag.mmPerSupplyUnit,
+  waterBudget,
   fieldLabels: Object.fromEntries(FIELDS),
   regions,
 };
 fs.writeFileSync(path.join(OUT_DIR, 'precip_factors.json'), JSON.stringify(output, null, 2));
 
 console.log(`出力: ${path.join(OUT_DIR, 'precip_factors.json')}`);
+if (waterBudget.status === 'ok') {
+  console.log(
+    `統合水収支(全球陸・面積重み): 降水 ${waterBudget.precipMmPerYear} = 蒸発散 ${waterBudget.evapotranspirationMmPerYear}` +
+      ` + 流出 ${waterBudget.runoffMmPerYear} + 貯水変化 ${waterBudget.storageChangeMmPerYear}` +
+      ` / 残差 ${waterBudget.signedResidualMmPerYear}(セル別絶対 ${waterBudget.meanAbsResidualMmPerYear})` +
+      ` / 結合反復 ${waterBudget.coupling.iterations} 回・残差 ${waterBudget.coupling.finalResidualMmPerMonth.toFixed(3)}mm/月` +
+      `・収束 ${waterBudget.coupling.converged ? 'あり' : '**未達**'}`,
+  );
+} else {
+  console.log('統合水収支: 土壌水分が無効(disabled)');
+}
 for (const r of regions) {
   const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
   console.log(

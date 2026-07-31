@@ -15,6 +15,7 @@ import {
   computePrecipitation,
   type PrecipDiagBox,
   type PrecipDiagnostics,
+  type SoilWaterResult,
 } from './step06_precipitation';
 import { computeKoppen } from './step07_koppen';
 import type { PipelineResult } from './types';
@@ -39,11 +40,13 @@ export function runPipeline(params: PlanetParams): PipelineResult {
 export function runPipelineWithPrecipDiag(params: PlanetParams): {
   result: PipelineResult;
   precipDiag: PrecipDiagnostics;
+  /** 土壌水分の周期定常解(無効時は null — ゼロ収支を成功に見せない) */
+  soil: SoilWaterResult | null;
 } {
   const box: PrecipDiagBox = {};
   const result = runPipelineCore(params, noTimer, box);
   if (!box.fields) throw new Error('降水診断が生成されなかった(内部エラー)');
-  return { result, precipDiag: box.fields };
+  return { result, precipDiag: box.fields, soil: box.soil ?? null };
 }
 
 /** 物理結果 + ステップ別所要時間(計測は時刻依存 — 物理結果には含めない) */

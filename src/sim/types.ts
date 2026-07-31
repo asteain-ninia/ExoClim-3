@@ -6,6 +6,7 @@ import type { InsolationField } from '@/domain/insolation';
 import type { PlanetParams } from '@/domain/planetParams';
 import type { TerrainField } from '@/domain/terrain';
 import type { PipelineDiagnostics } from './diagnostics';
+import type { PrecipCouplingDiagnostics } from './step06_precipitation';
 
 /** 全ステップ共通の文脈(パイプライン先頭で構築、以後不変) */
 export interface SimContext {
@@ -87,6 +88,8 @@ export interface PrecipitationResult {
   monthlyPrecipMm: Float32Array[];
   /** [cell] 年降水量 mm */
   annualPrecipMm: Float32Array;
+  /** 結合反復(土壌水分 ⇄ 再循環)の収束診断 */
+  coupling: PrecipCouplingDiagnostics;
 }
 
 export interface KoppenResult {

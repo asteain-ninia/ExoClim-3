@@ -2,10 +2,7 @@
 // 受入条件のうち「1 月と 12 月の循環境界を含むテスト」をここで固定する。
 
 import { describe, expect, it } from 'vitest';
-import {
-  SUPPLY_MONTH_BLEND_SIDE,
-  blendSupplyMonths,
-} from '../../../src/sim/step06_precipitation';
+import { SUPPLY_MONTH_BLEND_SIDE, blendSupplyMonths } from '../../../src/sim/step06_precipitation';
 
 function months(values: number[]): Float32Array[] {
   return values.map((v) => Float32Array.from([v, v * 10]));

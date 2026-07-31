@@ -38,7 +38,25 @@ interface Run extends RunSpec {
   bestGates: number;
 }
 
-const runSpecs: RunSpec[] = [
+// run ごとにコードへ系列を足し続けない(第四 FB P1): out/optimize の
+// log_<name>.jsonl を自動列挙し、比較基準は run_<name>.meta.json の
+// objectiveBasis から決める。メタの無い既存 v1/v2 は互換表で扱う。
+interface RunMeta {
+  runName?: string;
+  label?: string;
+  objectiveBasis?: string;
+  gitCommit?: string;
+  gitDirty?: boolean;
+  startedAt?: string;
+}
+
+// 共通基準 = v1 目的関数。v2 系(ITCZ 項あり)は fit + 0.3×ITCZ RMSE で換算
+const BASIS_RESTORES_ITCZ: Record<string, boolean> = {
+  v1: false,
+  v2_itcz: true,
+};
+
+const LEGACY_RUNS: RunSpec[] = [
   {
     label: 'v1',
     basis: '記録値',
@@ -57,6 +75,45 @@ const runSpecs: RunSpec[] = [
     rawColor: '#5b7cae',
   },
 ];
+
+const PALETTE = ['#e0a04a', '#c77dd6', '#5fd0c8', '#d66f6f'];
+
+function discoverRuns(): RunSpec[] {
+  const specs = [...LEGACY_RUNS];
+  if (!fs.existsSync(OUT_DIR)) return specs;
+  const names = fs
+    .readdirSync(OUT_DIR)
+    .filter((f) => /^log_.+\.jsonl$/.test(f))
+    .map((f) => f.replace(/^log_(.+)\.jsonl$/, '$1'))
+    .filter((n) => n !== 'v1')
+    .sort();
+  names.forEach((name, idx) => {
+    let meta: RunMeta = {};
+    const metaPath = path.join(OUT_DIR, `run_${name}.meta.json`);
+    if (fs.existsSync(metaPath)) {
+      try {
+        meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')) as RunMeta;
+      } catch {
+        console.warn(`[chart] ${path.basename(metaPath)} が読めないため既定基準を使う`);
+      }
+    }
+    // メタが無い run は現行の目的関数(v2 系)とみなす
+    const basisKey = meta.objectiveBasis ?? 'v2_itcz';
+    const restores = BASIS_RESTORES_ITCZ[basisKey] ?? true;
+    const color = PALETTE[idx % PALETTE.length] ?? '#e0a04a';
+    specs.push({
+      label: meta.label ?? name,
+      basis: meta.gitCommit ? `${basisKey} @${meta.gitCommit.slice(0, 7)}` : basisKey,
+      logPath: path.join(OUT_DIR, `log_${name}.jsonl`),
+      restoresItczPenalty: restores,
+      bestColor: color,
+      rawColor: color,
+    });
+  });
+  return specs;
+}
+
+const runSpecs: RunSpec[] = discoverRuns();
 
 function readRows(logPath: string): Row[] {
   if (!fs.existsSync(logPath)) return [];

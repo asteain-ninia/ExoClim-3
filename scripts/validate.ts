@@ -332,7 +332,10 @@ function systematicMisses(
   zonal: Array<{ lat: number; obsAnnual: number; modelAnnual: number }>,
 ) {
   const pctOf = (x: number) => Math.round((x / Math.max(1e-9, k.wTotal)) * 1000) / 10;
-  const cls = (id: number) => ({ model: pctOf(k.areaModelW[id] ?? 0), obs: pctOf(k.areaObsW[id] ?? 0) });
+  const cls = (id: number) => ({
+    model: pctOf(k.areaModelW[id] ?? 0),
+    obs: pctOf(k.areaObsW[id] ?? 0),
+  });
   const zonalBias = (lats: number[]) => {
     const rows = zonal.filter((z) => lats.includes(z.lat));
     const s = rows.reduce((a, z) => a + (z.modelAnnual - z.obsAnnual), 0);
@@ -342,17 +345,83 @@ function systematicMisses(
     ...SYSTEMATIC_MISS_BASELINES,
     note: '大面積の系統バイアス追跡(R1 で特定)。confusion は観測メジャー→モデルメジャーの面積 pt',
     benches: [
-      { id: 'c_to_b_pt', label: '温帯 C の乾燥 B 化', current: pctOf(k.confusionW[2]?.[1] ?? 0), baseline: 4.2, target: 0 },
-      { id: 'b_to_a_pt', label: '乾燥 B の湿潤 A 化', current: pctOf(k.confusionW[1]?.[0] ?? 0), baseline: 3.9, target: 0 },
-      { id: 'd_to_e_pt', label: '冷帯 D の寒帯 E 化', current: pctOf(k.confusionW[3]?.[4] ?? 0), baseline: 3.5, target: 0 },
-      { id: 'dfc_model_pct', label: 'Dfc 面積(亜寒帯タイガ)', current: cls(27).model, baseline: 2.6, target: cls(27).obs },
-      { id: 'dfa_model_pct', label: 'Dfa 面積(過剰側)', current: cls(25).model, baseline: 7.4, target: cls(25).obs },
-      { id: 'bwh_model_pct', label: 'BWh 面積(砂漠核)', current: cls(4).model, baseline: 12.3, target: cls(4).obs },
-      { id: 'bsh_model_pct', label: 'BSh 面積(過剰側)', current: cls(6).model, baseline: 8.8, target: cls(6).obs },
-      { id: 'af_model_pct', label: 'Af 面積(過剰側)', current: cls(1).model, baseline: 7.1, target: cls(1).obs },
-      { id: 'am_model_pct', label: 'Am 面積(遷移帯欠落)', current: cls(2).model, baseline: 1.0, target: cls(2).obs },
-      { id: 'arctic_warm_bias_c', label: '北極圏 70-80°N 温暖バイアス °C', current: zonalBias([70, 80]), baseline: 4.5, target: 0 },
-      { id: 's3040_warm_bias_c', label: '南緯 30-40° 温暖バイアス °C', current: zonalBias([-30, -40]), baseline: 5.2, target: 0 },
+      {
+        id: 'c_to_b_pt',
+        label: '温帯 C の乾燥 B 化',
+        current: pctOf(k.confusionW[2]?.[1] ?? 0),
+        baseline: 4.2,
+        target: 0,
+      },
+      {
+        id: 'b_to_a_pt',
+        label: '乾燥 B の湿潤 A 化',
+        current: pctOf(k.confusionW[1]?.[0] ?? 0),
+        baseline: 3.9,
+        target: 0,
+      },
+      {
+        id: 'd_to_e_pt',
+        label: '冷帯 D の寒帯 E 化',
+        current: pctOf(k.confusionW[3]?.[4] ?? 0),
+        baseline: 3.5,
+        target: 0,
+      },
+      {
+        id: 'dfc_model_pct',
+        label: 'Dfc 面積(亜寒帯タイガ)',
+        current: cls(27).model,
+        baseline: 2.6,
+        target: cls(27).obs,
+      },
+      {
+        id: 'dfa_model_pct',
+        label: 'Dfa 面積(過剰側)',
+        current: cls(25).model,
+        baseline: 7.4,
+        target: cls(25).obs,
+      },
+      {
+        id: 'bwh_model_pct',
+        label: 'BWh 面積(砂漠核)',
+        current: cls(4).model,
+        baseline: 12.3,
+        target: cls(4).obs,
+      },
+      {
+        id: 'bsh_model_pct',
+        label: 'BSh 面積(過剰側)',
+        current: cls(6).model,
+        baseline: 8.8,
+        target: cls(6).obs,
+      },
+      {
+        id: 'af_model_pct',
+        label: 'Af 面積(過剰側)',
+        current: cls(1).model,
+        baseline: 7.1,
+        target: cls(1).obs,
+      },
+      {
+        id: 'am_model_pct',
+        label: 'Am 面積(遷移帯欠落)',
+        current: cls(2).model,
+        baseline: 1.0,
+        target: cls(2).obs,
+      },
+      {
+        id: 'arctic_warm_bias_c',
+        label: '北極圏 70-80°N 温暖バイアス °C',
+        current: zonalBias([70, 80]),
+        baseline: 4.5,
+        target: 0,
+      },
+      {
+        id: 's3040_warm_bias_c',
+        label: '南緯 30-40° 温暖バイアス °C',
+        current: zonalBias([-30, -40]),
+        baseline: 5.2,
+        target: 0,
+      },
     ],
   };
 }
