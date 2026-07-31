@@ -158,47 +158,51 @@ function hypotheticalContinent(grid: Grid, split: boolean): TerrainField {
 
 // ---- 手続き生成(種子付き fBm 値ノイズ) ----
 
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+/**
+ * 整数座標ハッシュ → [-1, 1]。乱数種子・オクターブ番号・固定角度格子座標から
+ * 決定的に値を返す(P0-1: 表示解像度は同じ連続ノイズ場の標本密度だけを変える)
+ */
+function hashNoise(seed: number, octave: number, i: number, j: number): number {
+  let h = (seed | 0) ^ Math.imul(octave + 1, 0x9e3779b9);
+  h = Math.imul(h ^ (i | 0), 0x85ebca6b);
+  h = Math.imul(h ^ (j | 0), 0xc2b2ae35);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0x27d4eb2f);
+  h ^= h >>> 15;
+  return ((h >>> 0) / 4294967296) * 2 - 1;
 }
 
-/** 経度方向に周期的な格子値ノイズ 1 オクターブ */
-function valueNoiseOctave(
+/**
+ * 角度定義の値ノイズ 1 オクターブ(経度周期・格子は固定角度)。
+ * sizeDeg は 360 を割り切る値にする(周期の整合)
+ */
+function angleNoiseOctave(
   grid: Grid,
   out: Float32Array,
-  cellsPerLatticeX: number,
+  seed: number,
+  octave: number,
+  sizeDeg: number,
   amplitude: number,
-  rand: () => number,
 ): void {
-  const latticeW = Math.max(2, Math.round(grid.widthCells / cellsPerLatticeX));
-  const latticeH = Math.max(2, Math.round(grid.heightCells / cellsPerLatticeX) + 1);
-  const lattice = new Float32Array(latticeW * latticeH);
-  for (let i = 0; i < lattice.length; i++) lattice[i] = rand() * 2 - 1;
+  const nLon = Math.round(360 / sizeDeg);
+  const nLat = Math.round(180 / sizeDeg);
   const smooth = (t: number) => t * t * (3 - 2 * t);
   for (let row = 0; row < grid.heightCells; row++) {
-    const fy = (row / grid.heightCells) * (latticeH - 1);
-    const y0 = Math.floor(fy);
-    const ty = smooth(fy - y0);
+    const v = (90 - latDegOfRow(grid, row)) / sizeDeg; // 0 .. nLat
+    const j0 = Math.min(nLat - 1, Math.max(0, Math.floor(v)));
+    const ty = smooth(Math.min(1, Math.max(0, v - j0)));
     for (let col = 0; col < grid.widthCells; col++) {
-      const fx = (col / grid.widthCells) * latticeW;
-      const x0 = Math.floor(fx) % latticeW;
-      const x1 = (x0 + 1) % latticeW;
-      const tx = smooth(fx - Math.floor(fx));
-      const y1 = Math.min(latticeH - 1, y0 + 1);
-      const v00 = lattice[y0 * latticeW + x0] ?? 0;
-      const v10 = lattice[y0 * latticeW + x1] ?? 0;
-      const v01 = lattice[y1 * latticeW + x0] ?? 0;
-      const v11 = lattice[y1 * latticeW + x1] ?? 0;
-      const v = (v00 * (1 - tx) + v10 * tx) * (1 - ty) + (v01 * (1 - tx) + v11 * tx) * ty;
+      const u = (lonDegOfCol(grid, col) + 180) / sizeDeg;
+      const i0 = ((Math.floor(u) % nLon) + nLon) % nLon;
+      const i1 = (i0 + 1) % nLon;
+      const tx = smooth(u - Math.floor(u));
+      const v00 = hashNoise(seed, octave, i0, j0);
+      const v10 = hashNoise(seed, octave, i1, j0);
+      const v01 = hashNoise(seed, octave, i0, j0 + 1);
+      const v11 = hashNoise(seed, octave, i1, j0 + 1);
+      const val = (v00 * (1 - tx) + v10 * tx) * (1 - ty) + (v01 * (1 - tx) + v11 * tx) * ty;
       const idx = row * grid.widthCells + col;
-      out[idx] = (out[idx] ?? 0) + v * amplitude;
+      out[idx] = (out[idx] ?? 0) + val * amplitude;
     }
   }
 }
@@ -209,16 +213,18 @@ function procedural(
   landFraction: number,
   reliefScale: number,
 ): TerrainField {
-  const rand = mulberry32(Math.floor(seed));
   const noise = new Float32Array(grid.cellCount);
+  // オクターブは角度で定義(360 を割り切る値)。解像度は標本密度だけを変える
   const octaves: Array<[number, number]> = [
     [90, 1.0],
     [45, 0.55],
-    [22, 0.3],
-    [11, 0.16],
-    [5, 0.08],
+    [22.5, 0.3],
+    [11.25, 0.16],
+    [5.625, 0.08],
   ];
-  for (const [cells, amp] of octaves) valueNoiseOctave(grid, noise, cells, amp, rand);
+  octaves.forEach(([sizeDeg, amp], o) =>
+    angleNoiseOctave(grid, noise, Math.floor(seed), o, sizeDeg, amp),
+  );
 
   // 面積重み付き分位点で海水準を決めて landFraction を達成する
   const entries: Array<[number, number]> = [];
