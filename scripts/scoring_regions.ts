@@ -131,6 +131,72 @@ export function regionPrecipDiag(
   return out;
 }
 
+// ---- 第一到達目標の判定(変更レビュー FB §6 / 地域降水 FB §12) ----
+// 「基準」= 2026-07-31 採用モデルの実測値(凍結 — 退行検知用)。
+// 「第一目標」= 地域降水 FB §12 の値。合否は報告専用で、凍結済みの
+// 最適化目的関数(17 地域ゲート)には一切混入させない。
+export interface RegionalTarget {
+  id: string;
+  metric: 'annualMm' | 'driestMm' | 'afAmPct' | 'cSharePct' | 'bSharePct';
+  label: string;
+  /** 凍結基準(2026-07-31 実測) */
+  baseline: number;
+  /** 第一目標(地域降水 FB §12) */
+  firstGoal: number;
+  /** '>=' = 大きいほど良い、'<=' = 小さいほど良い */
+  dir: '>=' | '<=';
+}
+
+export const REGIONAL_TARGETS: RegionalTarget[] = [
+  { id: 'amazon', metric: 'annualMm', label: 'アマゾン年降水', baseline: 1770, firstGoal: 2100, dir: '>=' },
+  { id: 'amazon', metric: 'driestMm', label: 'アマゾン最乾月', baseline: 40, firstGoal: 70, dir: '>=' },
+  { id: 'amazon', metric: 'afAmPct', label: 'アマゾン Af+Am', baseline: 37.2, firstGoal: 60, dir: '>=' },
+  { id: 'east_china', metric: 'annualMm', label: '中国東部年降水', baseline: 401, firstGoal: 750, dir: '>=' },
+  // 基準 15.7 → 14.5 に再凍結(2026-07-31 変更レビュー FB P2-3 の球面探索窓を
+  // 全球退行ゲート内で採用した結果。結果を見た緩和ではなく採用モデルの追随)
+  { id: 'east_china', metric: 'cSharePct', label: '中国東部 C 群', baseline: 14.5, firstGoal: 60, dir: '>=' },
+  { id: 'la_plata', metric: 'annualMm', label: 'ラプラタ年降水', baseline: 444, firstGoal: 700, dir: '>=' },
+  { id: 'patagonia_east', metric: 'annualMm', label: 'パタゴニア東部年降水', baseline: 1942, firstGoal: 900, dir: '<=' },
+  { id: 'patagonia_east', metric: 'bSharePct', label: 'パタゴニア東部 B 群', baseline: 0, firstGoal: 50, dir: '>=' },
+];
+
+export interface RegionTargetStatus extends RegionalTarget {
+  current: number;
+  meetsFirstGoal: boolean;
+  /** 凍結基準から悪化(相対 2% 超) */
+  regressedFromBaseline: boolean;
+}
+
+export function regionTargetStatus(
+  precip: RegionPrecipDiag[],
+  koppen: RegionKoppenDiag[],
+): RegionTargetStatus[] {
+  const out: RegionTargetStatus[] = [];
+  for (const t of REGIONAL_TARGETS) {
+    const p = precip.find((x) => x.id === t.id);
+    const k = koppen.find((x) => x.id === t.id);
+    let current = NaN;
+    if (t.metric === 'annualMm') current = p?.modelAnnualMm ?? NaN;
+    else if (t.metric === 'driestMm') current = p?.modelDriestMm ?? NaN;
+    else if (t.metric === 'afAmPct') current = k?.afAmModelPct ?? NaN;
+    else if (t.metric === 'cSharePct') current = k?.majorSharesModelPct[2] ?? NaN;
+    else current = k?.majorSharesModelPct[1] ?? NaN;
+    const tol = Math.max(1, Math.abs(t.baseline) * 0.02);
+    const meetsFirstGoal = Number.isFinite(current)
+      ? t.dir === '>='
+        ? current >= t.firstGoal
+        : current <= t.firstGoal
+      : false;
+    const regressedFromBaseline = Number.isFinite(current)
+      ? t.dir === '>='
+        ? current < t.baseline - tol
+        : current > t.baseline + tol
+      : true;
+    out.push({ ...t, current, meetsFirstGoal, regressedFromBaseline });
+  }
+  return out;
+}
+
 export interface RegionKoppenDiag {
   id: string;
   label: string;

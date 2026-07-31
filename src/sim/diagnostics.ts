@@ -57,19 +57,95 @@ export const INPUT_DOMAIN: Array<{
   { code: 'heatTransportStrength', label: '熱輸送強度', min: 0.1, max: 5, get: (p) => p.atmosphere.heatTransportStrength },
 ];
 
-/** 入力の事前診断(計算前)。範囲外・非有限は判定不能 */
+// ---- 計算可能性の事前検査(変更レビュー FB「P1 適用範囲の事前診断」) ----
+// 「計算不能な入力(invalid_input)」と「計算可能だが科学的適用範囲外
+// (out_of_domain)」を分離する。前者は配列確保・反復回数・除算を壊すため、
+// パイプライン冒頭で例外にして一切計算しない。後者は生の場は計算するが、
+// ケッペン等の科学判定を無効とする。
+// 注: UI スライダーの操作範囲は UI 側の定義であり、ここは科学的適用範囲の
+// 単一定義(二重定義しない)。UI 範囲が狭い分には矛盾しない。
+
+const TERRAIN_PRESETS = new Set([
+  'earth',
+  'idealized_continent',
+  'two_continents',
+  'aquaplanet',
+  'all_land',
+]);
+
+/** 計算不能な入力を列挙(1 件でもあれば計算してはならない) */
+export function invalidInputIssues(params: PlanetParams): DiagnosticIssue[] {
+  const issues: DiagnosticIssue[] = [];
+  const bad = (code: string, message: string) =>
+    issues.push({ severity: 'error', code: `invalid_input:${code}`, message });
+
+  // 構造値: 格子・自転方向・地形は配列確保やループ回数に直結する
+  const res = params.gridResolutionDeg;
+  if (!Number.isFinite(res) || res < 0.25 || res > 5) {
+    bad('gridResolutionDeg', `格子分解能 ${String(res)}° が計算可能域 [0.25, 5] の外`);
+  }
+  if (params.body.rotationDirection !== 1 && params.body.rotationDirection !== -1) {
+    bad('rotationDirection', `自転方向 ${String(params.body.rotationDirection)} は 1 か -1 のみ`);
+  }
+  const ecc = params.orbital.eccentricity;
+  if (!Number.isFinite(ecc) || ecc < 0 || ecc >= 0.95) {
+    bad('eccentricity', `軌道離心率 ${String(ecc)} が計算可能域 [0, 0.95) の外`);
+  }
+  const peri = params.orbital.perihelionSeasonDeg;
+  if (!Number.isFinite(peri)) bad('perihelionSeasonDeg', '近日点位相が有限値ではない');
+  // 全数値の非有限検査(NaN は下流の全比較を狂わせる)
+  const nums: Array<[string, number]> = [
+    ['starLuminositySolar', params.orbital.starLuminositySolar],
+    ['semiMajorAxisAu', params.orbital.semiMajorAxisAu],
+    ['radiusKm', params.body.radiusKm],
+    ['rotationPeriodHours', params.body.rotationPeriodHours],
+    ['axialTiltDeg', params.body.axialTiltDeg],
+    ['surfacePressureBar', params.atmosphere.surfacePressureBar],
+    ['greenhouseStrength', params.atmosphere.greenhouseStrength],
+    ['cloudAlbedo', params.atmosphere.cloudAlbedo],
+    ['oceanMixedLayerDepthM', params.atmosphere.oceanMixedLayerDepthM],
+    ['heatTransportStrength', params.atmosphere.heatTransportStrength],
+  ];
+  for (const [code, v] of nums) {
+    if (!Number.isFinite(v)) bad(code, `${code} が有限値ではない`);
+  }
+  if (params.body.radiusKm <= 0) bad('radiusKm', `惑星半径 ${params.body.radiusKm} km が正でない`);
+  if (params.body.rotationPeriodHours <= 0) {
+    bad('rotationPeriodHours', `自転周期 ${params.body.rotationPeriodHours} h が正でない`);
+  }
+  // 地形
+  const t = params.terrain;
+  if (t.kind === 'preset') {
+    if (!TERRAIN_PRESETS.has(t.preset)) bad('terrainPreset', `未知の地形プリセット ${String(t.preset)}`);
+  } else {
+    if (!Number.isFinite(t.seed)) bad('terrainSeed', '手続き地形の種子が有限値ではない');
+    if (!Number.isFinite(t.landFraction) || t.landFraction < 0 || t.landFraction > 1) {
+      bad('landFraction', `陸面積率 ${String(t.landFraction)} が [0, 1] の外`);
+    }
+    if (!Number.isFinite(t.reliefScale) || t.reliefScale <= 0 || t.reliefScale > 10) {
+      bad('reliefScale', `起伏の強さ ${String(t.reliefScale)} が (0, 10] の外`);
+    }
+  }
+  return issues;
+}
+
+/**
+ * 計算不能な入力があれば明示エラー(パイプライン冒頭で必ず呼ぶ)。
+ * 巨大配列確保・深い計算へ進む前に止める
+ */
+export function assertComputableInputs(params: PlanetParams): void {
+  const issues = invalidInputIssues(params);
+  if (issues.length > 0) {
+    throw new Error(`計算不能な入力: ${issues.map((x) => x.message).join(' / ')}`);
+  }
+}
+
+/** 入力の事前診断(科学的適用範囲)。計算可能性は invalidInputIssues が受け持つ */
 export function diagnoseInputs(params: PlanetParams): DiagnosticIssue[] {
   const issues: DiagnosticIssue[] = [];
   for (const d of INPUT_DOMAIN) {
     const v = d.get(params);
-    if (!Number.isFinite(v)) {
-      issues.push({
-        severity: 'error',
-        code: `input:${d.code}:nonfinite`,
-        message: `${d.label} が有限値ではない`,
-      });
-      continue;
-    }
+    if (!Number.isFinite(v)) continue; // 非有限は invalid_input 側で計算前に停止
     if (v < d.min || v > d.max) {
       issues.push({
         severity: 'error',

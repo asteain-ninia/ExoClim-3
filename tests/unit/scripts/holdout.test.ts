@@ -10,7 +10,16 @@ import {
   keepExcludingFold,
   keepOnlyFold,
 } from '../../../scripts/holdout';
-import { getKoppenObs, koppenScore, REGION_GATES } from '../../../scripts/scoring';
+import {
+  fieldScore,
+  getClimObs,
+  getKoppenObs,
+  koppenScore,
+  scoreRegionGates,
+  REGION_GATES,
+  type ClimateFixture,
+  type KoppenFixture,
+} from '../../../scripts/scoring';
 import { evaluateResult } from '../../../scripts/optimize_lib';
 import { syntheticResult } from '../../helpers/syntheticResult';
 
@@ -91,5 +100,96 @@ describe('空間ホールドアウト分割(P1-1)', () => {
     }
     // 未指定は従来どおり(同一値)
     expect(evaluateResult(result)).toEqual(global);
+  });
+
+  it('保留較正の目的関数に ITCZ 項が無く、ゲート項は訓練対象数で正規化(P1-2/P1-3)', () => {
+    const result = syntheticResult();
+    const folds = gateFoldAssignments();
+    for (let f = 0; f < HOLDOUT_FOLDS; f++) {
+      const s = evaluateResult(result, f);
+      const training = scoreRegionGates(result).filter((g) => folds[g.id] !== f);
+      const keep = keepExcludingFold(f);
+      const k = koppenScore(result, undefined, keep);
+      const fld = fieldScore(result, undefined, keep);
+      const gateTerm = (17 * s.gates) / training.length;
+      const expected =
+        k.majorPct +
+        1.1 * gateTerm +
+        0.25 * k.detailPct -
+        0.35 * fld.tempRmseC -
+        0.004 * fld.precipRmseMm -
+        (0.02 * Math.abs(fld.landMeanModelMm - fld.landMeanObsMm)) / 10;
+      expect(s.fitness).toBeCloseTo(expected, 10); // ITCZ 項なしで厳密に再構成できる
+      expect(s.itczRmse).toBeGreaterThan(0); // 参考値としての報告は継続
+    }
+  });
+
+  it('漏洩反証: 保留区画の観測セルを改変しても訓練側の採点が変わらない(P1-2/P1-3)', () => {
+    const result = syntheticResult();
+    const f = 2;
+    const keep = keepExcludingFold(f)!;
+    // ケッペン観測: 保留区画のセルだけ別クラスへ書き換え
+    const ko = getKoppenObs();
+    const koMut: KoppenFixture = { ...ko, classRaster: [...ko.classRaster] };
+    for (let row = 0; row < 180; row++) {
+      const lat = 90 - (row + 0.5);
+      for (let col = 0; col < 360; col++) {
+        const i = row * 360 + col;
+        if ((koMut.classRaster[i] ?? 0) === 0) continue;
+        if (foldOfLatLon(lat, -180 + (col + 0.5)) === f) {
+          koMut.classRaster[i] = (((koMut.classRaster[i] ?? 1) + 4) % 30) + 1;
+        }
+      }
+    }
+    const a = koppenScore(result, ko, keep);
+    const b = koppenScore(result, koMut, keep);
+    expect(b.majorPct).toBe(a.majorPct);
+    expect(b.detailPct).toBe(a.detailPct);
+    // 気候観測: 保留区画の 2° セルの降水・気温を大きく改変
+    const clim = getClimObs();
+    const climMut: ClimateFixture = {
+      ...clim,
+      monthlyPrecipitationMm: clim.monthlyPrecipitationMm.map((m) => [...m]),
+      monthlyTemperatureDeciC: clim.monthlyTemperatureDeciC.map((m) => [...m]),
+    };
+    for (let cr = 0; cr < clim.heightCells; cr++) {
+      const lat = 89 - cr * 2;
+      for (let cc = 0; cc < clim.widthCells; cc++) {
+        if (foldOfLatLon(lat, -179 + cc * 2) !== f) continue;
+        const ci = cr * clim.widthCells + cc;
+        for (let m = 0; m < 12; m++) {
+          const p = climMut.monthlyPrecipitationMm[m]!;
+          const t = climMut.monthlyTemperatureDeciC[m]!;
+          if ((p[ci] ?? -9999) >= 0) p[ci] = (p[ci] ?? 0) + 500;
+          if ((t[ci] ?? -9999) !== -9999) t[ci] = (t[ci] ?? 0) + 100;
+        }
+      }
+    }
+    const fa = fieldScore(result, clim, keep);
+    const fb = fieldScore(result, climMut, keep);
+    expect(fb.tempRmseC).toBe(fa.tempRmseC);
+    expect(fb.precipRmseMm).toBe(fa.precipRmseMm);
+    expect(fb.landMeanObsMm).toBe(fa.landMeanObsMm);
+  });
+
+  it('漏洩反証: 保留所属ゲート領域のモデル改変が訓練ゲート数を変えない(P1-3)', () => {
+    const result = syntheticResult();
+    const folds = gateFoldAssignments();
+    const f = folds['australia_interior_arid']!; // fold 3 に完全所属
+    const before = scoreRegionGates(result).filter((g) => folds[g.id] !== f);
+    // 豪州枠内のモデル分類を全て別クラスへ
+    const grid = result.context.grid;
+    for (let row = 0; row < grid.heightCells; row++) {
+      const lat = 90 - (row + 0.5) * grid.resolutionDeg;
+      if (lat < -30 || lat > -20) continue;
+      for (let col = 0; col < grid.widthCells; col++) {
+        const lon = -180 + (col + 0.5) * grid.resolutionDeg;
+        if (lon < 120 || lon > 145) continue;
+        const i = row * grid.widthCells + col;
+        if (result.koppen.classId[i]) result.koppen.classId[i] = 1;
+      }
+    }
+    const after = scoreRegionGates(result).filter((g) => folds[g.id] !== f);
+    expect(after.map((g) => g.pass)).toEqual(before.map((g) => g.pass));
   });
 });

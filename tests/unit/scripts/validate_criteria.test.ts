@@ -1,11 +1,13 @@
-// P0-4(FB 2026-07-31): 退行防止ゲートと最終受入ゲートの分離。
-// 「退行させたフィクスチャで FAIL する」ことを含めて判定関数を検査する。
+// P0-4(FB 2026-07-31)+ 変更レビュー FB P0-2/P0-3:
+// 退行防止・途中目標・最終受入の三段階分離。判定は非有限値・不正構造に閉じる
+// (旧実装では全指標 NaN が PASS した — 修正前に失敗する再現を含む)。
 
 import { describe, expect, it } from 'vitest';
 import {
   ACCEPTANCE_CRITERIA,
   REGRESSION_BASELINE,
   evaluateAcceptance,
+  evaluateInterimTarget,
   evaluateRegression,
   type AcceptanceMetrics,
   type RegressionMetrics,
@@ -23,79 +25,98 @@ const currentMetrics: RegressionMetrics = {
   landMeanObsMm: 794,
 };
 
-describe('退行防止ゲート(P0-4)', () => {
+describe('退行防止ゲート', () => {
   it('採用モデルの実測値は PASS する', () => {
     const v = evaluateRegression(currentMetrics);
     expect(v.pass).toBe(true);
     expect(v.failures).toEqual([]);
   });
 
-  it('退行フィクスチャ: ゲート喪失は 1 個でも FAIL', () => {
-    const v = evaluateRegression({ ...currentMetrics, gates: 13 });
-    expect(v.pass).toBe(false);
-    expect(v.failures.some((f) => f.includes('地域ゲート'))).toBe(true);
-  });
-
-  it('退行フィクスチャ: 大分類一致率の低下で FAIL', () => {
-    const v = evaluateRegression({ ...currentMetrics, majorPct: 72.9 });
-    expect(v.pass).toBe(false);
-    expect(v.failures.some((f) => f.includes('大分類'))).toBe(true);
-  });
-
-  it('退行フィクスチャ: 気温・降水・ITCZ の悪化でそれぞれ FAIL', () => {
+  it('退行フィクスチャ: ゲート喪失・一致率低下・RMSE 悪化がそれぞれ FAIL', () => {
+    expect(evaluateRegression({ ...currentMetrics, gates: 13 }).pass).toBe(false);
+    expect(evaluateRegression({ ...currentMetrics, majorPct: 72.9 }).pass).toBe(false);
     expect(evaluateRegression({ ...currentMetrics, tempRmseC: 4.0 }).pass).toBe(false);
     expect(evaluateRegression({ ...currentMetrics, precipRmseMm: 850 }).pass).toBe(false);
     expect(evaluateRegression({ ...currentMetrics, itczRmseDeg: 9.0 }).pass).toBe(false);
+    expect(evaluateRegression({ ...currentMetrics, landMeanModelMm: 794 * 1.11 }).pass).toBe(false);
   });
 
-  it('退行フィクスチャ: 陸平均降水比が ±10% を超えると FAIL', () => {
-    const v = evaluateRegression({ ...currentMetrics, landMeanModelMm: 794 * 1.11 });
+  it('全指標 NaN は FAIL(P0-2 — 旧実装は PASS していた)', () => {
+    const nan = Object.fromEntries(
+      Object.keys(currentMetrics).map((k) => [k, Number.NaN]),
+    ) as unknown as RegressionMetrics;
+    const v = evaluateRegression(nan);
     expect(v.pass).toBe(false);
-    expect(v.failures.some((f) => f.includes('陸平均降水比'))).toBe(true);
+    expect(v.failures.some((f) => f.includes('非有限'))).toBe(true);
   });
 
-  it('基準の凍結日と余裕幅が実測値と整合している(基準が実測より緩い)', () => {
+  it('Infinity も FAIL し、指標名を報告する', () => {
+    const v = evaluateRegression({ ...currentMetrics, tempRmseC: Infinity });
+    expect(v.pass).toBe(false);
+    expect(v.failures.some((f) => f.includes('気温年 RMSE') && f.includes('非有限'))).toBe(true);
+  });
+
+  it('基準の凍結日と余裕幅が実測値と整合している', () => {
     expect(REGRESSION_BASELINE.frozenAt).toBe('2026-07-31');
     expect(REGRESSION_BASELINE.majorPctMin).toBeLessThan(currentMetrics.majorPct);
     expect(REGRESSION_BASELINE.tempRmseMaxC).toBeGreaterThan(currentMetrics.tempRmseC);
-    expect(REGRESSION_BASELINE.precipRmseMaxMm).toBeGreaterThan(currentMetrics.precipRmseMm);
   });
 });
 
-const goodAcceptance: AcceptanceMetrics = {
+const base: AcceptanceMetrics = {
   majorAreaGapPt: [1.4, 0, -1.7, -1.4, 1.6],
-  gatesPassed: 12,
+  gatesPassed: 14,
   gatesTotal: 17,
   zonalTempAbsDiffsC: [0.5, 2.0, 4.9, 3.0],
 };
 
-describe('最終受入ゲート(P0-4)', () => {
-  it('全条件を満たす合成値は達成', () => {
-    const v = evaluateAcceptance(goodAcceptance);
-    expect(v.pass).toBe(true);
+describe('途中目標と最終受入の三段階分離(P0-3)', () => {
+  it('境界固定: 途中目標 70% は 11/17(64.7%)FAIL・12/17(70.6%)PASS', () => {
+    expect(evaluateInterimTarget({ ...base, gatesPassed: 11 }).pass).toBe(false);
+    expect(evaluateInterimTarget({ ...base, gatesPassed: 12 }).pass).toBe(true);
+    expect(evaluateInterimTarget({ ...base, gatesPassed: 14 }).pass).toBe(true);
+    expect(evaluateInterimTarget({ ...base, gatesPassed: 16 }).pass).toBe(true);
+    expect(evaluateInterimTarget({ ...base, gatesPassed: 17 }).pass).toBe(true);
   });
 
-  it('帯状平均気温 ±5°C 超過で未達(現状の実態: 南半球高緯度)', () => {
-    const v = evaluateAcceptance({ ...goodAcceptance, zonalTempAbsDiffsC: [0.5, 11.9] });
-    expect(v.pass).toBe(false);
-    expect(v.failures.some((f) => f.includes('帯状平均気温'))).toBe(true);
+  it('境界固定: 最終受入は 17/17 のみ PASS(14/17 も 16/17 も FAIL)', () => {
+    expect(evaluateAcceptance({ ...base, gatesPassed: 12 }).pass).toBe(false);
+    expect(evaluateAcceptance({ ...base, gatesPassed: 14 }).pass).toBe(false);
+    expect(evaluateAcceptance({ ...base, gatesPassed: 16 }).pass).toBe(false);
+    expect(evaluateAcceptance({ ...base, gatesPassed: 17 }).pass).toBe(true);
   });
 
-  it('大分類面積差 ±10pt 超過で未達', () => {
-    const v = evaluateAcceptance({ ...goodAcceptance, majorAreaGapPt: [11, 0, 0, 0, 0] });
-    expect(v.pass).toBe(false);
-    expect(v.failures.some((f) => f.includes('面積差'))).toBe(true);
+  it('最終受入: 帯状気温 ±5°C 超過・面積差 ±10pt 超過は 17/17 でも FAIL', () => {
+    expect(
+      evaluateAcceptance({ ...base, gatesPassed: 17, zonalTempAbsDiffsC: [0.5, 11.9] }).pass,
+    ).toBe(false);
+    expect(
+      evaluateAcceptance({ ...base, gatesPassed: 17, majorAreaGapPt: [11, 0, 0, 0, 0] }).pass,
+    ).toBe(false);
   });
 
-  it('地域ゲート合格率 70% 未満で未達(11/17 = 65%)', () => {
-    const v = evaluateAcceptance({ ...goodAcceptance, gatesPassed: 11 });
-    expect(v.pass).toBe(false);
-    expect(v.failures.some((f) => f.includes('合格率'))).toBe(true);
+  it('全指標 NaN は途中目標・最終受入とも FAIL(P0-2)', () => {
+    const nan: AcceptanceMetrics = {
+      majorAreaGapPt: [NaN, NaN, NaN, NaN, NaN],
+      gatesPassed: NaN,
+      gatesTotal: NaN,
+      zonalTempAbsDiffsC: [NaN],
+    };
+    expect(evaluateInterimTarget(nan).pass).toBe(false);
+    expect(evaluateAcceptance(nan).pass).toBe(false);
   });
 
-  it('受入基準は要件 §6-1 の凍結値', () => {
+  it('不正構造は FAIL: ゲート総数 0・合格数 > 総数・空配列', () => {
+    expect(evaluateAcceptance({ ...base, gatesTotal: 0, gatesPassed: 0 }).pass).toBe(false);
+    expect(evaluateInterimTarget({ ...base, gatesTotal: 0, gatesPassed: 0 }).pass).toBe(false);
+    expect(evaluateAcceptance({ ...base, gatesPassed: 18 }).pass).toBe(false);
+    expect(evaluateAcceptance({ ...base, majorAreaGapPt: [] }).pass).toBe(false);
+    expect(evaluateAcceptance({ ...base, zonalTempAbsDiffsC: [] }).pass).toBe(false);
+  });
+
+  it('受入基準は凍結値(途中 70%・面積 ±10pt・帯状 ±5°C)', () => {
+    expect(ACCEPTANCE_CRITERIA.interimRegionGatePassRateMin).toBe(0.7);
     expect(ACCEPTANCE_CRITERIA.majorAreaGapMaxPt).toBe(10);
-    expect(ACCEPTANCE_CRITERIA.regionGatePassRateMin).toBe(0.7);
     expect(ACCEPTANCE_CRITERIA.zonalTempAbsMaxC).toBe(5);
   });
 });

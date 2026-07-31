@@ -5,9 +5,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   FIELD_DOMAIN,
+  assertComputableInputs,
   buildDiagnostics,
   diagnoseFields,
   diagnoseInputs,
+  invalidInputIssues,
 } from '../../../src/sim/diagnostics';
 import { EARTH_PARAMS, type PlanetParams } from '../../../src/domain/planetParams';
 import { runPipeline } from '../../../src/sim/pipeline';
@@ -25,18 +27,50 @@ describe('適用範囲診断(P1-3)', () => {
     expect(diagnoseInputs(EARTH_PARAMS)).toEqual([]);
   });
 
-  it('範囲外・非有限の入力は理由つきエラー', () => {
+  it('科学的範囲外の入力は理由つきエラー(計算は可能)', () => {
     const hot: PlanetParams = {
       ...EARTH_PARAMS,
       orbital: { ...EARTH_PARAMS.orbital, starLuminositySolar: 1000 },
     };
     const issues = diagnoseInputs(hot);
     expect(issues.some((x) => x.code === 'input:starLuminositySolar:range')).toBe(true);
-    const nan: PlanetParams = {
-      ...EARTH_PARAMS,
-      body: { ...EARTH_PARAMS.body, axialTiltDeg: Number.NaN },
-    };
-    expect(diagnoseInputs(nan).some((x) => x.code === 'input:axialTiltDeg:nonfinite')).toBe(true);
+    expect(invalidInputIssues(hot)).toEqual([]); // 計算自体は可能(invalid ではない)
+  });
+
+  it('計算不能な入力は計算前に明示エラー(invalid_input — 事前診断)', () => {
+    const cases: Array<[string, PlanetParams]> = [
+      ['格子分解能 0', { ...EARTH_PARAMS, gridResolutionDeg: 0 }],
+      ['格子分解能 NaN', { ...EARTH_PARAMS, gridResolutionDeg: Number.NaN }],
+      ['格子分解能 Infinity', { ...EARTH_PARAMS, gridResolutionDeg: Infinity }],
+      [
+        '自転方向 0',
+        { ...EARTH_PARAMS, body: { ...EARTH_PARAMS.body, rotationDirection: 0 as never } },
+      ],
+      [
+        '離心率 1.2',
+        { ...EARTH_PARAMS, orbital: { ...EARTH_PARAMS.orbital, eccentricity: 1.2 } },
+      ],
+      [
+        '傾斜 NaN',
+        { ...EARTH_PARAMS, body: { ...EARTH_PARAMS.body, axialTiltDeg: Number.NaN } },
+      ],
+      [
+        '陸面積率 1.5',
+        {
+          ...EARTH_PARAMS,
+          terrain: { kind: 'procedural', seed: 1, landFraction: 1.5, reliefScale: 1 },
+        },
+      ],
+    ];
+    for (const [label, p] of cases) {
+      expect(invalidInputIssues(p).length, label).toBeGreaterThan(0);
+      const t0 = Date.now();
+      expect(() => runPipeline(p), label).toThrow(/計算不能な入力/);
+      // 巨大配列確保・深い計算へ進んでいない(即時に停止する)
+      expect(Date.now() - t0, label).toBeLessThan(500);
+    }
+    expect(invalidInputIssues(EARTH_PARAMS)).toEqual([]);
+    expect(() => assertComputableInputs(EARTH_PARAMS)).not.toThrow();
   });
 
   it('高加熱端の気温(数千 °C)は判定不能', () => {

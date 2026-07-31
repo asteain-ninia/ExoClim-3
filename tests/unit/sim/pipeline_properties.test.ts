@@ -9,9 +9,10 @@
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { EARTH_PARAMS, type PlanetParams } from '../../../src/domain/planetParams';
-import { runPipeline } from '../../../src/sim/pipeline';
+import { runPipeline, runPipelineTimed } from '../../../src/sim/pipeline';
 import { areaWeightedMean } from '../../../src/domain/grid';
 import type { PipelineResult } from '../../../src/sim/types';
+import { digestOf, nonFiniteLeaves } from '../../helpers/numericWalk';
 
 const RES = 2; // 高速化のため 2°(性質は解像度に依らない)
 
@@ -23,51 +24,17 @@ const AQUA_TILT0: PlanetParams = {
   orbital: { ...EARTH_PARAMS.orbital, eccentricity: 0 },
 };
 
-// FNV-1a で物理場のダイジェストを取る(配列まで決定的かの比較用)
+// P2-2(変更レビュー FB): 決定性ダイジェストと有限性検査は、PipelineResult の
+// 全数値リーフの汎用列挙(tests/helpers/numericWalk.ts)を共有する。
+// 新しい場が追加されても自動的に検査対象へ入る。
 function digest(result: PipelineResult): string {
-  let h = 0x811c9dc5;
-  const mix = (x: number) => {
-    const dv = new DataView(new ArrayBuffer(8));
-    dv.setFloat64(0, x);
-    for (let b = 0; b < 8; b++) {
-      h ^= dv.getUint8(b);
-      h = Math.imul(h, 0x01000193);
-    }
-  };
-  const mixArr = (arr: ArrayLike<number>) => {
-    for (let i = 0; i < arr.length; i++) mix(arr[i] as number);
-  };
-  for (let m = 0; m < 12; m++) {
-    mixArr(result.temperature.monthlyTemperatureC[m] ?? []);
-    mixArr(result.precipitation.monthlyPrecipMm[m] ?? []);
-    mixArr(result.airflow.monthlyWindU[m] ?? []);
-    mixArr(result.itcz.monthlyCenterLatDegByCol[m] ?? []);
-  }
-  mixArr(result.temperature.annualMeanC);
-  mixArr(result.precipitation.annualPrecipMm);
-  mixArr(result.ocean.sstAnomalyC);
-  mixArr(result.koppen.classId);
-  return (h >>> 0).toString(16);
+  return digestOf(result);
 }
 
 function expectAllFinite(result: PipelineResult, label: string): void {
-  const fields: Array<[string, ArrayLike<number>]> = [
-    ['annualMeanC', result.temperature.annualMeanC],
-    ['annualPrecipMm', result.precipitation.annualPrecipMm],
-    ['sstAnomalyC', result.ocean.sstAnomalyC],
-  ];
-  for (let m = 0; m < 12; m++) {
-    fields.push([`temp[${m}]`, result.temperature.monthlyTemperatureC[m] ?? []]);
-    fields.push([`precip[${m}]`, result.precipitation.monthlyPrecipMm[m] ?? []]);
-    fields.push([`windU[${m}]`, result.airflow.monthlyWindU[m] ?? []]);
-    fields.push([`windV[${m}]`, result.airflow.monthlyWindV[m] ?? []]);
-  }
-  for (const [name, arr] of fields) {
-    for (let i = 0; i < arr.length; i++) {
-      if (!Number.isFinite(arr[i] as number)) {
-        throw new Error(`${label}: ${name}[${i}] = ${String(arr[i])} が非有限`);
-      }
-    }
+  const bad = nonFiniteLeaves(result);
+  if (bad.length > 0) {
+    throw new Error(`${label}: 非有限リーフ ${bad.slice(0, 5).join(', ')}(計 ${bad.length} 件)`);
   }
 }
 
@@ -150,6 +117,41 @@ describe('パイプラインの性質(P1-4)', () => {
       atmosphere: { ...AQUA_TILT0.atmosphere, greenhouseStrength: 1.2 },
     });
     expect(globalMeanC(warmer)).toBeGreaterThanOrEqual(globalMeanC(aqua));
+  }, 300_000);
+
+  it('検査の実効性: 1 配列の改変で決定性が、1 値の NaN で有限性が破れる(P2-2)', () => {
+    const before = digest(aqua);
+    const arr = aqua.ocean.sstAnomalyC;
+    const orig = arr[7] ?? 0;
+    arr[7] = orig + 0.5;
+    expect(digest(aqua)).not.toBe(before);
+    arr[7] = Number.NaN;
+    expect(nonFiniteLeaves(aqua).length).toBeGreaterThan(0);
+    arr[7] = orig;
+    expect(digest(aqua)).toBe(before);
+    // 流線座標も検査対象に入っている(汎用列挙の実証)
+    const line = aqua.ocean.streamlines[0];
+    if (line && line.points.length > 0) {
+      const p0 = line.points[0] ?? 0;
+      line.points[0] = p0 + 1;
+      expect(digest(aqua)).not.toBe(before);
+      line.points[0] = p0;
+    }
+  });
+
+  it('時計 API の無い環境でも物理計算が動き、runPipelineTimed と全物理場が一致(P2-1)', () => {
+    const saved = globalThis.performance;
+    let noClock: PipelineResult;
+    try {
+      Reflect.deleteProperty(globalThis, 'performance');
+      noClock = runPipeline(AQUA_TILT0);
+    } finally {
+      (globalThis as Record<string, unknown>)['performance'] = saved;
+    }
+    expect(digest(noClock)).toBe(digest(aqua));
+    const timed = runPipelineTimed(AQUA_TILT0);
+    expect(digest(timed.result)).toBe(digest(aqua));
+    expect(Object.keys(timed.stepTimingsMs).length).toBeGreaterThan(5);
   }, 300_000);
 
   it('逆行で東西風(貿易風・偏西風)の符号が反転する', () => {

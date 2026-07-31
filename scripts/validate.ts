@@ -5,7 +5,9 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 import { PNG } from 'pngjs';
+import { MODEL_CONSTANTS } from '../src/sim/constants';
 import { EARTH_PARAMS } from '../src/domain/planetParams';
 import { runPipelineTimed } from '../src/sim/pipeline';
 import { KOPPEN_CLASSES, KOPPEN_COLORS, MAJOR_CLASS_NAMES } from '../src/domain/koppen';
@@ -25,15 +27,46 @@ import {
   ACCEPTANCE_CRITERIA,
   REGRESSION_BASELINE,
   evaluateAcceptance,
+  evaluateInterimTarget,
   evaluateRegression,
 } from './validate_criteria';
-import { regionKoppenDiag, regionPrecipDiag } from './scoring_regions';
+import { regionKoppenDiag, regionPrecipDiag, regionTargetStatus } from './scoring_regions';
 import { HOLDOUT_FOLDS, gateFoldAssignments, keepExcludingFold, keepOnlyFold } from './holdout';
 
-const OUT_DIR = path.join(process.cwd(), 'out', 'validate');
 // 採点定義は scripts/scoring.ts に一元化(P0-3)。ここでは複製しない。
 // 正本の集計は面積重み(cos 緯度)。旧来のセル単純平均は「非面積重み」の
 // 診断値として nonAreaWeighted 配下にのみ残す。
+//
+// 変更レビュー FB P0-1: 標準採用モデルの出力先は out/validate/ に限る。
+// 単独実験は `--experiment <名前>` で out/experiments/<名前>/ へ出し、
+// 標準成果物を汚さない。レポートにはコミット識別子・実験名・定数ダイジェスト
+// を含め、採用/棄却と実行条件を後から判別できるようにする。
+const expIdx = process.argv.indexOf('--experiment');
+const EXPERIMENT = expIdx >= 0 ? (process.argv[expIdx + 1] ?? '') : null;
+if (EXPERIMENT !== null && !/^[a-z0-9][a-z0-9-_]*$/i.test(EXPERIMENT)) {
+  throw new Error('--experiment には英数字・ハイフン・下線の名前を指定する');
+}
+const OUT_DIR = EXPERIMENT
+  ? path.join(process.cwd(), 'out', 'experiments', EXPERIMENT)
+  : path.join(process.cwd(), 'out', 'validate');
+
+function gitCommitId(): string {
+  try {
+    return execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
+  } catch {
+    return 'unknown'; // 取得できない環境では架空の値を入れない(FB P0-1)
+  }
+}
+
+function constantsDigest(): string {
+  const s = JSON.stringify(MODEL_CONSTANTS);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16);
+}
 
 function main(): void {
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -64,7 +97,7 @@ function main(): void {
     landMeanModelMm: f.landMeanModelMm,
     landMeanObsMm: f.landMeanObsMm,
   });
-  const acceptance = evaluateAcceptance({
+  const acceptanceMetrics = {
     majorAreaGapPt: koppen.majorAreaGapPt,
     gatesPassed,
     gatesTotal: regionGates.length,
@@ -73,10 +106,16 @@ function main(): void {
       Math.abs(z.modelJan - z.obsJan),
       Math.abs(z.modelJul - z.obsJul),
     ]),
-  });
+  };
+  const interim = evaluateInterimTarget(acceptanceMetrics);
+  const acceptance = evaluateAcceptance(acceptanceMetrics);
 
   const report = {
     generatedAt: new Date().toISOString(),
+    // 来歴(FB P0-1): どのコード・どの定数で出した成果物かを機械判別可能に
+    gitCommit: gitCommitId(),
+    runLabel: EXPERIMENT ?? 'baseline',
+    constantsDigest: constantsDigest(),
     stepTimingsMs,
     // P1-3: 適用範囲診断。'out_of_domain' のときケッペン採点は科学的に無効
     diagnostics: result.diagnostics,
@@ -84,12 +123,16 @@ function main(): void {
       '正本の集計は面積重み(cos 緯度)。nonAreaWeighted はセル単純平均の非面積重み診断値。' +
       '観測欠損(-9999)セルは除外、採点は共通陸セル(モデル陸 ∩ 観測有効)のみ',
     regressionPass: regression.pass,
+    interimTargetPass: interim.pass,
     acceptancePass: acceptance.pass,
     regression: { ...regression, baseline: REGRESSION_BASELINE },
+    interimTarget: { ...interim, note: '要件 §6-1 の 70%(途中目標 — 最終合格ではない)' },
     acceptance: {
       ...acceptance,
       criteria: ACCEPTANCE_CRITERIA,
-      note: '要件 §6-2(理想化大陸)・§6-3(退化条件)は別ハーネスで判定する',
+      note:
+        '最終受入は地域ゲート全件 PASS が必要(教訓 §8 — 14/17 は未達)。' +
+        '要件 §6-2(理想化大陸)・§6-3(退化条件)は別ハーネスで判定する',
     },
     koppen,
     temperature: {
@@ -109,38 +152,59 @@ function main(): void {
       lineRmseRainWeightedDeg: round2(itczRmseDeg),
     },
     regionGates,
-    // P1-1: 空間ホールドアウトの区画別報告(訓練/保留/全球を混同しない)
-    holdout: {
+    // 変更レビュー FB P1-1: これは「全球学習済みモデルの区画別診断」であり
+    // 未見データへの一般化性能ではない(現行定数は全球で較正済み)。
+    // holdout / 一般化 / 未見の語は、対象 fold を除外して再較正したモデルの
+    // 評価(trainedExcludingFold ≠ null)にのみ使う。
+    spatialSliceMetrics: {
       note:
-        '空間 5 分割(30° 粗ブロック、決定的ハッシュ、凍結 2026-07-31 — scripts/holdout.ts)。' +
-        '各行は「fold N を保留検証にした場合」の訓練側と保留側の主要指標。全球値は本レポートの正本欄',
+        '全球学習済みモデルの区画別診断(空間 5 分割 = 30° 粗ブロック、決定的ハッシュ、' +
+        '凍結 2026-07-31 — scripts/holdout.ts)。未見評価ではない。全球値は本レポートの正本欄',
+      trainedExcludingFold: null as number | null,
+      isUnseenEvaluation: false,
+      gateNote:
+        '地域ゲートは枠中心の fold に完全所属(訓練時は保留所属ゲートを丸ごと除外し、' +
+        '訓練所属ゲートはその地域全体のセルで判定する)。保留較正のゲート項は ' +
+        '17 × 合格数/訓練対象数 に正規化、ITCZ 項は目的関数から除外(optimize_lib.ts 冒頭)',
       gateFolds: gateFoldAssignments(),
       folds: Array.from({ length: HOLDOUT_FOLDS }, (_, fold) => {
-        const kTrain = koppenScore(result, koppenObs, keepExcludingFold(fold));
-        const kHold = koppenScore(result, koppenObs, keepOnlyFold(fold));
-        const fHold = fieldScore(result, climObs, keepOnlyFold(fold));
+        const gf = gateFoldAssignments();
+        const sliceGates = regionGates.filter((g) => gf[g.id] === fold);
+        const kOther = koppenScore(result, koppenObs, keepExcludingFold(fold));
+        const kSlice = koppenScore(result, koppenObs, keepOnlyFold(fold));
+        const fSlice = fieldScore(result, climObs, keepOnlyFold(fold));
         const pct = (x: number, total: number) => Math.round((x / Math.max(1e-9, total)) * 1000) / 10;
         return {
           fold,
-          holdoutLandSharePct: pct(kHold.wTotal, k.wTotal),
-          holdoutMajorSharesObsPct: kHold.majorAreaObsW.map((w) => pct(w, kHold.wTotal)),
-          trainMajorPct: round2(kTrain.majorPct),
-          trainDetailPct: round2(kTrain.detailPct),
-          holdoutMajorPct: round2(kHold.majorPct),
-          holdoutDetailPct: round2(kHold.detailPct),
-          holdoutTempRmseC: round2(fHold.tempRmseC),
-          holdoutPrecipRmseMm: Math.round(fHold.precipRmseMm),
+          trainingGateCount: regionGates.length - sliceGates.length,
+          sliceGateCount: sliceGates.length,
+          sliceGatesPassed: sliceGates.filter((g) => g.pass).length,
+          sliceLandSharePct: pct(kSlice.wTotal, k.wTotal),
+          sliceMajorSharesObsPct: kSlice.majorAreaObsW.map((w) => pct(w, kSlice.wTotal)),
+          otherFoldsMajorPct: round2(kOther.majorPct),
+          otherFoldsDetailPct: round2(kOther.detailPct),
+          sliceMajorPct: round2(kSlice.majorPct),
+          sliceDetailPct: round2(kSlice.detailPct),
+          sliceTempRmseC: round2(fSlice.tempRmseC),
+          slicePrecipRmseMm: Math.round(fSlice.precipRmseMm),
         };
       }),
     },
     // R0(地域降水 FB): 報告専用の地域診断。目的関数には入れない
-    regionDiagnostics: {
-      note:
-        '面積重み(cos 緯度)・2° 観測有効セルのみ・モデルは陸ブロック平均・' +
-        '最乾/最多雨月は地域平均月別系列の最小/最大。詳細は scoring_regions.ts 冒頭',
-      precip: regionPrecipDiag(result, climObs),
-      koppen: regionKoppenDiag(result, koppenObs),
-    },
+    regionDiagnostics: (() => {
+      const precip = regionPrecipDiag(result, climObs);
+      const koppenDiag = regionKoppenDiag(result, koppenObs);
+      return {
+        note:
+          '面積重み(cos 緯度)・2° 観測有効セルのみ・モデルは陸ブロック平均・' +
+          '最乾/最多雨月は地域平均月別系列の最小/最大。詳細は scoring_regions.ts 冒頭',
+        precip,
+        koppen: koppenDiag,
+        // 「基準」= 2026-07-31 凍結実測値、「第一目標」= 地域降水 FB §12。
+        // 報告専用 — 凍結目的関数(17 ゲート)には混入させない
+        targetStatus: regionTargetStatus(precip, koppenDiag),
+      };
+    })(),
     logStructure: scoreLogStructure(result, koppenObs),
   };
 
@@ -154,11 +218,11 @@ function main(): void {
   }
   printSummary(report);
 
-  console.log('空間ホールドアウト区画別(P1-1、fold を保留検証にした場合):');
-  for (const h of report.holdout.folds) {
+  console.log('区画別診断(全球学習済みモデルのスライス — 未見評価ではない):');
+  for (const h of report.spatialSliceMetrics.folds) {
     console.log(
-      `  fold ${h.fold}: 陸 ${h.holdoutLandSharePct}% 訓練大分類 ${h.trainMajorPct}% / 保留大分類 ${h.holdoutMajorPct}%` +
-        ` 保留気温RMSE ${h.holdoutTempRmseC}°C 保留降水RMSE ${h.holdoutPrecipRmseMm}mm`,
+      `  fold ${h.fold}: 陸 ${h.sliceLandSharePct}% 他区画大分類 ${h.otherFoldsMajorPct}% / 当区画 ${h.sliceMajorPct}%` +
+        ` 当区画気温RMSE ${h.sliceTempRmseC}°C 当区画降水RMSE ${h.slicePrecipRmseMm}mm`,
     );
   }
   console.log('地域降水診断(R0、報告のみ — モデル/観測):');
@@ -170,13 +234,22 @@ function main(): void {
         (kd ? ` Af+Am ${kd.afAmModelPct}% vs ${kd.afAmObsPct}%` : ''),
     );
   }
+  console.log('地域降水の第一目標(基準 = 2026-07-31 凍結、目標 = 地域降水 FB §12):');
+  for (const t of report.regionDiagnostics.targetStatus) {
+    const mark = t.meetsFirstGoal ? '✅' : t.regressedFromBaseline ? '❌ 基準から退行' : '⏳';
+    console.log(
+      `  ${mark} ${t.label}: 現在 ${t.current} / 基準 ${t.baseline} / 第一目標 ${t.dir} ${t.firstGoal}`,
+    );
+  }
 
   console.log(
     `\n退行防止ゲート(基準凍結 ${REGRESSION_BASELINE.frozenAt}): ${regression.pass ? '✅ PASS' : '❌ FAIL — 非零終了'}`,
   );
   for (const msg of regression.failures) console.log(`  ❌ ${msg}`);
+  console.log(`途中目標(要件 §6-1 の 70%): ${interim.pass ? '✅ 達成' : '⏳ 未達'}`);
+  for (const msg of interim.failures) console.log(`  ⏳ ${msg}`);
   console.log(
-    `最終受入ゲート(要件 §6-1、凍結 ${ACCEPTANCE_CRITERIA.frozenAt}): ${acceptance.pass ? '✅ 達成' : '⏳ 未達(正直な現在地。終了コードには影響しない)'}`,
+    `最終受入ゲート(地域ゲート全件 + §6-1、凍結 ${ACCEPTANCE_CRITERIA.frozenAt}): ${acceptance.pass ? '✅ 達成' : '⏳ 未達(正直な現在地。終了コードには影響しない)'}`,
   );
   for (const msg of acceptance.failures) console.log(`  ⏳ ${msg}`);
   process.exitCode = regression.pass ? 0 : 1;

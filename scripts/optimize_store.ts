@@ -62,7 +62,17 @@ export function nextEvalNumber(stateEvals: number, logMaxEval: number): number {
   return Math.max(stateEvals, logMaxEval) + 1;
 }
 
-/** 状態の原子的保存: 一時ファイルへ書き、置換 */
+/**
+ * 状態の保存: 一時ファイルへ書き、rename で置換。
+ *
+ * 保証範囲(変更レビュー FB P2-4 で明確化): これは**プロセス中断に対する
+ * 原子的置換**である — 書込み途中でプロセスが死んでも既存本体は壊れない。
+ * fsync は行わないため、**電源断・OS クラッシュ直後の永続化は保証しない**
+ * (最悪、直近バッチの state 更新が失われるが、評価番号の正本はログ側
+ * [readEvalLog] にあり、再開時に nextEvalNumber が整合させる)。
+ * 一時ファイルが残った場合は無視され、次回保存で上書きされる
+ * (loadStateStrict は本体のみ読む)。
+ */
 export function saveStateAtomic(statePath: string, state: unknown): void {
   const tmp = path.join(
     path.dirname(statePath),

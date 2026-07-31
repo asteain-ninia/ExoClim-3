@@ -10,6 +10,7 @@
 
 import { MONTHS_PER_YEAR } from '@/domain/insolation';
 import { latDegOfRow, cellHeightKm, cellWidthKm, wrapCol } from '@/domain/grid';
+import type { Grid } from '@/domain/grid';
 import { MODEL_CONSTANTS as K } from './constants';
 import { itczInfluenceAt } from './step01_itcz';
 import type {
@@ -732,19 +733,49 @@ function upwindMountainFactor(
 }
 
 /** 近傍(半径 3 セル)の海セル SST 偏差の最小値(寒流検出用) */
-// 対応 spec: FB 2026-07-31 P1-2。探索半径は固定セル数ではなく角距離で定義する
-// (解像度を変えても同じ地形で同じ探索対象距離になる)。値は旧実装 ±6/±3 セルの
-// 1° 地球での実効角半径をそのまま仕様化したもの — 地球 1° の結果は不変。
+// 対応 spec: FB 2026-07-31 P1-2 + 変更レビュー FB P2-3。探索半径は固定セル数
+// ではなく球面上の角距離で定義する(解像度を変えても同じ地形で同じ探索対象
+// 距離になる)。値は旧実装 ±6/±3 セルの 1° 地球での実効角半径の仕様化。
+// 窓は正方形ではなく円形: 候補は dφ² + (dλ·cos(中間緯度))² ≤ R² で判定する
+// (境界は R ちょうどを含む)。高緯度では同じ角半径がより多くの経度列に届く。
 export const WARM_OCEAN_SEARCH_RADIUS_DEG = 6;
 export const COLD_COAST_SEARCH_RADIUS_DEG = 3;
 
-/** 角半径 → 探索セル数(最低 1)。緯度・経度とも角度基準の正方窓 */
-export function searchRadiusCells(resolutionDeg: number, radiusDeg: number): number {
-  return Math.max(1, Math.round(radiusDeg / resolutionDeg));
+/** 中心セルから球面角距離 radiusDeg 以内の全セルを列挙(近似: cos 補正付き平面) */
+export function forEachCellWithinAngularRadius(
+  grid: Grid,
+  row: number,
+  col: number,
+  radiusDeg: number,
+  visit: (cellIndex: number) => void,
+): void {
+  const res = grid.resolutionDeg;
+  const W = grid.widthCells;
+  const lat0 = 90 - (row + 0.5) * res;
+  const drMax = Math.ceil(radiusDeg / res);
+  const r2 = radiusDeg * radiusDeg;
+  for (let dr = -drMax; dr <= drMax; dr++) {
+    const r = row + dr;
+    if (r < 0 || r >= grid.heightCells) continue;
+    const lat1 = 90 - (r + 0.5) * res;
+    const dPhi = Math.abs(lat1 - lat0);
+    const rem2 = r2 - dPhi * dPhi;
+    if (rem2 < -1e-9) continue;
+    const cosMid = Math.max(0.05, Math.cos((((lat0 + lat1) / 2) * Math.PI) / 180));
+    const dcMax = Math.min(
+      Math.floor(W / 2),
+      Math.ceil(Math.sqrt(Math.max(0, rem2)) / (res * cosMid)),
+    );
+    for (let dc = -dcMax; dc <= dcMax; dc++) {
+      const dLam = Math.abs(dc) * res * cosMid;
+      if (dPhi * dPhi + dLam * dLam > r2 + 1e-9) continue;
+      visit(r * W + wrapCol(grid, col + dc));
+    }
+  }
 }
 
 /**
- * 近傍(角半径 6°)で最も暖かい海セルの気温(°C)。渦供給の水蒸気量の基準。
+ * 近傍(球面角半径 6°)で最も暖かい海セルの気温(°C)。渦供給の水蒸気量の基準。
  * 冬の東岸の移動性低気圧は局所の陸気温ではなく暖流の海面から水蒸気を汲む
  * (湾流・黒潮の冬の東岸降水 — 2026-07-30 レビュー H1)
  */
@@ -755,23 +786,16 @@ export function nearestOceanTempC(
   col: number,
 ): number | null {
   const { grid, terrain } = ctx;
-  const W = grid.widthCells;
-  const R = searchRadiusCells(grid.resolutionDeg, WARM_OCEAN_SEARCH_RADIUS_DEG);
   let best: number | null = null;
-  for (let dr = -R; dr <= R; dr++) {
-    const r = row + dr;
-    if (r < 0 || r >= grid.heightCells) continue;
-    for (let dc = -R; dc <= R; dc++) {
-      const i = r * W + wrapCol(grid, col + dc);
-      if (terrain.landMask[i]) continue;
-      const t = tField[i] ?? 0;
-      if (best === null || t > best) best = t;
-    }
-  }
+  forEachCellWithinAngularRadius(grid, row, col, WARM_OCEAN_SEARCH_RADIUS_DEG, (i) => {
+    if (terrain.landMask[i]) return;
+    const t = tField[i] ?? 0;
+    if (best === null || t > best) best = t;
+  });
   return best;
 }
 
-/** 近傍(角半径 3°)で最も冷たい海面偏差(寒流沿岸判定) */
+/** 近傍(球面角半径 3°)で最も冷たい海面偏差(寒流沿岸判定) */
 export function nearestOceanAnomaly(
   ctx: SimContext,
   ocean: OceanCurrentResult,
@@ -779,18 +803,11 @@ export function nearestOceanAnomaly(
   col: number,
 ): number {
   const { grid, terrain } = ctx;
-  const W = grid.widthCells;
-  const R = searchRadiusCells(grid.resolutionDeg, COLD_COAST_SEARCH_RADIUS_DEG);
   let minA = 0;
-  for (let dr = -R; dr <= R; dr++) {
-    const r = row + dr;
-    if (r < 0 || r >= grid.heightCells) continue;
-    for (let dc = -R; dc <= R; dc++) {
-      const i = r * W + wrapCol(grid, col + dc);
-      if (terrain.landMask[i]) continue;
-      const a = ocean.sstAnomalyC[i] ?? 0;
-      if (a < minA) minA = a;
-    }
-  }
+  forEachCellWithinAngularRadius(grid, row, col, COLD_COAST_SEARCH_RADIUS_DEG, (i) => {
+    if (terrain.landMask[i]) return;
+    const a = ocean.sstAnomalyC[i] ?? 0;
+    if (a < minA) minA = a;
+  });
   return minA;
 }

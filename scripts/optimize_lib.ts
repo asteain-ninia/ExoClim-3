@@ -88,23 +88,44 @@ export interface Scores {
 // 全指標は scoring.ts の面積重み付き定義(P0-3 で validate と共通化)。
 // holdoutFold 指定時(P1-1)は該当区画のセルと、区画に事前登録された
 // 地域ゲートを目的関数から除外する(空間保留検証)。未指定 = 従来どおり全球。
+//
+// 変更レビュー FB P1-2(事前登録 2026-07-31): 保留較正の目的関数から
+// ITCZ 項を除外する(案 1 を採用)。理由: 観測 ITCZ 重心は全球の熱帯降水から
+// 生成されるため、重心座標への事後フィルタでは保留区画の観測降水の混入
+// (漏洩)を除けない。ITCZ RMSE 自体は参考値として全球で報告し続ける。
+//
+// 変更レビュー FB P1-3(事前登録 2026-07-31): 保留較正のゲート項は絶対数
+// ではなく「17 × 合格数 / 訓練対象ゲート数」で正規化する。fold ごとに訓練
+// ゲート数(11〜16 件)が異なり、絶対数では fold 間で項の最大値・重みが
+// 揃わないため。全球較正(holdoutFold 未指定)は従来どおり絶対数で不変。
 export function evaluateResult(result: PipelineResult, holdoutFold?: number): Scores {
   const keep = keepExcludingFold(holdoutFold);
   const gateFolds = holdoutFold === undefined ? null : gateFoldAssignments();
   const k = koppenScore(result, undefined, keep);
-  const gates = scoreRegionGates(result).filter(
-    (g) => g.pass && (gateFolds === null || gateFolds[g.id] !== holdoutFold),
-  ).length;
+  const gateResults = scoreRegionGates(result);
+  const itczRmse = itczLineRmse(result);
   const f = fieldScore(result, undefined, keep);
-  const itczRmse = itczLineRmse(result, undefined, keep);
+  let gates: number;
+  let gateTerm: number;
+  let itczTerm: number;
+  if (gateFolds === null) {
+    gates = gateResults.filter((g) => g.pass).length;
+    gateTerm = gates;
+    itczTerm = itczRmse;
+  } else {
+    const training = gateResults.filter((g) => gateFolds[g.id] !== holdoutFold);
+    gates = training.filter((g) => g.pass).length;
+    gateTerm = (17 * gates) / Math.max(1, training.length);
+    itczTerm = 0;
+  }
   const fitness =
     k.majorPct +
-    1.1 * gates +
+    1.1 * gateTerm +
     0.25 * k.detailPct -
     0.35 * f.tempRmseC -
     0.004 * f.precipRmseMm -
     (0.02 * Math.abs(f.landMeanModelMm - f.landMeanObsMm)) / 10 -
-    0.3 * itczRmse;
+    0.3 * itczTerm;
   return {
     majorPct: k.majorPct,
     detailPct: k.detailPct,
