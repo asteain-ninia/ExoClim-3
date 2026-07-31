@@ -1,13 +1,10 @@
-// 自動較正の共有部品: 探索空間・教師データ・リーン採点。
+// 自動較正の共有部品: 探索空間と目的関数。
 // scripts/optimize.ts(親)と scripts/optimize_worker.ts(評価ワーカー)が使う。
-// 地域ゲートは scripts/validate.ts と同一定義の複製(変更時は両方直す)。
+// 採点の実体は scripts/scoring.ts に一元化(P0-3)。ここでは複製しない。
 
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { MODEL_CONSTANTS } from '../src/sim/constants';
-import { latDegOfRow, areaWeightOfRow } from '../src/domain/grid';
-import { KOPPEN_CLASSES } from '../src/domain/koppen';
 import type { PipelineResult } from '../src/sim/types';
+import { fieldScore, itczLineRmse, koppenScore, scoreRegionGates } from './scoring';
 
 export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['moistureDecayOceanKm', 1500, 3200],
@@ -72,126 +69,6 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['westerlyWindMs', 6.5, 9],
 ];
 
-interface KoppenFixture {
-  widthCells: number;
-  heightCells: number;
-  classRaster: number[];
-}
-interface ClimateFixture {
-  widthCells: number;
-  heightCells: number;
-  monthlyTemperatureDeciC: number[][];
-  monthlyPrecipitationMm: number[][];
-}
-const koppenObs = JSON.parse(
-  fs.readFileSync(path.join(process.cwd(), 'tests/fixtures/earth_koppen_1deg.json'), 'utf8'),
-) as KoppenFixture;
-const climObs = JSON.parse(
-  fs.readFileSync(path.join(process.cwd(), 'tests/fixtures/earth_climate_2deg.json'), 'utf8'),
-) as ClimateFixture;
-
-interface RegionGate {
-  id: string;
-  latMin: number;
-  latMax: number;
-  lonMin: number;
-  lonMax: number;
-  mode: 'major' | 'present';
-  expect: string;
-}
-const REGION_GATES: RegionGate[] = [
-  { id: 'sahara_arid', latMin: 18, latMax: 30, lonMin: -15, lonMax: 30, mode: 'major', expect: 'B' },
-  { id: 'arabia_arid', latMin: 15, latMax: 30, lonMin: 35, lonMax: 55, mode: 'major', expect: 'B' },
-  { id: 'australia_interior_arid', latMin: -30, latMax: -20, lonMin: 120, lonMax: 145, mode: 'major', expect: 'B' },
-  { id: 'amazon_tropical', latMin: -10, latMax: 5, lonMin: -75, lonMax: -50, mode: 'major', expect: 'A' },
-  { id: 'congo_tropical', latMin: -5, latMax: 5, lonMin: 12, lonMax: 30, mode: 'major', expect: 'A' },
-  { id: 'india_tropical', latMin: 18, latMax: 26, lonMin: 73, lonMax: 87, mode: 'major', expect: 'A' },
-  { id: 'us_southeast_humid', latMin: 30, latMax: 37, lonMin: -95, lonMax: -78, mode: 'major', expect: 'C' },
-  { id: 'east_asia_humid', latMin: 25, latMax: 35, lonMin: 105, lonMax: 122, mode: 'major', expect: 'C' },
-  { id: 'west_europe_temperate', latMin: 47, latMax: 59, lonMin: -5, lonMax: 15, mode: 'major', expect: 'C' },
-  { id: 'europe_russia_continental', latMin: 50, latMax: 65, lonMin: 35, lonMax: 55, mode: 'major', expect: 'D' },
-  { id: 'west_siberia_continental', latMin: 55, latMax: 65, lonMin: 60, lonMax: 90, mode: 'major', expect: 'D' },
-  { id: 'east_siberia_continental', latMin: 55, latMax: 68, lonMin: 100, lonMax: 140, mode: 'major', expect: 'D' },
-  { id: 'mediterranean_cs_present', latMin: 31, latMax: 44, lonMin: -10, lonMax: 35, mode: 'present', expect: 'Cs' },
-  { id: 'california_cs_present', latMin: 33, latMax: 40, lonMin: -124, lonMax: -118, mode: 'present', expect: 'Cs' },
-  { id: 'tibet_cold_highland', latMin: 28, latMax: 36, lonMin: 80, lonMax: 95, mode: 'present', expect: 'ET' },
-  { id: 'patagonia_rainshadow', latMin: -50, latMax: -40, lonMin: -72, lonMax: -65, mode: 'major', expect: 'B' },
-  { id: 'antarctica_ice', latMin: -90, latMax: -75, lonMin: -180, lonMax: 180, mode: 'major', expect: 'E' },
-];
-
-// ---- 観測 ITCZ 代理(月別・2°経度列の熱帯降水重心、雨量重み付き)----
-// v2 目的関数用。乾季列の重心はノイジーなため雨量で重み付けする
-const obsItczCentroid: Array<Array<number | null>> = [];
-const obsItczWeight: number[][] = [];
-{
-  for (let m = 0; m < 12; m++) {
-    const cRow: Array<number | null> = [];
-    const wRow: number[] = [];
-    for (let cc = 0; cc < climObs.widthCells; cc++) {
-      let s = 0;
-      let sw = 0;
-      let nValid = 0;
-      for (let cr = 0; cr < climObs.heightCells; cr++) {
-        const lat = 89 - cr * 2;
-        if (Math.abs(lat) > 30) continue;
-        const p = climObs.monthlyPrecipitationMm[m]?.[cr * climObs.widthCells + cc] ?? -9999;
-        if (p < 0) continue;
-        nValid++;
-        s += lat * p;
-        sw += p;
-      }
-      if (nValid >= 5 && sw > 10) {
-        cRow.push(s / sw);
-        wRow.push(sw);
-      } else {
-        cRow.push(null);
-        wRow.push(0);
-      }
-    }
-    obsItczCentroid.push(cRow);
-    obsItczWeight.push(wRow);
-  }
-}
-
-/** ITCZ 線と観測降水重心の雨量重み付き RMSE(度) */
-export function itczLineRmse(result: PipelineResult): number {
-  const grid = result.context.grid;
-  const colsPer2 = Math.round(2 / grid.resolutionDeg);
-  let se = 0;
-  let wsum = 0;
-  for (let m = 0; m < 12; m++) {
-    const centers = result.itcz.monthlyCenterLatDegByCol[m];
-    if (!centers) continue;
-    for (let cc = 0; cc < climObs.widthCells; cc++) {
-      const obs = obsItczCentroid[m]?.[cc];
-      const w = obsItczWeight[m]?.[cc] ?? 0;
-      if (obs === null || obs === undefined || w <= 0) continue;
-      let lineSum = 0;
-      let n = 0;
-      for (let dc = 0; dc < colsPer2; dc++) {
-        const gc = cc * colsPer2 + dc;
-        if (gc >= grid.widthCells) continue;
-        lineSum += centers[gc] ?? 0;
-        n++;
-      }
-      if (n === 0) continue;
-      const d = lineSum / n - obs;
-      se += w * d * d;
-      wsum += w;
-    }
-  }
-  return Math.sqrt(se / Math.max(1e-9, wsum));
-}
-
-function majorClassOf(id: number): number {
-  if (id >= 1 && id <= 3) return 0;
-  if (id >= 4 && id <= 7) return 1;
-  if (id >= 8 && id <= 16) return 2;
-  if (id >= 17 && id <= 28) return 3;
-  if (id >= 29) return 4;
-  return -1;
-}
-
 export interface Scores {
   majorPct: number;
   detailPct: number;
@@ -203,140 +80,32 @@ export interface Scores {
   fitness: number;
 }
 
+// 目的関数 v2(2026-07-31 に事前凍結・再登録 — docs/較正記録.md 参照):
+//   fitness = 大分類% + 1.1×地域ゲート数 + 0.25×詳細%
+//             − 0.35×気温年RMSE − 0.004×降水年RMSE − 0.02×|陸平均降水偏差|/10
+//             − 0.3×ITCZ 線 RMSE(雨量重み付き、度)
+// 全指標は scoring.ts の面積重み付き定義(P0-3 で validate と共通化)。
 export function evaluateResult(result: PipelineResult): Scores {
-  const grid = result.context.grid;
-  const land = result.context.terrain.landMask;
-  const model = result.koppen.classId;
-  const W = grid.widthCells;
-  let wTotal = 0;
-  let wDetail = 0;
-  let wMajor = 0;
-  for (let row = 0; row < grid.heightCells; row++) {
-    const w = areaWeightOfRow(grid, row);
-    for (let col = 0; col < W; col++) {
-      const i = row * W + col;
-      const o = koppenObs.classRaster[i] ?? 0;
-      if (!land[i] || o === 0) continue;
-      const m = model[i] ?? 0;
-      if (m === 0) continue;
-      wTotal += w;
-      if (m === o) wDetail += w;
-      if (majorClassOf(m) === majorClassOf(o)) wMajor += w;
-    }
-  }
-  const majorPct = (wMajor / wTotal) * 100;
-  const detailPct = (wDetail / wTotal) * 100;
-
-  let gates = 0;
-  for (const g of REGION_GATES) {
-    const counts = new Map<string, number>();
-    const majorCounts = new Array<number>(5).fill(0);
-    let total = 0;
-    for (let row = 0; row < grid.heightCells; row++) {
-      const lat = latDegOfRow(grid, row);
-      if (lat < g.latMin || lat > g.latMax) continue;
-      for (let col = 0; col < W; col++) {
-        const lon = -180 + (col + 0.5) * grid.resolutionDeg;
-        if (lon < g.lonMin || lon > g.lonMax) continue;
-        const i = row * W + col;
-        if (!land[i]) continue;
-        const id = model[i] ?? 0;
-        if (id === 0) continue;
-        total++;
-        const sym = KOPPEN_CLASSES[id] ?? '?';
-        counts.set(sym, (counts.get(sym) ?? 0) + 1);
-        const mj = majorClassOf(id);
-        if (mj >= 0) majorCounts[mj] = (majorCounts[mj] ?? 0) + 1;
-      }
-    }
-    if (total === 0) continue;
-    if (g.mode === 'major') {
-      const majorIdx = 'ABCDE'.indexOf(g.expect);
-      if ((majorCounts[majorIdx] ?? 0) / total > 0.5) gates++;
-    } else {
-      let matched = 0;
-      for (const [sym, c] of counts.entries()) if (sym.startsWith(g.expect)) matched += c;
-      if (matched / total >= 0.1) gates++;
-    }
-  }
-
-  const f = Math.round(2 / grid.resolutionDeg);
-  let se = 0;
-  let wsum = 0;
-  let pse = 0;
-  let pw = 0;
-  let pModelSum = 0;
-  let pObsSum = 0;
-  for (let cr = 0; cr < climObs.heightCells; cr++) {
-    const lat = 89 - cr * 2;
-    const w = Math.cos((lat * Math.PI) / 180);
-    for (let cc = 0; cc < climObs.widthCells; cc++) {
-      const ci = cr * climObs.widthCells + cc;
-      let tObsSum = 0;
-      let ok = true;
-      for (let m = 0; m < 12; m++) {
-        const v = climObs.monthlyTemperatureDeciC[m]?.[ci] ?? -9999;
-        if (v === -9999) {
-          ok = false;
-          break;
-        }
-        tObsSum += v / 10;
-      }
-      let tSum = 0;
-      let pSum = 0;
-      let n = 0;
-      for (let dr = 0; dr < f; dr++) {
-        for (let dc = 0; dc < f; dc++) {
-          const gr = cr * f + dr;
-          const gc = cc * f + dc;
-          if (gr >= grid.heightCells || gc >= grid.widthCells) continue;
-          const gi = gr * grid.widthCells + gc;
-          if (!land[gi]) continue;
-          n++;
-          tSum += result.temperature.annualMeanC[gi] ?? 0;
-          pSum += result.precipitation.annualPrecipMm[gi] ?? 0;
-        }
-      }
-      if (n === 0) continue;
-      if (ok) {
-        const d = tSum / n - tObsSum / 12;
-        se += w * d * d;
-        wsum += w;
-      }
-      let pObs = 0;
-      let pOk = true;
-      for (let m = 0; m < 12; m++) {
-        const v = climObs.monthlyPrecipitationMm[m]?.[ci] ?? -9999;
-        if (v === -9999) {
-          pOk = false;
-          break;
-        }
-        pObs += v;
-      }
-      if (pOk) {
-        const dp = pSum / n - pObs;
-        pse += w * dp * dp;
-        pw += w;
-        pModelSum += (w * pSum) / n;
-        pObsSum += w * pObs;
-      }
-    }
-  }
-  const tempRmse = Math.sqrt(se / Math.max(1e-9, wsum));
-  const precipRmse = Math.sqrt(pse / Math.max(1e-9, pw));
-  const landMeanMm = pModelSum / Math.max(1e-9, pw);
-  const landMeanObs = pObsSum / Math.max(1e-9, pw);
-
-  // v2(2026-07-31 に再登録 — ユーザー指示で ITCZ 線の観測一致を追加):
-  //   v1 の項 − 0.3 × ITCZ 線 RMSE(雨量重み付き、度)
+  const k = koppenScore(result);
+  const gates = scoreRegionGates(result).filter((g) => g.pass).length;
+  const f = fieldScore(result);
   const itczRmse = itczLineRmse(result);
   const fitness =
-    majorPct +
+    k.majorPct +
     1.1 * gates +
-    0.25 * detailPct -
-    0.35 * tempRmse -
-    0.004 * precipRmse -
-    (0.02 * Math.abs(landMeanMm - landMeanObs)) / 10 -
+    0.25 * k.detailPct -
+    0.35 * f.tempRmseC -
+    0.004 * f.precipRmseMm -
+    (0.02 * Math.abs(f.landMeanModelMm - f.landMeanObsMm)) / 10 -
     0.3 * itczRmse;
-  return { majorPct, detailPct, gates, tempRmse, precipRmse, landMeanMm, itczRmse, fitness };
+  return {
+    majorPct: k.majorPct,
+    detailPct: k.detailPct,
+    gates,
+    tempRmse: f.tempRmseC,
+    precipRmse: f.precipRmseMm,
+    landMeanMm: f.landMeanModelMm,
+    itczRmse,
+    fitness,
+  };
 }

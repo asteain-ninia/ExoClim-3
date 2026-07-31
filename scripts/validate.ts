@@ -8,60 +8,24 @@ import path from 'node:path';
 import { PNG } from 'pngjs';
 import { EARTH_PARAMS } from '../src/domain/planetParams';
 import { runPipeline } from '../src/sim/pipeline';
-import { KOPPEN_CLASSES, KOPPEN_COLORS, majorClassOf, MAJOR_CLASS_NAMES } from '../src/domain/koppen';
-import { latDegOfRow, areaWeightOfRow } from '../src/domain/grid';
+import { KOPPEN_CLASSES, KOPPEN_COLORS, MAJOR_CLASS_NAMES } from '../src/domain/koppen';
 import type { PipelineResult } from '../src/sim/types';
+import {
+  fieldScore,
+  getClimObs,
+  getKoppenObs,
+  itczLineRmse,
+  koppenScore,
+  scoreRegionGates,
+  type ClimateFixture,
+  type KoppenFixture,
+  type RegionGateResult,
+} from './scoring';
 
 const OUT_DIR = path.join(process.cwd(), 'out', 'validate');
-
-interface KoppenFixture {
-  widthCells: number;
-  heightCells: number;
-  classes: string[];
-  classRaster: number[];
-}
-interface ClimateFixture {
-  widthCells: number;
-  heightCells: number;
-  monthlyTemperatureDeciC: number[][];
-  monthlyPrecipitationMm: number[][];
-}
-
-function loadJson<T>(rel: string): T {
-  return JSON.parse(fs.readFileSync(path.join(process.cwd(), rel), 'utf8')) as T;
-}
-
-// ---- 地域ゲート(検証側にのみ置く地球の地理。計算層には一切入れない) ----
-interface RegionGate {
-  id: string;
-  latMin: number;
-  latMax: number;
-  lonMin: number;
-  lonMax: number;
-  /** 'major' = 大分類の過半、'present' = 指定クラス群が10%以上 */
-  mode: 'major' | 'present';
-  expect: string; // 大分類 'A'|'B'|'C'|'D'|'E' または 'Cs' などの接頭辞
-}
-
-const REGION_GATES: RegionGate[] = [
-  { id: 'sahara_arid', latMin: 18, latMax: 30, lonMin: -15, lonMax: 30, mode: 'major', expect: 'B' },
-  { id: 'arabia_arid', latMin: 15, latMax: 30, lonMin: 35, lonMax: 55, mode: 'major', expect: 'B' },
-  { id: 'australia_interior_arid', latMin: -30, latMax: -20, lonMin: 120, lonMax: 145, mode: 'major', expect: 'B' },
-  { id: 'amazon_tropical', latMin: -10, latMax: 5, lonMin: -75, lonMax: -50, mode: 'major', expect: 'A' },
-  { id: 'congo_tropical', latMin: -5, latMax: 5, lonMin: 12, lonMax: 30, mode: 'major', expect: 'A' },
-  { id: 'india_tropical', latMin: 18, latMax: 26, lonMin: 73, lonMax: 87, mode: 'major', expect: 'A' },
-  { id: 'us_southeast_humid', latMin: 30, latMax: 37, lonMin: -95, lonMax: -78, mode: 'major', expect: 'C' },
-  { id: 'east_asia_humid', latMin: 25, latMax: 35, lonMin: 105, lonMax: 122, mode: 'major', expect: 'C' },
-  { id: 'west_europe_temperate', latMin: 47, latMax: 59, lonMin: -5, lonMax: 15, mode: 'major', expect: 'C' },
-  { id: 'europe_russia_continental', latMin: 50, latMax: 65, lonMin: 35, lonMax: 55, mode: 'major', expect: 'D' },
-  { id: 'west_siberia_continental', latMin: 55, latMax: 65, lonMin: 60, lonMax: 90, mode: 'major', expect: 'D' },
-  { id: 'east_siberia_continental', latMin: 55, latMax: 68, lonMin: 100, lonMax: 140, mode: 'major', expect: 'D' },
-  { id: 'mediterranean_cs_present', latMin: 31, latMax: 44, lonMin: -10, lonMax: 35, mode: 'present', expect: 'Cs' },
-  { id: 'california_cs_present', latMin: 33, latMax: 40, lonMin: -124, lonMax: -118, mode: 'present', expect: 'Cs' },
-  { id: 'tibet_cold_highland', latMin: 28, latMax: 36, lonMin: 80, lonMax: 95, mode: 'present', expect: 'ET' },
-  { id: 'patagonia_rainshadow', latMin: -50, latMax: -40, lonMin: -72, lonMax: -65, mode: 'major', expect: 'B' },
-  { id: 'antarctica_ice', latMin: -90, latMax: -75, lonMin: -180, lonMax: 180, mode: 'major', expect: 'E' },
-];
+// 採点定義は scripts/scoring.ts に一元化(P0-3)。ここでは複製しない。
+// 正本の集計は面積重み(cos 緯度)。旧来のセル単純平均は「非面積重み」の
+// 診断値として nonAreaWeighted 配下にのみ残す。
 
 function main(): void {
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -70,15 +34,33 @@ function main(): void {
   const result = runPipeline(EARTH_PARAMS);
   console.log('所要時間:', ((Date.now() - t0) / 1000).toFixed(1), 's', result.stepTimingsMs);
 
-  const koppenObs = loadJson<KoppenFixture>('tests/fixtures/earth_koppen_1deg.json');
-  const climObs = loadJson<ClimateFixture>('tests/fixtures/earth_climate_2deg.json');
+  const koppenObs = getKoppenObs();
+  const climObs = getClimObs();
 
+  const f = fieldScore(result, climObs);
   const report = {
     generatedAt: new Date().toISOString(),
     stepTimingsMs: result.stepTimingsMs,
-    koppen: scoreKoppen(result, koppenObs),
-    temperature: scoreTemperature(result, climObs),
-    precipitation: scorePrecipitation(result, climObs),
+    weighting:
+      '正本の集計は面積重み(cos 緯度)。nonAreaWeighted はセル単純平均の非面積重み診断値。' +
+      '観測欠損(-9999)セルは除外、採点は共通陸セル(モデル陸 ∩ 観測有効)のみ',
+    koppen: formatKoppen(result, koppenObs),
+    temperature: {
+      annualRmseC: round2(f.tempRmseC),
+      janRmseC: round2(f.tempJanRmseC),
+      julRmseC: round2(f.tempJulRmseC),
+      nonAreaWeighted: scoreTemperatureNonWeighted(result, climObs),
+    },
+    precipitation: {
+      modelLandMeanMmPerYear: Math.round(f.landMeanModelMm),
+      obsLandMeanMmPerYear: Math.round(f.landMeanObsMm),
+      annualRmseMm: Math.round(f.precipRmseMm),
+      logCorrelation: Math.round(f.logCorrelation * 1000) / 1000,
+      nonAreaWeighted: scorePrecipitationNonWeighted(result, climObs),
+    },
+    itcz: {
+      lineRmseRainWeightedDeg: round2(itczLineRmse(result, climObs)),
+    },
     regionGates: scoreRegionGates(result),
     logStructure: scoreLogStructure(result, koppenObs),
   };
@@ -89,54 +71,26 @@ function main(): void {
   printSummary(report);
 }
 
-// ---- ケッペン混同行列 ----
-function scoreKoppen(result: PipelineResult, obs: KoppenFixture) {
-  const grid = result.context.grid;
-  const land = result.context.terrain.landMask;
-  const model = result.koppen.classId;
-  let wTotal = 0;
-  let wDetailHit = 0;
-  let wMajorHit = 0;
-  const areaModel = new Array<number>(31).fill(0);
-  const areaObs = new Array<number>(31).fill(0);
-  const majorAreaModel = new Array<number>(5).fill(0);
-  const majorAreaObs = new Array<number>(5).fill(0);
-  const confusion: number[][] = Array.from({ length: 5 }, () => new Array<number>(5).fill(0));
+function round2(x: number): number {
+  return Math.round(x * 100) / 100;
+}
 
-  for (let row = 0; row < grid.heightCells; row++) {
-    const w = areaWeightOfRow(grid, row);
-    for (let col = 0; col < grid.widthCells; col++) {
-      const i = row * grid.widthCells + col;
-      const o = obs.classRaster[i] ?? 0;
-      if (!land[i] || o === 0) continue; // 共通陸セルのみ採点
-      const mdl = model[i] ?? 0;
-      if (mdl === 0) continue;
-      wTotal += w;
-      if (mdl === o) wDetailHit += w;
-      const mM = majorClassOf(mdl);
-      const mO = majorClassOf(o);
-      if (mM === mO) wMajorHit += w;
-      areaModel[mdl] = (areaModel[mdl] ?? 0) + w;
-      areaObs[o] = (areaObs[o] ?? 0) + w;
-      if (mM >= 0 && mO >= 0) {
-        majorAreaModel[mM] = (majorAreaModel[mM] ?? 0) + w;
-        majorAreaObs[mO] = (majorAreaObs[mO] ?? 0) + w;
-        const rowC = confusion[mO];
-        if (rowC) rowC[mM] = (rowC[mM] ?? 0) + w;
-      }
-    }
-  }
-  const pct = (x: number) => Math.round((x / wTotal) * 1000) / 10;
+// ---- ケッペン(採点は scoring.ts、ここは報告用の整形のみ) ----
+function formatKoppen(result: PipelineResult, obs: KoppenFixture) {
+  const k = koppenScore(result, obs);
+  const pct = (x: number) => Math.round((x / k.wTotal) * 1000) / 10;
   return {
     scoredCells: '共通陸セル(モデル陸 ∩ Beck 陸)',
-    detailedAccuracyPct: pct(wDetailHit),
-    majorAccuracyPct: pct(wMajorHit),
-    majorAreaPctModel: majorAreaModel.map(pct),
-    majorAreaPctObs: majorAreaObs.map(pct),
-    majorAreaGapPt: majorAreaModel.map((v, k) => Math.round((pct(v) - pct(majorAreaObs[k] ?? 0)) * 10) / 10),
-    confusionMajorPct: confusion.map((r) => r.map(pct)),
-    topClassesModel: topClasses(areaModel, wTotal),
-    topClassesObs: topClasses(areaObs, wTotal),
+    detailedAccuracyPct: Math.round(k.detailPct * 10) / 10,
+    majorAccuracyPct: Math.round(k.majorPct * 10) / 10,
+    majorAreaPctModel: k.majorAreaModelW.map(pct),
+    majorAreaPctObs: k.majorAreaObsW.map(pct),
+    majorAreaGapPt: k.majorAreaModelW.map(
+      (v, idx) => Math.round((pct(v) - pct(k.majorAreaObsW[idx] ?? 0)) * 10) / 10,
+    ),
+    confusionMajorPct: k.confusionW.map((r) => r.map(pct)),
+    topClassesModel: topClasses(k.areaModelW, k.wTotal),
+    topClassesObs: topClasses(k.areaObsW, k.wTotal),
   };
 }
 
@@ -148,8 +102,8 @@ function topClasses(area: number[], wTotal: number) {
     .slice(0, 12);
 }
 
-// ---- 気温採点(2° 平年値と比較) ----
-function scoreTemperature(result: PipelineResult, clim: ClimateFixture) {
+// ---- 気温の非面積重み診断(セル単純平均。正本は scoring.ts の面積重み版) ----
+function scoreTemperatureNonWeighted(result: PipelineResult, clim: ClimateFixture) {
   const grid = result.context.grid;
   const f = Math.round(2 / grid.resolutionDeg); // 2° フィクスチャに合わせる集約係数
   const months = [0, 6];
@@ -227,8 +181,8 @@ function scoreTemperature(result: PipelineResult, clim: ClimateFixture) {
   };
 }
 
-// ---- 降水採点 ----
-function scorePrecipitation(result: PipelineResult, clim: ClimateFixture) {
+// ---- 降水の非面積重み診断(セル単純平均。正本は scoring.ts の面積重み版) ----
+function scorePrecipitationNonWeighted(result: PipelineResult, clim: ClimateFixture) {
   const grid = result.context.grid;
   const f = Math.round(2 / grid.resolutionDeg);
   let obsSum = 0;
@@ -285,50 +239,6 @@ function scorePrecipitation(result: PipelineResult, clim: ClimateFixture) {
     annualRmseMm: Math.round(Math.sqrt(sse / Math.max(1, n))),
     logCorrelation: Math.round(corr * 1000) / 1000,
   };
-}
-
-// ---- 地域ゲート ----
-function scoreRegionGates(result: PipelineResult) {
-  const grid = result.context.grid;
-  const land = result.context.terrain.landMask;
-  const gates: Array<{ id: string; pass: boolean; detail: string }> = [];
-  for (const g of REGION_GATES) {
-    const counts = new Map<string, number>();
-    const majorCounts = new Array<number>(5).fill(0);
-    let total = 0;
-    for (let row = 0; row < grid.heightCells; row++) {
-      const lat = latDegOfRow(grid, row);
-      if (lat < g.latMin || lat > g.latMax) continue;
-      for (let col = 0; col < grid.widthCells; col++) {
-        const lon = -180 + (col + 0.5) * grid.resolutionDeg;
-        if (lon < g.lonMin || lon > g.lonMax) continue;
-        const i = row * grid.widthCells + col;
-        if (!land[i]) continue;
-        const id = result.koppen.classId[i] ?? 0;
-        if (id === 0) continue;
-        total++;
-        const sym = KOPPEN_CLASSES[id] ?? '?';
-        counts.set(sym, (counts.get(sym) ?? 0) + 1);
-        const mj = majorClassOf(id);
-        if (mj >= 0) majorCounts[mj] = (majorCounts[mj] ?? 0) + 1;
-      }
-    }
-    const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
-    const detail = top.map(([s, c]) => `${s} ${Math.round((c / Math.max(1, total)) * 100)}%`).join(', ');
-    let pass = false;
-    if (total === 0) {
-      pass = false;
-    } else if (g.mode === 'major') {
-      const majorIdx = 'ABCDE'.indexOf(g.expect);
-      pass = (majorCounts[majorIdx] ?? 0) / total > 0.5;
-    } else {
-      let matched = 0;
-      for (const [sym, c] of counts.entries()) if (sym.startsWith(g.expect)) matched += c;
-      pass = matched / total >= 0.1;
-    }
-    gates.push({ id: g.id, pass, detail });
-  }
-  return gates;
 }
 
 // ---- Log 由来の構造観点(WL#36 視覚まとめ。報告のみ、合否ゲートではない)----
@@ -505,10 +415,22 @@ function renderPng(
 }
 
 function printSummary(report: {
-  koppen: ReturnType<typeof scoreKoppen>;
-  temperature: ReturnType<typeof scoreTemperature>;
-  precipitation: ReturnType<typeof scorePrecipitation>;
-  regionGates: ReturnType<typeof scoreRegionGates>;
+  koppen: ReturnType<typeof formatKoppen>;
+  temperature: {
+    annualRmseC: number;
+    janRmseC: number;
+    julRmseC: number;
+    nonAreaWeighted: ReturnType<typeof scoreTemperatureNonWeighted>;
+  };
+  precipitation: {
+    modelLandMeanMmPerYear: number;
+    obsLandMeanMmPerYear: number;
+    annualRmseMm: number;
+    logCorrelation: number;
+    nonAreaWeighted: ReturnType<typeof scorePrecipitationNonWeighted>;
+  };
+  itcz: { lineRmseRainWeightedDeg: number };
+  regionGates: RegionGateResult[];
   logStructure: ReturnType<typeof scoreLogStructure>;
 }): void {
   console.log('\n===== 地球検証サマリ =====');
@@ -522,11 +444,14 @@ function printSummary(report: {
     );
   }
   console.log(
-    `気温 RMSE: 年平均 ${report.temperature.annualRmseC}°C / 1月 ${report.temperature.janRmseC}°C / 7月 ${report.temperature.julRmseC}°C`,
+    `気温 RMSE(面積重み): 年平均 ${report.temperature.annualRmseC}°C / 1月 ${report.temperature.janRmseC}°C / 7月 ${report.temperature.julRmseC}°C` +
+      `(非面積重み診断: 年 ${report.temperature.nonAreaWeighted.annualRmseC}°C)`,
   );
   console.log(
-    `降水: 陸平均 モデル ${report.precipitation.modelLandMeanMmPerYear}mm vs 観測 ${report.precipitation.obsLandMeanMmPerYear}mm / RMSE ${report.precipitation.annualRmseMm}mm / log相関 ${report.precipitation.logCorrelation}`,
+    `降水(面積重み): 陸平均 モデル ${report.precipitation.modelLandMeanMmPerYear}mm vs 観測 ${report.precipitation.obsLandMeanMmPerYear}mm / RMSE ${report.precipitation.annualRmseMm}mm / log相関 ${report.precipitation.logCorrelation}` +
+      `(非面積重み診断: RMSE ${report.precipitation.nonAreaWeighted.annualRmseMm}mm / log相関 ${report.precipitation.nonAreaWeighted.logCorrelation})`,
   );
+  console.log(`ITCZ 線 RMSE(雨量重み): ${report.itcz.lineRmseRainWeightedDeg}°`);
   const passed = report.regionGates.filter((g) => g.pass).length;
   console.log(`地域ゲート: ${passed} / ${report.regionGates.length} PASS`);
   for (const g of report.regionGates) {
