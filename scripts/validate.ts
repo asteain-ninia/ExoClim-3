@@ -21,6 +21,12 @@ import {
   type KoppenFixture,
   type RegionGateResult,
 } from './scoring';
+import {
+  ACCEPTANCE_CRITERIA,
+  REGRESSION_BASELINE,
+  evaluateAcceptance,
+  evaluateRegression,
+} from './validate_criteria';
 
 const OUT_DIR = path.join(process.cwd(), 'out', 'validate');
 // 採点定義は scripts/scoring.ts に一元化(P0-3)。ここでは複製しない。
@@ -38,18 +44,55 @@ function main(): void {
   const climObs = getClimObs();
 
   const f = fieldScore(result, climObs);
+  const k = koppenScore(result, koppenObs);
+  const koppen = formatKoppen(result, koppenObs);
+  const temperatureNW = scoreTemperatureNonWeighted(result, climObs);
+  const regionGates = scoreRegionGates(result);
+  const gatesPassed = regionGates.filter((g) => g.pass).length;
+  const itczRmseDeg = itczLineRmse(result, climObs);
+
+  // P0-4: 退行防止(凍結基準・CI 用、非零終了)と最終受入(要件 §6)の分離判定
+  const regression = evaluateRegression({
+    majorPct: k.majorPct,
+    detailPct: k.detailPct,
+    gates: gatesPassed,
+    tempRmseC: f.tempRmseC,
+    precipRmseMm: f.precipRmseMm,
+    itczRmseDeg,
+    landMeanModelMm: f.landMeanModelMm,
+    landMeanObsMm: f.landMeanObsMm,
+  });
+  const acceptance = evaluateAcceptance({
+    majorAreaGapPt: koppen.majorAreaGapPt,
+    gatesPassed,
+    gatesTotal: regionGates.length,
+    zonalTempAbsDiffsC: temperatureNW.zonalAnnual.flatMap((z) => [
+      Math.abs(z.modelAnnual - z.obsAnnual),
+      Math.abs(z.modelJan - z.obsJan),
+      Math.abs(z.modelJul - z.obsJul),
+    ]),
+  });
+
   const report = {
     generatedAt: new Date().toISOString(),
     stepTimingsMs: result.stepTimingsMs,
     weighting:
       '正本の集計は面積重み(cos 緯度)。nonAreaWeighted はセル単純平均の非面積重み診断値。' +
       '観測欠損(-9999)セルは除外、採点は共通陸セル(モデル陸 ∩ 観測有効)のみ',
-    koppen: formatKoppen(result, koppenObs),
+    regressionPass: regression.pass,
+    acceptancePass: acceptance.pass,
+    regression: { ...regression, baseline: REGRESSION_BASELINE },
+    acceptance: {
+      ...acceptance,
+      criteria: ACCEPTANCE_CRITERIA,
+      note: '要件 §6-2(理想化大陸)・§6-3(退化条件)は別ハーネスで判定する',
+    },
+    koppen,
     temperature: {
       annualRmseC: round2(f.tempRmseC),
       janRmseC: round2(f.tempJanRmseC),
       julRmseC: round2(f.tempJulRmseC),
-      nonAreaWeighted: scoreTemperatureNonWeighted(result, climObs),
+      nonAreaWeighted: temperatureNW,
     },
     precipitation: {
       modelLandMeanMmPerYear: Math.round(f.landMeanModelMm),
@@ -59,9 +102,9 @@ function main(): void {
       nonAreaWeighted: scorePrecipitationNonWeighted(result, climObs),
     },
     itcz: {
-      lineRmseRainWeightedDeg: round2(itczLineRmse(result, climObs)),
+      lineRmseRainWeightedDeg: round2(itczRmseDeg),
     },
-    regionGates: scoreRegionGates(result),
+    regionGates,
     logStructure: scoreLogStructure(result, koppenObs),
   };
 
@@ -69,6 +112,16 @@ function main(): void {
 
   fs.writeFileSync(path.join(OUT_DIR, 'report.json'), JSON.stringify(report, null, 2));
   printSummary(report);
+
+  console.log(
+    `\n退行防止ゲート(基準凍結 ${REGRESSION_BASELINE.frozenAt}): ${regression.pass ? '✅ PASS' : '❌ FAIL — 非零終了'}`,
+  );
+  for (const msg of regression.failures) console.log(`  ❌ ${msg}`);
+  console.log(
+    `最終受入ゲート(要件 §6-1、凍結 ${ACCEPTANCE_CRITERIA.frozenAt}): ${acceptance.pass ? '✅ 達成' : '⏳ 未達(正直な現在地。終了コードには影響しない)'}`,
+  );
+  for (const msg of acceptance.failures) console.log(`  ⏳ ${msg}`);
+  process.exitCode = regression.pass ? 0 : 1;
 }
 
 function round2(x: number): number {
@@ -110,12 +163,19 @@ function scoreTemperatureNonWeighted(result: PipelineResult, clim: ClimateFixtur
   const rmseByMonth: Record<string, number> = {};
   let annualSse = 0;
   let annualN = 0;
-  const zonal: Array<{ lat: number; obsAnnual: number; modelAnnual: number }> = [];
-  const zonalAcc = new Map<number, { o: number; m: number; n: number }>();
-
-  for (const label of ['annual', 'month0_Jan', 'month6_Jul']) {
-    void label;
-  }
+  const zonal: Array<{
+    lat: number;
+    obsAnnual: number;
+    modelAnnual: number;
+    obsJan: number;
+    modelJan: number;
+    obsJul: number;
+    modelJul: number;
+  }> = [];
+  const zonalAcc = new Map<
+    number,
+    { o: number; m: number; oJan: number; mJan: number; oJul: number; mJul: number; n: number }
+  >();
   for (let cr = 0; cr < clim.heightCells; cr++) {
     for (let cc = 0; cc < clim.widthCells; cc++) {
       const ci = cr * clim.widthCells + cc;
@@ -159,18 +219,28 @@ function scoreTemperatureNonWeighted(result: PipelineResult, clim: ClimateFixtur
         rmseByMonth[key] = (rmseByMonth[key] ?? 0) + d * d;
       }
       const latBand = Math.round((89 - cr * 2) / 10) * 10;
-      const acc = zonalAcc.get(latBand) ?? { o: 0, m: 0, n: 0 };
+      const acc =
+        zonalAcc.get(latBand) ?? { o: 0, m: 0, oJan: 0, mJan: 0, oJul: 0, mJul: 0, n: 0 };
       acc.o += obsAnnual;
       acc.m += modelAnnual;
+      acc.oJan += obsMonthly[0] ?? 0;
+      acc.mJan += modelMonthly[0] ?? 0;
+      acc.oJul += obsMonthly[6] ?? 0;
+      acc.mJul += modelMonthly[6] ?? 0;
       acc.n++;
       zonalAcc.set(latBand, acc);
     }
   }
+  const r1 = (x: number) => Math.round(x * 10) / 10;
   for (const [lat, acc] of [...zonalAcc.entries()].sort((a, b) => b[0] - a[0])) {
     zonal.push({
       lat,
-      obsAnnual: Math.round((acc.o / acc.n) * 10) / 10,
-      modelAnnual: Math.round((acc.m / acc.n) * 10) / 10,
+      obsAnnual: r1(acc.o / acc.n),
+      modelAnnual: r1(acc.m / acc.n),
+      obsJan: r1(acc.oJan / acc.n),
+      modelJan: r1(acc.mJan / acc.n),
+      obsJul: r1(acc.oJul / acc.n),
+      modelJul: r1(acc.mJul / acc.n),
     });
   }
   return {
