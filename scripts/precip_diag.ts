@@ -78,6 +78,8 @@ const FIELDS = [
   ['liftItcz', 'ITCZ 持上げ倍率'],
   ['liftFrontal', '前線持上げ倍率'],
   ['liftOrographic', '地形性持上げ倍率'],
+  ['liftConvergence', '湿潤収束持上げ倍率(R4)'],
+  ['convergenceIndex', '水蒸気フラックス収束指数(供給単位、正=収束)'],
   ['subsidenceResidual', '亜熱帯沈降の残存倍率'],
   ['upwindBlock', '風上山脈の遮蔽倍率'],
   ['liftOther', 'その他倍率(ストーム帯持上げ×寒流×対流)'],

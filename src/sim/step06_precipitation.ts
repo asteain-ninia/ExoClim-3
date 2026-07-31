@@ -51,6 +51,10 @@ export interface PrecipDiagnostics {
   liftItcz: Float32Array[];
   liftFrontal: Float32Array[];
   liftOrographic: Float32Array[];
+  /** R4: 湿潤収束による持上げ倍率(1 = 収束なし) */
+  liftConvergence: Float32Array[];
+  /** R4: 水蒸気フラックス収束指数(供給単位、正 = 収束)。倍率ではなく生の場 */
+  convergenceIndex: Float32Array[];
   /** 亜熱帯沈降の残存倍率(1 = 抑制なし) */
   subsidenceResidual: Float32Array[];
   /** 風上山脈の遮蔽倍率(1 = 遮蔽なし) */
@@ -73,6 +77,111 @@ export interface PrecipDiagBox {
   fields?: PrecipDiagnostics;
   /** R3 土壌水分の周期定常解(有効時のみ) */
   soil?: SoilWaterResult;
+}
+
+// ---- R4(地域降水 FB §8): 水蒸気フラックス収束 ----
+// 局所水蒸気量の代理を既存の供給場 q とし、地表風 V との積で水平フラックスを
+// つくり、球面計量で発散を取る:
+//   div(qV) = (1/(a cosφ)) [ ∂(q u)/∂λ + ∂(q v cosφ)/∂φ ]
+// 収束(div < 0)かつ湿潤な場所だけ持上げを増やし、亜熱帯沈降の実効抑制を
+// 連続的に弱める。乾いた収束(供給が乏しい低圧)では何も起こらない。
+// 中国東部の梅雨前線・ラプラタへの暖湿流・アマゾン内陸収束・米国南東部を
+// 同じ原理で表現する(地域名は使わない)。
+//
+// 実装上の要点(2026-08-01 の外部レビュー指摘への対応):
+//  - **有限体積形**で発散を取る(共有面フラックス × 辺長 / セル面積)。
+//    中心差分 + max(20km) のセル幅では高緯度で保存性を失う。極の辺長は 0。
+//    Σ(面積 × 発散) ≈ 0 をテストで担保する。
+//  - 供給場 q は「局所水蒸気量」ではなく風上経路の到達可能性であり、海岸や
+//    稜線を跨ぐ経路差で不連続に跳ぶ。そのまま微分すると偽の収束線ができる
+//    ため、**固定角半径で平滑化してから**フラックスを作る。
+//  - 乾燥ゲートは局所 q で割らない(乾燥域で比が発散する)。基準値 q_ref で
+//    無次元化し、飽和関数 x/(1+x) で [0,1) に収める。
+//  - 発散演算の中で自転方向を掛けない(風場が既に反転済み)。
+const DIVERGENCE_SMOOTH_DEG = 1.5;
+/** 収束指数を供給と同じ単位へ戻す時間スケール(基準長 1000km / 基準風速 5m/s) */
+const CONVERGENCE_TIME_SCALE_S = 1_000_000 / 5;
+
+/** 固定角半径の円形平均で場を平滑化(解像度不変) */
+function smoothAngular(grid: Grid, field: Float32Array, radiusDeg: number): Float32Array {
+  const out = new Float32Array(grid.cellCount);
+  for (let row = 0; row < grid.heightCells; row++) {
+    for (let col = 0; col < grid.widthCells; col++) {
+      let sum = 0;
+      let n = 0;
+      forEachCellWithinAngularRadius(grid, row, col, radiusDeg, (j) => {
+        sum += field[j] ?? 0;
+        n++;
+      });
+      out[row * grid.widthCells + col] = n > 0 ? sum / n : 0;
+    }
+  }
+  return out;
+}
+
+/**
+ * 水蒸気フラックスの収束指数(供給と同じ単位、正 = 収束)。
+ * 有限体積形: D = (F_E L_E − F_W L_W + F_N L_N − F_S L_S) / A。
+ * 経度は周期境界、極の辺長は 0。返り値は −D × 時間スケール。
+ */
+export function moistureConvergenceIndex(
+  grid: Grid,
+  radiusKm: number,
+  supply: Float32Array,
+  u: Float32Array,
+  v: Float32Array,
+): Float32Array {
+  const W = grid.widthCells;
+  const H = grid.heightCells;
+  const out = new Float32Array(grid.cellCount);
+  const q = smoothAngular(grid, supply, DIVERGENCE_SMOOTH_DEG);
+  const aM = radiusKm * 1000;
+  const dPhi = (grid.resolutionDeg * Math.PI) / 180;
+  const dLam = (grid.resolutionDeg * Math.PI) / 180;
+  // 南北の辺長は一定(経線に沿う長さ)、東西の辺長は面の緯度の cos に比例
+  const lenMeridionalM = aM * dPhi;
+  const cosFaceOf = (rowFaceNorthOf: number): number => {
+    // row と row−1 の境界(= row の北面)の緯度
+    const latFace = 90 - rowFaceNorthOf * grid.resolutionDeg;
+    return Math.max(0, Math.cos((latFace * Math.PI) / 180));
+  };
+  for (let row = 0; row < H; row++) {
+    const latC = latDegOfRow(grid, row);
+    const cosC = Math.max(1e-6, Math.cos((latC * Math.PI) / 180));
+    const areaM2 = aM * aM * dLam * dPhi * cosC;
+    const lenNorthM = aM * dLam * cosFaceOf(row); // 北面(row と row−1 の境)
+    const lenSouthM = aM * dLam * cosFaceOf(row + 1); // 南面
+    for (let col = 0; col < W; col++) {
+      const i = row * W + col;
+      const iE = row * W + wrapCol(grid, col + 1);
+      const iW = row * W + wrapCol(grid, col - 1);
+      const iN = row > 0 ? (row - 1) * W + col : -1;
+      const iS = row < H - 1 ? (row + 1) * W + col : -1;
+      const qu = (q[i] ?? 0) * (u[i] ?? 0);
+      // 面フラックスは両側セルの平均(共有面で一意 = 保存的)
+      const fE = 0.5 * (qu + (q[iE] ?? 0) * (u[iE] ?? 0));
+      const fW = 0.5 * (qu + (q[iW] ?? 0) * (u[iW] ?? 0));
+      const qv = (q[i] ?? 0) * (v[i] ?? 0);
+      const fN = iN >= 0 ? 0.5 * (qv + (q[iN] ?? 0) * (v[iN] ?? 0)) : 0;
+      const fS = iS >= 0 ? 0.5 * (qv + (q[iS] ?? 0) * (v[iS] ?? 0)) : 0;
+      const netOutflow = (fE - fW) * lenMeridionalM + fN * lenNorthM - fS * lenSouthM;
+      const divergence = netOutflow / areaM2;
+      out[i] = -divergence * CONVERGENCE_TIME_SCALE_S;
+    }
+  }
+  return out;
+}
+
+/** 収束の実効度 0〜1(飽和関数)。局所 q で割らない — 乾燥域で発散するため */
+export function convergenceStrength01(convIndex: number, refNorm: number): number {
+  const x = Math.max(0, convIndex) / Math.max(1e-9, refNorm);
+  return x / (1 + x);
+}
+
+/** 湿潤ゲート(smoothstep)。乾いた収束では降水を作らない */
+export function wetnessGate01(supplyValue: number, wetNorm: number): number {
+  const t = Math.min(1, Math.max(0, supplyValue / Math.max(1e-9, wetNorm)));
+  return t * t * (3 - 2 * t);
 }
 
 // ---- R3(地域降水 FB §7): 土壌水分の季節記憶 ----
@@ -294,6 +403,8 @@ interface PrecipDiagMonth {
   liftItcz: Float32Array;
   liftFrontal: Float32Array;
   liftOrographic: Float32Array;
+  liftConvergence: Float32Array;
+  convergenceIndex: Float32Array;
   subsidenceResidual: Float32Array;
   upwindBlock: Float32Array;
   liftOther: Float32Array;
@@ -321,6 +432,8 @@ export function computePrecipitation(
         liftItcz: [],
         liftFrontal: [],
         liftOrographic: [],
+        liftConvergence: [],
+        convergenceIndex: [],
         subsidenceResidual: [],
         upwindBlock: [],
         liftOther: [],
@@ -636,6 +749,8 @@ export function computePrecipitation(
         diag.liftItcz.push(new Float32Array(N));
         diag.liftFrontal.push(new Float32Array(N));
         diag.liftOrographic.push(new Float32Array(N));
+        diag.liftConvergence.push(new Float32Array(N));
+        diag.convergenceIndex.push(new Float32Array(N));
         diag.subsidenceResidual.push(new Float32Array(N));
         diag.upwindBlock.push(new Float32Array(N));
         diag.liftOther.push(new Float32Array(N));
@@ -648,6 +763,8 @@ export function computePrecipitation(
         liftItcz: new Float32Array(N),
         liftFrontal: new Float32Array(N),
         liftOrographic: new Float32Array(N),
+        liftConvergence: new Float32Array(N),
+        convergenceIndex: new Float32Array(N),
         subsidenceResidual: new Float32Array(N),
         upwindBlock: new Float32Array(N),
         liftOther: new Float32Array(N),
@@ -687,6 +804,8 @@ export function computePrecipitation(
       diag.liftItcz.push(diagM.liftItcz);
       diag.liftFrontal.push(diagM.liftFrontal);
       diag.liftOrographic.push(diagM.liftOrographic);
+      diag.liftConvergence.push(diagM.liftConvergence);
+      diag.convergenceIndex.push(diagM.convergenceIndex);
       diag.subsidenceResidual.push(diagM.subsidenceResidual);
       diag.upwindBlock.push(diagM.upwindBlock);
       diag.liftOther.push(diagM.liftOther);
@@ -718,10 +837,18 @@ export function computePrecipitation(
 }
 
 /**
- * 稜線推定標高: 狭い山脈は 1° 平均で稜線が均される(南部アンデス: 実クレスト
- * ~2,000m がセル平均 ~800m)。隣接との比高(プロミネンス)から稜線高を復元:
- * crest = elev + 0.8 × max(0, elev − 最低隣接)。平地・広い高原(チベット)は
- * 比高が小さく不変。**遮蔽・障壁の計算にのみ**使う(気温の降尺度等は平均のまま)
+ * 遮蔽・脱水に使う稜線標高。
+ *
+ * R5(地域降水 FB §9、2026-08-01): 生の高解像度標高(ETOPO 60 秒)から作った
+ * **セル内 p95 標高**(terrain.crestElevationMeters)を第一候補とする。
+ * 実測: 南部アンデスは平均 989m に対し p95 1,734m(1.75 倍)、チベット高原は
+ * 4,914m → 5,277m(1.07 倍)、アマゾン平地は 33m → 43m。狭い山脈だけが跳ね、
+ * 広い高原の縁を誤って狭い山脈と判定しない。
+ *
+ * 高解像度データの無い地形(手続き生成・簡易プリセット)では平均標高と同じ値に
+ * なるため、隣接との比高(プロミネンス)による推定を加算で補う
+ * (K.crestProminenceFactor。既定 0 = 無効 — 高原の縁と区別できず熱帯を壊した
+ * 実測があるため)。演算子は全惑星で同一で、入力データの精細さだけが違う。
  */
 function buildCrestElev(ctx: SimContext): Float32Array {
   const { grid, terrain } = ctx;
@@ -732,6 +859,7 @@ function buildCrestElev(ctx: SimContext): Float32Array {
     for (let col = 0; col < W; col++) {
       const i = row * W + col;
       const e = Math.max(0, terrain.elevationMeters[i] ?? 0);
+      const dataCrest = Math.max(e, terrain.crestElevationMeters[i] ?? 0);
       let minNb = e;
       const nbs = [
         row > 0 ? (row - 1) * W + col : -1,
@@ -744,7 +872,9 @@ function buildCrestElev(ctx: SimContext): Float32Array {
         const en = Math.max(0, terrain.elevationMeters[nb] ?? 0);
         if (en < minNb) minNb = en;
       }
-      out[i] = e + K.crestProminenceFactor * Math.max(0, e - minNb);
+      // セル内分位で足りない分だけプロミネンス推定で補う(二重計上しない)
+      const prominence = K.crestProminenceFactor * Math.max(0, e - minNb);
+      out[i] = Math.max(dataCrest, e + prominence);
     }
   }
   return out;
@@ -955,6 +1085,12 @@ function convertToPrecip(
   const out = new Float32Array(grid.cellCount);
   const elev = terrain.elevationMeters;
   const decl = ctx.insolation.monthlyDeclinationDeg[month] ?? 0;
+  // R4: 水蒸気フラックス収束(供給場と地表風から。診断時は生の場も返す)
+  const convergenceOn =
+    K.convergenceLiftBoost > 0 || K.convergenceSubsidenceRelief > 0 || diagM !== undefined;
+  const convIndex = convergenceOn
+    ? moistureConvergenceIndex(grid, params.body.radiusKm, supply, u, v)
+    : null;
 
   for (let row = 0; row < H; row++) {
     const lat = latDegOfRow(grid, row);
@@ -985,6 +1121,15 @@ function convertToPrecip(
       // R1 診断のため各倍率を named 化(乗算の順序・値は従来と同一 — ビット不変)
       const liftItczF = 1 + K.itczLiftBoost * gI * marineW;
       lift *= liftItczF;
+
+      // R4: 湿潤収束 = 飽和した収束強度 × 湿潤ゲート(smoothstep)。
+      // 乾いた収束(供給の乏しい低圧)では 0 のまま
+      const wetConv = convIndex
+        ? convergenceStrength01(convIndex[i] ?? 0, K.moistureConvergenceNorm) *
+          wetnessGate01(supply[i] ?? 0, K.convergenceWetnessNorm)
+        : 0;
+      const liftConvF = 1 + K.convergenceLiftBoost * wetConv;
+      lift *= liftConvF;
 
       // 前線収束(WL#29「セル衝突線 = 前線(低圧・湿潤)」の定量化):
       // 湿った空気(高供給)が極向き風で乾いた側へ押し込まれる場所が前線。
@@ -1077,7 +1222,13 @@ function convertToPrecip(
         eastWarmth *
         supplyGate *
         Math.exp(-(eastOceanKm[i] ?? 1e9) / K.eastCoastSubsidenceDecayKm);
-      const subs = descW * (1 - K.subsidenceItczProtection * gI * marineW) * (1 - eastRelief);
+      // R4: 湿潤収束があるところは沈降の実効抑制が連続的に弱まる
+      // (緯度帯だけで全開にしない — 中国東部・ラプラタの梅雨/暖湿流)
+      const subs =
+        descW *
+        (1 - K.subsidenceItczProtection * gI * marineW) *
+        (1 - eastRelief) *
+        (1 - K.convergenceSubsidenceRelief * wetConv);
       const subsResidualF = 1 - K.subsidenceSuppression * subs;
       lift *= subsResidualF;
 
@@ -1169,6 +1320,8 @@ function convertToPrecip(
         diagM.liftItcz[i] = liftItczF;
         diagM.liftFrontal[i] = liftFrontalF;
         diagM.liftOrographic[i] = liftOroF;
+        diagM.liftConvergence[i] = liftConvF;
+        diagM.convergenceIndex[i] = convIndex?.[i] ?? 0;
         diagM.subsidenceResidual[i] = subsResidualF;
         diagM.upwindBlock[i] = blockFactor;
         diagM.liftOther[i] = liftStormF * coldCoastF * warmHumidF;

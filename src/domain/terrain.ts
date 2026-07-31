@@ -6,10 +6,18 @@ import type { Grid } from './grid';
 import { areaWeightOfRow, cellIndex, latDegOfRow, lonDegOfCol } from './grid';
 import type { TerrainSource } from './planetParams';
 import earthTerrainJson from './data/earth_terrain_1deg.json';
+import earthCrestJson from './data/earth_crest_1deg.json';
 
 export interface TerrainField {
-  /** 標高 m(海セルは負の水深) */
+  /** 標高 m(海セルは負の水深)。気温・地表状態に使う */
   elevationMeters: Float32Array;
+  /**
+   * セル内の高分位標高 m(R5 — 地域降水 FB §9)。狭い山脈は 1° 平均で
+   * 稜線が均されるため、遮蔽・脱水にはこちらを使う(平均標高と使い分け)。
+   * 高解像度の元データが無い地形(手続き生成・簡易プリセット)では
+   * 平均標高と同じ値になる — 同じ演算子を全惑星に使うための既定
+   */
+  crestElevationMeters: Float32Array;
   /** 1 = 陸、0 = 海 */
   landMask: Uint8Array;
 }
@@ -19,6 +27,14 @@ interface EarthTerrainJson {
   heightCells: number;
   elevationMeters: number[];
   landMask: number[];
+}
+
+interface EarthCrestJson {
+  widthCells: number;
+  heightCells: number;
+  quantile: number;
+  crestMeters: number[];
+  maxMeters: number[];
 }
 
 const OCEAN_FLOOR_M = -4000;
@@ -44,16 +60,23 @@ export function resolveTerrain(grid: Grid, source: TerrainSource): TerrainField 
   }
 }
 
+/** 高解像度の元データが無い地形の既定: 稜線標高 = 平均標高 */
+function withFlatCrest(field: Omit<TerrainField, 'crestElevationMeters'>): TerrainField {
+  return { ...field, crestElevationMeters: Float32Array.from(field.elevationMeters) };
+}
+
 function uniform(grid: Grid, land: boolean): TerrainField {
   const elevationMeters = new Float32Array(grid.cellCount).fill(land ? 300 : OCEAN_FLOOR_M);
   const landMask = new Uint8Array(grid.cellCount).fill(land ? 1 : 0);
-  return { elevationMeters, landMask };
+  return withFlatCrest({ elevationMeters, landMask });
 }
 
 /** 実在地球(1° データを目標分解能へ再標本化) */
 function earthTerrain(grid: Grid): TerrainField {
   const src = earthTerrainJson as EarthTerrainJson;
+  const crestSrc = earthCrestJson as EarthCrestJson;
   const elevationMeters = new Float32Array(grid.cellCount);
+  const crestElevationMeters = new Float32Array(grid.cellCount);
   const landMask = new Uint8Array(grid.cellCount);
   const factor = grid.resolutionDeg; // 1° ソース → factor セルを集約(1 なら素通し)
   if (Number.isInteger(factor) && factor >= 1) {
@@ -63,6 +86,7 @@ function earthTerrain(grid: Grid): TerrainField {
         let landCount = 0;
         let landElevSum = 0;
         let oceanElevSum = 0;
+        let crestMax = 0;
         let n = 0;
         for (let dr = 0; dr < f; dr++) {
           for (let dc = 0; dc < f; dc++) {
@@ -77,6 +101,9 @@ function earthTerrain(grid: Grid): TerrainField {
             } else {
               oceanElevSum += e;
             }
+            // 粗格子への集約では稜線は「最大」を取る(遮蔽は最も高い壁で決まる)
+            const c = crestSrc.crestMeters[si] ?? 0;
+            if (c > crestMax) crestMax = c;
             n++;
           }
         }
@@ -86,6 +113,7 @@ function earthTerrain(grid: Grid): TerrainField {
         elevationMeters[i] = isLand
           ? landElevSum / Math.max(1, landCount)
           : oceanElevSum / Math.max(1, n - landCount);
+        crestElevationMeters[i] = Math.max(crestMax, elevationMeters[i] ?? 0);
       }
     }
   } else {
@@ -98,10 +126,11 @@ function earthTerrain(grid: Grid): TerrainField {
         const i = cellIndex(grid, row, col);
         elevationMeters[i] = src.elevationMeters[si] ?? OCEAN_FLOOR_M;
         landMask[i] = src.landMask[si] ?? 0;
+        crestElevationMeters[i] = Math.max(crestSrc.crestMeters[si] ?? 0, elevationMeters[i] ?? 0);
       }
     }
   }
-  return { elevationMeters, landMask };
+  return { elevationMeters, crestElevationMeters, landMask };
 }
 
 /**
@@ -150,7 +179,7 @@ function hypotheticalContinent(grid: Grid, split: boolean): TerrainField {
       elevationMeters[i] = 300;
     }
   }
-  return { elevationMeters, landMask };
+  return withFlatCrest({ elevationMeters, landMask });
 }
 
 // ---- 手続き生成(種子付き fBm 値ノイズ) ----
@@ -262,5 +291,5 @@ function procedural(
       elevationMeters[i] = Math.max(OCEAN_FLOOR_M, (above / Math.abs(seaLevel + 1e-9)) * 4000);
     }
   }
-  return { elevationMeters, landMask };
+  return withFlatCrest({ elevationMeters, landMask });
 }

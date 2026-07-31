@@ -42,6 +42,7 @@ describe('降水内部要因の診断(R1)', () => {
           (d.liftItcz[m]?.[i] ?? 1) *
           (d.liftFrontal[m]?.[i] ?? 1) *
           (d.liftOrographic[m]?.[i] ?? 1) *
+          (d.liftConvergence[m]?.[i] ?? 1) *
           (d.subsidenceResidual[m]?.[i] ?? 1) *
           (d.liftOther[m]?.[i] ?? 1) *
           scale;
