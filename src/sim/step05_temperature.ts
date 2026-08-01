@@ -211,6 +211,8 @@ export function computeTemperature(
     const c = coarse[i];
     diffFactor[i] = 1 + (K.oceanDiffusionBoost - 1) * (1 - (c?.landFrac ?? 0));
   }
+  // 逆転込みの実効拡散係数(時間ステップごとに再計算 — P2-2 の対称界面用)
+  const dfEff = new Float64Array(N);
   // 内陸度(0 = 海岸/海、1 = ~1500km 以上内陸)。冬の接地逆転層は内陸で強い
   // (海沿いの陸は冬も海風で暖まる: 西欧型。内陸は遮断される: シベリア型)
   const interior01 = new Float64Array(N);
@@ -243,11 +245,19 @@ export function computeTemperature(
   const dt = yearSeconds / K.ebmStepsPerYear;
 
   // ---- 時間積分(クロージャ: 恒常氷マスクを与えて 1 回まわす) ----
-  const integrate = (permanentIce: Uint8Array | null) => {
+  // P1-4 で発見した季節ドリフト(傾斜 0 の全海で 0.027°C/月)への対処:
+  // 海洋混合層の時定数 τ = C/B ≈ 3.2 年に対し、全熱容量での積分が 2 年しか
+  // 無いため周期定常へ届いていなかった。パス 2 をパス 1 の最終状態から
+  // 始めることで、実効的な緩和年数を倍にする(計算量は増えない)
+  const integrate = (permanentIce: Uint8Array | null, initialT?: Float64Array) => {
     const t = new Float64Array(N);
-    for (let row = 0; row < CH; row++) {
-      const init = -20 + 48 * (cosCenter[row] ?? 0);
-      for (let col = 0; col < CW; col++) t[row * CW + col] = init;
+    if (initialT) {
+      t.set(initialT);
+    } else {
+      for (let row = 0; row < CH; row++) {
+        const init = -20 + 48 * (cosCenter[row] ?? 0);
+        for (let col = 0; col < CW; col++) t[row * CW + col] = init;
+      }
     }
     const rhs = new Float64Array(N);
     // 海氷断熱: 氷結セルの実効熱容量(氷量に応じて毎ステップ更新)。
@@ -312,6 +322,21 @@ export function computeTemperature(
       const ridgeAbsS = Math.max(15, Math.abs(ridgeSNow));
       const summerN = ridgeNNow > meanRidgeN;
       const summerS = ridgeSNow < meanRidgeS;
+      // P2-2(FB 2026-07-31): 界面伝導度を厳密対称にする。逆転込みの実効拡散
+      // 係数をセルごとに前計算し、界面 = 両セルの実効係数の平均で一意に定義する。
+      // 旧実装は自セルにだけ逆転係数を掛けており、i→j と j→i の伝導度が
+      // 食い違って拡散が厳密には保存しなかった(コメントの意図とも不一致)
+      for (let row = 0; row < CH; row++) {
+        const winterRow =
+          (insolation.monthlyByRow[m0]?.[row] ?? 0) < (insolation.annualMeanByRow[row] ?? 0);
+        for (let col = 0; col < CW; col++) {
+          const i = row * CW + col;
+          const invD = winterRow
+            ? 1 - (1 - K.winterInversionDiffusionFactor) * (interior01[i] ?? 0)
+            : 1;
+          dfEff[i] = (diffFactor[i] ?? 1) * invD;
+        }
+      }
       for (let sweep = 0; sweep < GS_SWEEPS; sweep++) {
         for (let row = 0; row < CH; row++) {
           const lat = latDegOfRow(cg, row);
@@ -372,17 +397,12 @@ export function computeTemperature(
                 ? 0
                 : advScale * vBandW * chanV * landGrip * (Math.min(5, Math.abs(vMs)) / 4);
             const cOverDt = (capEff[i] ?? 1) / dt;
-            // 界面伝導度は両セルの係数平均(受け手の値だけ掛けると行列が
-            // 非対称になり厳密には保存しない — 2026-07-30 レビュー指摘)。
-            // 冬の接地逆転は自由大気との混合(拡散)も絶縁する(内陸で強い)
-            const invD = isWinterRow
-              ? 1 - (1 - K.winterInversionDiffusionFactor) * (interior01[i] ?? 0)
-              : 1;
-            const df = (diffFactor[i] ?? 1) * invD;
-            const gzE = gz * 0.5 * (df + (diffFactor[east] ?? 1));
-            const gzW = gz * 0.5 * (df + (diffFactor[west] ?? 1));
-            const gNEff = gN * 0.5 * (df + (diffFactor[north] ?? 1));
-            const gSEff = gS * 0.5 * (df + (diffFactor[south] ?? 1));
+            // 界面伝導度 = 両セルの実効係数(逆転込み dfEff)の平均。
+            // i→j と j→i で同一値になり、拡散項の行列が対称 = 保存的(P2-2)
+            const gzE = gz * 0.5 * ((dfEff[i] ?? 1) + (dfEff[east] ?? 1));
+            const gzW = gz * 0.5 * ((dfEff[i] ?? 1) + (dfEff[west] ?? 1));
+            const gNEff = gN * 0.5 * ((dfEff[i] ?? 1) + (dfEff[north] ?? 1));
+            const gSEff = gS * 0.5 * ((dfEff[i] ?? 1) + (dfEff[south] ?? 1));
             const diag = cOverDt + K.olrBWm2PerC + gzE + gzW + gNEff + gSEff + advCu + advCv;
             const off =
               gzE * (t[east] ?? 0) +
@@ -406,7 +426,7 @@ export function computeTemperature(
         }
       }
     }
-    return { monthAccum, monthCount };
+    return { monthAccum, monthCount, finalT: t };
   };
 
   // パス 1: 恒常氷なしで積分 → 年平均と最暖月の複合条件で氷床を判定
@@ -464,7 +484,7 @@ export function computeTemperature(
     if (!changed) break;
   }
   // パス 2: 氷床アルベドを反映して確定
-  const pass2 = integrate(permanentIce);
+  const pass2 = integrate(permanentIce, pass1.finalT);
 
   return downscale(ctx, cg, pass2.monthAccum, pass2.monthCount, gamma);
 }
