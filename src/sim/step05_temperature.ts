@@ -421,7 +421,14 @@ export async function computeTemperature(
     // CPU 経路は年数を自動調整しない(収束まで回すと 1 実行に数分かかる)。
     // 既定(years = 0 = 自動)のときは従来と同じ 2 年を使う。
     // GPU と揃えて比べたいときは EBM_FULL_CAPACITY_YEARS.years を明示すること
-    const cpuFullYears = EBM_FULL_CAPACITY_YEARS.years > 0 ? EBM_FULL_CAPACITY_YEARS.years : 2;
+    // CPU 経路は年数を自動調整しない(判定に必要な 2 年ぶんの積算を持たないため)。
+    // ただし既定値は **GPU と揃える**。揃えないと EXOCLIM_GPU=0 と有効時で
+    // 物理が変わり再現性が壊れる。時間はかかるので、性質だけ見るテストは
+    // tests/setup.ts で明示的に短くする。
+    const cpuFullYears =
+      EBM_FULL_CAPACITY_YEARS.years > 0
+        ? EBM_FULL_CAPACITY_YEARS.years
+        : EBM_FULL_CAPACITY_START_YEARS;
     const totalSteps = Math.max(K.ebmYears, cpuFullYears + SPINUP_ACCEL_YEARS) * K.ebmStepsPerYear;
     const totalYears = totalSteps / K.ebmStepsPerYear;
     const spinupSteps = Math.max(0, (totalYears - cpuFullYears) * K.ebmStepsPerYear);
@@ -668,7 +675,10 @@ export async function computeTemperature(
       // GPU 経路では下の runOnce が years と fullCapacityYears を上書きする
       // (周期定常に達するまで年数を増やすため)。ここの値は初期値にすぎない
       years: K.ebmYears,
-      fullCapacityYears: EBM_FULL_CAPACITY_YEARS.years > 0 ? EBM_FULL_CAPACITY_YEARS.years : 2,
+      fullCapacityYears:
+        EBM_FULL_CAPACITY_YEARS.years > 0
+          ? EBM_FULL_CAPACITY_YEARS.years
+          : EBM_FULL_CAPACITY_START_YEARS,
       heatCap: f32(heatCap),
       aEff: f32(aEff),
       surfAlbedoBase: f32(surfAlbedoBase),

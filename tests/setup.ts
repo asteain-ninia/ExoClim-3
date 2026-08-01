@@ -9,6 +9,10 @@
 // テストでは従来と同じ 8 回に固定して時間を稼ぐ。
 // 較正成績を見る検証は scripts/validate.ts(GPU で収束させて走る)の役目。
 
-import { EBM_SOLVER } from '../src/sim/step05_temperature';
+import { EBM_SOLVER, EBM_FULL_CAPACITY_YEARS } from '../src/sim/step05_temperature';
 
 EBM_SOLVER.sweeps = 8;
+// 全熱容量で回す年数も短くする。既定は 24 年(周期定常に達する値)で、
+// CPU 経路だと 1 実行に数十分かかる。ここで見ているのは決定性・有限性・
+// 収支の閉じ方であり、どれも緩和年数に依らず成り立つべきもの。
+EBM_FULL_CAPACITY_YEARS.years = 2;
