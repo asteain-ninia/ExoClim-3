@@ -89,8 +89,80 @@ export const EBM_SOLVER = {
  *   反復  128 → 残差 3.6e-2 / 256 → 2.6e-3 / **512 → 1.7e-5** / 1024 → 0
  *   許容差 1e-3 を満たす最小の 2 冪が 512。気温場は 256 の時点で
  *   512 と 0.0012°C しか違わず、採点も同一だが、**しきい値は緩めない**。
+ *
+ * ただしこれは**地球の値**である。全陸惑星は 512 では収束しない
+ * (残差 3.1e-3、2026-08-02 実測)。陸は熱容量が小さく C/dt が効かないため
+ * 対角優位が弱く、反復が効きにくい。惑星デザイナとして地球以外を扱う以上、
+ * 固定回数は使えない — 下の EBM_GPU_MAX_ITERATIONS まで倍々で再試行する。
  */
 export const EBM_GPU_ITERATIONS = 512;
+
+/**
+ * 反復回数の再試行上限。ここまで倍々に増やしても収束しなければ、
+ * 未収束であることを診断に残す(黙って採用しない)。
+ */
+export const EBM_GPU_MAX_ITERATIONS = 8192;
+
+/**
+ * 直近に収束した反復回数の記憶(**性能のためだけの手掛かり**)。
+ *
+ * 較正は同じ惑星を数千回解くので、毎回 512 から倍々に増やすのは無駄。
+ * 前回足りた回数から始める。結果には影響しない — 反復後に必ず残差を検査し、
+ * 足りなければさらに増やすため、得られる解は手掛かりの初期値に依らない。
+ */
+let gpuIterationHint = EBM_GPU_ITERATIONS;
+
+/**
+ * 全熱容量で積分する年数(末尾から数える)。それ以前は熱容量 1/16 で加速する。
+ *
+ * **これも収束の問題**: 海洋混合層の時定数は τ = C/B ≈ 3.2 年なので、
+ * 2 年では 0.6τ しか緩和しない。1/16 の加速期(τ' = 0.2 年)は速く落ち着くが、
+ * そこから全熱容量へ切り替えた後の緩和が足りているかは別の話であり、
+ * **積分年数を増やすだけでは検証できない**(加速期が伸びるだけで
+ * 全熱容量の年数は 2 のまま。2026-08-02 に一度取り違えた)。
+ * 値は scripts/exp_ebm_fullcap.ts で実測して決める。
+ */
+export const EBM_FULL_CAPACITY_YEARS = {
+  /**
+   * 0 = 周期定常に達するまで自動で増やす(既定)。> 0 で固定(調査用)。
+   * CPU 経路は自動化しない(1 実行に数分かかるため)ので、その場合は明示する。
+   */
+  years: 0,
+};
+
+/** 加速期(熱容量 1/16)の年数。τ' = 0.2 年なので 2 年で十分 */
+export const SPINUP_ACCEL_YEARS = 2;
+
+/**
+ * 周期定常に達したとみなす年次ドリフトの許容差(°C)。
+ * 最終年と前年の年平均の**面積重み平均** |Δ| がこれを下回れば「毎年同じ気候」。
+ * 全セルの最大値ではなく面積重み平均で測るのは、許容差を時間離散化の誤差
+ * (240 刻みで 0.13°C、これも面積重み平均)と比べて決めているため。
+ * 物差しを揃えないと、極の小さなセル 1 つに判定が支配される。
+ *
+ * **較正つまみではない**。時間離散化の誤差(240 刻みで約 0.13°C)より
+ * 小さく取る。0.05°C は気候の意味を持つ差より 1 桁小さい。
+ */
+export const EBM_PERIODIC_TOLERANCE_C = 0.05;
+
+/**
+ * 全熱容量で回す年数の出発点。ここから足りなければ倍々に増やす。
+ *
+ * 24 の根拠(実測 2026-08-02、scripts/exp_ebm_fullcap.ts):
+ *   海洋混合層の時定数 τ = C/B ≈ 3.2 年。年数を振ると気温場は
+ *   8→12 で 0.68°C、12→16 で 0.29°C、16→24 で 0.14°C、24→32 で **0.016°C**
+ *   しか動かなくなる(面積重み平均)。採点も 24 年で 32 年と 0.02pt しか違わない。
+ *   年次ドリフトは 24 年で約 0.014°C と許容差 0.05 を満たす。
+ *   16 年は 0.2°C で足りず、倍々だと 32 年へ行き過ぎるので 24 から始める。
+ *   従来の **2 年は 0.6τ** しかなく、周期定常に遠く届いていなかった。
+ */
+export const EBM_FULL_CAPACITY_START_YEARS = 24;
+
+/** 全熱容量の年数の再試行上限。ここまで増やしても収束しなければ診断に残す */
+export const EBM_MAX_FULL_CAPACITY_YEARS = 64;
+
+/** 直近に周期定常へ達した年数の記憶(性能のためだけの手掛かり。結果には影響しない) */
+let fullCapacityHint = 0;
 
 /** 直近の実行の診断(報告用。物理結果には含めない) */
 export const EBM_SOLVER_STATS = {
@@ -100,6 +172,12 @@ export const EBM_SOLVER_STATS = {
   capHits: 0,
   /** GPU 経路で観測した最大残差(°C) */
   maxResidualC: 0,
+  /** 最終年と前年の年平均の最大差(°C、参考値) */
+  maxYearDriftC: 0,
+  /** 同・面積重み平均(°C)。周期定常の判定はこちら */
+  meanYearDriftC: 0,
+  /** 全熱容量で回した年数 */
+  fullCapacityYears: 0,
 };
 
 interface CoarseCell {
@@ -340,8 +418,13 @@ export async function computeTemperature(
       () => new Float64Array(N),
     );
     const monthCount = new Array<number>(MONTHS_PER_YEAR).fill(0);
-    const totalSteps = K.ebmYears * K.ebmStepsPerYear;
-    const spinupSteps = Math.max(0, (K.ebmYears - 2) * K.ebmStepsPerYear);
+    // CPU 経路は年数を自動調整しない(収束まで回すと 1 実行に数分かかる)。
+    // 既定(years = 0 = 自動)のときは従来と同じ 2 年を使う。
+    // GPU と揃えて比べたいときは EBM_FULL_CAPACITY_YEARS.years を明示すること
+    const cpuFullYears = EBM_FULL_CAPACITY_YEARS.years > 0 ? EBM_FULL_CAPACITY_YEARS.years : 2;
+    const totalSteps = Math.max(K.ebmYears, cpuFullYears + SPINUP_ACCEL_YEARS) * K.ebmStepsPerYear;
+    const totalYears = totalSteps / K.ebmStepsPerYear;
+    const spinupSteps = Math.max(0, (totalYears - cpuFullYears) * K.ebmStepsPerYear);
 
     for (let step = 0; step < totalSteps; step++) {
       const capScale = step < spinupSteps ? 1 / 16 : 1;
@@ -543,7 +626,7 @@ export async function computeTemperature(
       if (sweepsUsed > EBM_SOLVER_STATS.maxSweeps) EBM_SOLVER_STATS.maxSweeps = sweepsUsed;
       if (fixedSweeps === 0 && !converged) EBM_SOLVER_STATS.capHits++;
 
-      if (step >= (K.ebmYears - 1) * K.ebmStepsPerYear) {
+      if (step >= (totalYears - 1) * K.ebmStepsPerYear) {
         const mIdx = Math.min(MONTHS_PER_YEAR - 1, Math.floor(yearFrac * MONTHS_PER_YEAR));
         const acc = monthAccum[mIdx];
         if (acc) {
@@ -582,7 +665,10 @@ export async function computeTemperature(
       heightCells: CH,
       dtSeconds: dt,
       stepsPerYear: K.ebmStepsPerYear,
+      // GPU 経路では下の runOnce が years と fullCapacityYears を上書きする
+      // (周期定常に達するまで年数を増やすため)。ここの値は初期値にすぎない
       years: K.ebmYears,
+      fullCapacityYears: EBM_FULL_CAPACITY_YEARS.years > 0 ? EBM_FULL_CAPACITY_YEARS.years : 2,
       heatCap: f32(heatCap),
       aEff: f32(aEff),
       surfAlbedoBase: f32(surfAlbedoBase),
@@ -632,10 +718,51 @@ export async function computeTemperature(
     initialT?: Float64Array,
   ): Promise<{ monthAccum: Float64Array[]; monthCount: number[]; finalT: Float64Array }> => {
     if (!ebmAccel) return integrate(permanentIce, initialT);
-    const r = await ebmAccel.run(buildEbmFields(permanentIce, initialT), ebmConstants);
+    const fields = buildEbmFields(permanentIce, initialT);
+    // 反復回数は**惑星ごとに必要量が違う**。地球は 512 で足りるが、全陸惑星は
+    // 熱容量が小さく対角優位が弱いため足りない(2026-08-02 実測)。
+    // 収束するまで倍々に増やす。回数を固定すると、地球以外で黙って
+    // 未収束の答えを採用してしまう(惑星デザイナとしては致命的)
+    const adaptive = EBM_SOLVER.sweeps === 0;
+    // 全熱容量で回す年数も**収束するまで増やす**。海洋の時定数 τ ≈ 3.2 年に対し
+    // 従来の 2 年は 0.6τ しかなく、周期定常に遠く届いていなかった(2026-08-02)。
+    // 年数を固定すると、その実装詳細が答えを決めてしまう(反復回数と同じ構造)。
+    const yearAdaptive = adaptive && EBM_FULL_CAPACITY_YEARS.years <= 0;
+    let fullYears = yearAdaptive
+      ? Math.max(fullCapacityHint, EBM_FULL_CAPACITY_START_YEARS)
+      : EBM_FULL_CAPACITY_YEARS.years;
+    let iters = adaptive ? gpuIterationHint : ebmConstants.iterationsPerStep;
+    const runOnce = async (): Promise<Awaited<ReturnType<typeof ebmAccel.run>>> =>
+      ebmAccel.run(
+        { ...fields, years: fullYears + SPINUP_ACCEL_YEARS, fullCapacityYears: fullYears },
+        { ...ebmConstants, iterationsPerStep: iters },
+      );
+    let r = await runOnce();
+    while (adaptive && !r.converged && iters < EBM_GPU_MAX_ITERATIONS) {
+      iters *= 2;
+      r = await runOnce();
+    }
+    while (
+      yearAdaptive &&
+      r.meanYearDriftC > EBM_PERIODIC_TOLERANCE_C &&
+      fullYears < EBM_MAX_FULL_CAPACITY_YEARS
+    ) {
+      fullYears *= 2;
+      r = await runOnce();
+      while (!r.converged && iters < EBM_GPU_MAX_ITERATIONS) {
+        iters *= 2;
+        r = await runOnce();
+      }
+    }
+    if (adaptive && r.converged) gpuIterationHint = iters;
+    if (yearAdaptive && r.meanYearDriftC <= EBM_PERIODIC_TOLERANCE_C) fullCapacityHint = fullYears;
+    EBM_SOLVER_STATS.maxYearDriftC = Math.max(EBM_SOLVER_STATS.maxYearDriftC, r.maxYearDriftC);
+    EBM_SOLVER_STATS.meanYearDriftC = Math.max(EBM_SOLVER_STATS.meanYearDriftC, r.meanYearDriftC);
+    EBM_SOLVER_STATS.fullCapacityYears = fullYears;
     EBM_SOLVER_STATS.maxResidualC = Math.max(EBM_SOLVER_STATS.maxResidualC, r.maxResidualC);
+    if (iters > EBM_SOLVER_STATS.maxSweeps) EBM_SOLVER_STATS.maxSweeps = iters;
     if (!r.converged) {
-      // 黙って未収束の結果を採用しない。反復回数が足りない条件を知らせる
+      // 上限まで増やしても収束しなかった。黙って採用せず診断に残す
       EBM_SOLVER_STATS.capHits++;
     }
     const toF64 = (a: Float32Array): Float64Array => {
@@ -717,42 +844,60 @@ function aggregateToCoarse(
   ocean: OceanCurrentResult,
   cg: Grid,
 ): CoarseCell[] {
-  const f = Math.round(cg.resolutionDeg / refGrid.resolutionDeg);
-  const fSst = Math.round(cg.resolutionDeg / ctx.grid.resolutionDeg);
+  // 粗セルに入る細セルは**中心が範囲に入るか**で決める。
+  // 旧実装は `row * round(比)` の添字ブロックで拾っていたため、比が整数で
+  // ないと破綻した(1.5° 対 1° では比 = 2 となり、粗格子の南半球が参照格子の
+  // 範囲外を読んで全部海になる。2026-08-02 実測で大分類 53.10 まで落ちる)。
+  // 整数比のときは従来と同じブロックになる(中心 (fr+0.5)·refRes が
+  // [row·cgRes, (row+1)·cgRes) に入る細行は row·f + 0..f-1 に一致)。
+  const forEachFine = (
+    row: number,
+    col: number,
+    fine: Grid,
+    visit: (index: number) => void,
+  ): void => {
+    const rRatio = cg.resolutionDeg / fine.resolutionDeg;
+    const frLo = Math.max(0, Math.floor(row * rRatio - 0.5));
+    const frHi = Math.min(fine.heightCells - 1, Math.ceil((row + 1) * rRatio));
+    const fcLo = Math.floor(col * rRatio - 0.5);
+    const fcHi = Math.ceil((col + 1) * rRatio);
+    for (let fr = frLo; fr <= frHi; fr++) {
+      const centerDegN = (fr + 0.5) * fine.resolutionDeg;
+      if (centerDegN < row * cg.resolutionDeg || centerDegN >= (row + 1) * cg.resolutionDeg) {
+        continue;
+      }
+      for (let fc = fcLo; fc <= fcHi; fc++) {
+        const centerDegE = (fc + 0.5) * fine.resolutionDeg;
+        if (centerDegE < col * cg.resolutionDeg || centerDegE >= (col + 1) * cg.resolutionDeg) {
+          continue;
+        }
+        const wrapped = ((fc % fine.widthCells) + fine.widthCells) % fine.widthCells;
+        visit(fr * fine.widthCells + wrapped);
+      }
+    }
+  };
   const out: CoarseCell[] = new Array(cg.cellCount);
   for (let row = 0; row < cg.heightCells; row++) {
     for (let col = 0; col < cg.widthCells; col++) {
       let n = 0;
       let landN = 0;
       let landElevSum = 0;
-      for (let dr = 0; dr < f; dr++) {
-        for (let dc = 0; dc < f; dc++) {
-          const fr = row * f + dr;
-          const fc = col * f + dc;
-          if (fr >= refGrid.heightCells || fc >= refGrid.widthCells) continue;
-          const i = fr * refGrid.widthCells + fc;
-          n++;
-          if (refTerrain.landMask[i]) {
-            landN++;
-            landElevSum += refTerrain.elevationMeters[i] ?? 0;
-          }
+      forEachFine(row, col, refGrid, (i) => {
+        n++;
+        if (refTerrain.landMask[i]) {
+          landN++;
+          landElevSum += refTerrain.elevationMeters[i] ?? 0;
         }
-      }
+      });
       // SST 偏差は表示格子(Step 3 の出力)から集約
       let sstSum = 0;
       let oceanN = 0;
-      for (let dr = 0; dr < fSst; dr++) {
-        for (let dc = 0; dc < fSst; dc++) {
-          const fr = row * fSst + dr;
-          const fc = col * fSst + dc;
-          if (fr >= ctx.grid.heightCells || fc >= ctx.grid.widthCells) continue;
-          const i = fr * ctx.grid.widthCells + fc;
-          if (!ctx.terrain.landMask[i]) {
-            oceanN++;
-            sstSum += ocean.sstAnomalyC[i] ?? 0;
-          }
+      forEachFine(row, col, ctx.grid, (i) => {
+        if (!ctx.terrain.landMask[i]) {
+          oceanN++;
+          sstSum += ocean.sstAnomalyC[i] ?? 0;
         }
-      }
+      });
       out[row * cg.widthCells + col] = {
         landFrac: n > 0 ? landN / n : 0,
         meanLandElevM: landN > 0 ? landElevSum / landN : 0,

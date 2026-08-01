@@ -111,6 +111,12 @@ export interface EbmStaticFields {
   dtSeconds: number;
   stepsPerYear: number;
   years: number;
+  /**
+   * 全熱容量で積分する年数(末尾から数える)。それ以前は熱容量 1/16 で加速。
+   * **CPU と GPU で必ず同じ値を使うこと** — 片方にベタ書きすると、
+   * 定数を振ったつもりの実験が無効になる(2026-08-02 に実際に踏んだ)。
+   */
+  fullCapacityYears: number;
   /** [cell] 熱容量 J/m²/K */
   heatCap: Float32Array;
   /** [cell] 標高補正込みの OLR 切片 */
@@ -191,6 +197,14 @@ export interface EbmAccelResult {
   maxResidualC: number;
   /** 全ステップで許容差を満たしたか。false なら反復回数が足りない */
   converged: boolean;
+  /** 最終年と前年の年平均の最大差(°C)。参考値(極の小さなセルに支配される) */
+  maxYearDriftC: number;
+  /**
+   * 同・**面積重み平均**(°C)。周期定常への到達度の判定はこちらで行う。
+   * 時間離散化の誤差(0.13°C)を同じ物差しで測っており、許容差はそれと
+   * 比べて決めているので揃える必要がある。
+   */
+  meanYearDriftC: number;
 }
 
 export interface EbmAccel {

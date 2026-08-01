@@ -45,7 +45,7 @@ struct Params {
   chanFactor : f32, summerAdv : f32, advCoupling : f32, winterInvDiff : f32,
   winterInvAdv : f32, dPhi : f32, resDeg : f32, ridgeAbsN : f32,
   ridgeAbsS : f32, summerN : u32, summerS : u32, hasEvap : u32,
-  accumulate : u32, _p0 : u32, _p1 : u32, _p2 : u32,
+  accumulate : u32, accumSlot : u32, _p0 : u32, _p1 : u32,
 };
 
 @group(0) @binding(0) var<uniform> P : Params;
@@ -57,6 +57,10 @@ struct Params {
 @group(0) @binding(2) var<storage, read> rows : array<f32>;
 // 月別セル別(各 12*N): 0 cloud, 1 windU, 2 windV, 3 evap
 @group(0) @binding(3) var<storage, read> monthly : array<f32>;
+// **temp は二役**: 各時間ステップの入口では前ステップの温度 T^n(prepA が
+// 右辺 (C/dt)·T^n を作るのに読む)、以降は反復の作業変数。prepA より前に
+// temp を書き換えると右辺の T^n を壊し、物理が変わる
+// (2026-08-02 に初期推定の外挿を prepA の前へ置いて気温 RMSE 3000°C を出した)
 @group(0) @binding(4) var<storage, read_write> temp : array<f32>;
 // 作業: 0 rhs, 1 diag, 2 gzE, 3 gzW, 4 gN, 5 gS, 6 advCu, 7 advCv,
 //       8 upwindU, 9 upwindV, 10 dfEff, 11 cOverDt
@@ -64,9 +68,13 @@ struct Params {
 // 自セルへ diag を書くため(同じ場だと未読のスレッドの入力を壊す)
 @group(0) @binding(5) var<storage, read_write> work : array<f32>;
 @group(0) @binding(6) var<storage, read_write> accum : array<f32>;
+// 前年の月別積算(周期定常への到達度を測るため)。binding 10
+
 @group(0) @binding(7) var<storage, read_write> residual : array<f32>;
 /** 反復前の温度(残差 = 合成作用素の変化量 を測るための控え) */
 @group(0) @binding(8) var<storage, read_write> tPrev : array<f32>;
+/** 前年の月別積算。最終年との差が周期定常への到達度になる */
+@group(0) @binding(9) var<storage, read_write> accumPrev : array<f32>;
 
 const WG : u32 = ${GPU_WORKGROUP_SIZE}u;
 var<workgroup> partial : array<f32, ${GPU_WORKGROUP_SIZE}>;
@@ -280,7 +288,11 @@ fn finish(@builtin(local_invocation_id) lid : vec3<u32>) {
   if (P.accumulate == 1u) {
     for (var i = tid; i < P.n; i = i + WG) {
       let idx = P.monthIndex * P.n + i;
-      accum[idx] = accum[idx] + temp[i];
+      if (P.accumSlot == 1u) {
+        accum[idx] = accum[idx] + temp[i];
+      } else {
+        accumPrev[idx] = accumPrev[idx] + temp[i];
+      }
     }
   }
 }
@@ -305,8 +317,9 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
   const bufAccum = device.createBuffer({ size: M * N * 4, usage: ST | CS | CD });
   const bufResidual = device.createBuffer({ size: MAX_STEPS * 4, usage: ST | CS | CD });
   const bufPrev = device.createBuffer({ size: N * 4, usage: ST | CS | CD });
+  const bufAccumPrev = device.createBuffer({ size: M * N * 4, usage: ST | CS | CD });
   const bufParams = device.createBuffer({ size: 144, usage: GPUBufferUsage.UNIFORM | CD });
-  const stage = new ReadbackStage(device, M * N + N + MAX_STEPS);
+  const stage = new ReadbackStage(device, 2 * M * N + N + MAX_STEPS);
 
   const module = device.createShaderModule({ code: WGSL });
   // **明示レイアウトが必須**。layout: 'auto' はエントリごとに「実際に使う
@@ -324,6 +337,7 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
       { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
       { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
       { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
     ],
   });
   const pipeLayout = device.createPipelineLayout({ bindGroupLayouts: [bindLayout] });
@@ -346,6 +360,7 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
     { binding: 6, resource: { buffer: bufAccum } },
     { binding: 7, resource: { buffer: bufResidual } },
     { binding: 8, resource: { buffer: bufPrev } },
+    { binding: 9, resource: { buffer: bufAccumPrev } },
   ];
   // レイアウトが共通なので束ねは 1 つで足りる
   const bind = device.createBindGroup({ layout: bindLayout, entries });
@@ -373,6 +388,7 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
         bufAccum,
         bufResidual,
         bufPrev,
+        bufAccumPrev,
         bufParams,
       ]) {
         b.destroy();
@@ -444,13 +460,20 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
       device.queue.writeBuffer(bufTemp, 0, asBufferSource(scratchTemp));
       scratchZeroCells.fill(0);
       device.queue.writeBuffer(bufAccum, 0, asBufferSource(scratchZeroCells));
+      device.queue.writeBuffer(bufAccumPrev, 0, asBufferSource(scratchZeroCells));
       scratchResidual.fill(0);
       device.queue.writeBuffer(bufResidual, 0, asBufferSource(scratchResidual));
 
       const totalSteps = fields.years * fields.stepsPerYear;
       if (totalSteps > MAX_STEPS) throw new Error(`時間ステップ数が上限を超えた(${totalSteps})`);
-      const spinupSteps = Math.max(0, (fields.years - 2) * fields.stepsPerYear);
+      // 全熱容量の年数は**呼び出し側から受け取る**。ここにベタ書きすると
+      // CPU 側の定数を振っても GPU に届かず、実験が無効になる(2026-08-02 実害)
+      const spinupSteps = Math.max(
+        0,
+        (fields.years - fields.fullCapacityYears) * fields.stepsPerYear,
+      );
       const lastYearStart = (fields.years - 1) * fields.stepsPerYear;
+      const prevYearStart = Math.max(0, (fields.years - 2) * fields.stepsPerYear);
       const iters = Math.max(1, Math.round(k.iterationsPerStep));
       const monthCount = new Array<number>(M).fill(0);
       const polarGroups = Math.ceil(CH / GPU_WORKGROUP_SIZE);
@@ -464,9 +487,10 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
         const frac = (monthFloat - 0.5 + M) % 1;
         const ridgeNNow = fields.ridgeLatN[m0] ?? 31;
         const ridgeSNow = fields.ridgeLatS[m0] ?? -31;
-        const accumulate = step >= lastYearStart;
+        const accumulate = step >= prevYearStart;
+        const accumSlot = step >= lastYearStart ? 1 : 0;
         const monthIndex = Math.min(M - 1, Math.floor(yearFrac * M));
-        if (accumulate) monthCount[monthIndex] = (monthCount[monthIndex] ?? 0) + 1;
+        if (accumSlot === 1) monthCount[monthIndex] = (monthCount[monthIndex] ?? 0) + 1;
 
         pu[0] = CW;
         pu[1] = CH;
@@ -501,6 +525,7 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
         pu[30] = ridgeSNow < fields.meanRidgeS ? 1 : 0;
         pu[31] = fields.evapAnom ? 1 : 0;
         pu[32] = accumulate ? 1 : 0;
+        pu[33] = accumSlot;
         device.queue.writeBuffer(bufParams, 0, paramBuf);
 
         // 1 時間ステップぶんを 1 つのエンコーダへ積む(submit は 1 回)
@@ -528,28 +553,57 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
       // 読み戻しは 1 回だけ(積算 + 最終温度 + 残差)
       const enc = device.createCommandEncoder();
       stage.enqueueCopyAt(enc, bufAccum, 0, M * N);
-      stage.enqueueCopyAt(enc, bufTemp, M * N, N);
-      stage.enqueueCopyAt(enc, bufResidual, M * N + N, MAX_STEPS);
+      stage.enqueueCopyAt(enc, bufAccumPrev, M * N, M * N);
+      stage.enqueueCopyAt(enc, bufTemp, 2 * M * N, N);
+      stage.enqueueCopyAt(enc, bufResidual, 2 * M * N + N, MAX_STEPS);
       device.queue.submit([enc.finish()]);
-      const flat = await stage.map(M * N + N + MAX_STEPS);
+      const flat = await stage.map(2 * M * N + N + MAX_STEPS);
 
       const monthAccum: Float32Array[] = [];
       for (let m = 0; m < M; m++) monthAccum.push(flat.slice(m * N, (m + 1) * N));
-      const finalT = flat.slice(M * N, M * N + N);
+      const finalT = flat.slice(2 * M * N, 2 * M * N + N);
       let maxResidualC = 0;
       for (let s = 0; s < totalSteps; s++) {
-        const v = flat[M * N + N + s] ?? 0;
+        const v = flat[2 * M * N + N + s] ?? 0;
         if (v > maxResidualC) maxResidualC = v;
       }
       // 許容差を満たしたかを**返す**。渡された許容差を使わずに残差を記録する
       // だけだと、ある惑星条件で反復が足りなくてもそのまま採用されてしまう
       // (Codex レビュー 2026-08-02)
+      // 最終年と前年の差 = 周期定常への到達度。
+      // 積分年数が足りているかは**これ**で検証する(年数を増やしても
+      // 加速期が伸びるだけ、という取り違えを防ぐ。2026-08-02)。
+      //
+      // 指標は**年平均の面積重み平均 |Δ|**。時間離散化の誤差(0.13°C)を
+      // 同じ物差しで測っており、許容差はそれと比べて決めたので揃える必要がある。
+      // 全セルの最大値だと極の小さなセル 1 つに支配され、桁が変わってしまう。
+      let sumW = 0;
+      let sumWD = 0;
+      let maxYearDriftC = 0;
+      for (let i = 0; i < N; i++) {
+        const row = Math.floor(i / CW);
+        const w = fields.cosCenter[row] ?? 0;
+        let annualA = 0;
+        let annualB = 0;
+        for (let m = 0; m < M; m++) {
+          const cnt = Math.max(1, monthCount[m] ?? 1);
+          annualA += (flat[m * N + i] ?? 0) / cnt;
+          annualB += (flat[M * N + m * N + i] ?? 0) / cnt;
+        }
+        const d = Math.abs(annualA - annualB) / M;
+        if (d > maxYearDriftC) maxYearDriftC = d;
+        sumW += w;
+        sumWD += w * d;
+      }
+      const meanYearDriftC = sumW > 0 ? sumWD / sumW : 0;
       return {
         monthAccum,
         monthCount,
         finalT,
         maxResidualC,
         converged: maxResidualC <= k.solveToleranceC,
+        maxYearDriftC,
+        meanYearDriftC,
       };
     },
   };

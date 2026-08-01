@@ -142,11 +142,20 @@ interface WorkerHandle {
 function poolBackend(state: OptState, n: number): Backend {
   const workers: WorkerHandle[] = [];
   for (let i = 0; i < n; i++) {
-    const proc = spawn('npx', ['tsx', 'scripts/optimize_worker.ts'], {
-      shell: true,
-      stdio: ['pipe', 'pipe', 'inherit'],
-      cwd: process.cwd(),
-    });
+    // 実行名を引数として渡す(ワーカー本体は使わない)。
+    // これはコマンドラインに**目印**を残すためのもの:
+    // 較正を止めるとき親だけ殺すと子が生き残って GPU を食い続ける
+    // (2026-08-02 に 8 個の孤児が評価速度を 3 倍遅くしていた)。
+    // 目印があれば `--run` 名で正確に狙い撃ちできる。
+    const proc = spawn(
+      'npx',
+      ['tsx', 'scripts/optimize_worker.ts', `--marker=${RUN_NAME || 'anon'}`],
+      {
+        shell: true,
+        stdio: ['pipe', 'pipe', 'inherit'],
+        cwd: process.cwd(),
+      },
+    );
     const rl = readline.createInterface({ input: proc.stdout! });
     workers.push({ proc, rl, busy: false });
   }
