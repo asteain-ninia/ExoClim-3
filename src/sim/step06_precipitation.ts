@@ -387,6 +387,16 @@ export function solveSoilWater(
 export const COUPLING_TOLERANCE_MM_PER_MONTH = 0.2;
 export const COUPLING_MAX_ITERATIONS = 8;
 
+/**
+ * 結合反復の打ち切りを実験で振るための上書き口(既定 0 = 上の定数を使う)。
+ *
+ * EBM で「反復の打ち切り」が答えを決めていた例が 3 件見つかったので
+ * (docs/実験記録_EBM数値の点検_2026-08-02.md)、ここも同じ疑いで検査できる
+ * ようにしておく。**通常経路の既定は変えない**。
+ * 検査: scripts/exp_coupling_tolerance.ts
+ */
+export const COUPLING_OVERRIDE = { maxIterations: 0 };
+
 export interface PrecipCouplingDiagnostics {
   /** 実施した結合反復回数 */
   iterations: number;
@@ -786,7 +796,9 @@ export async function computePrecipitation(
   let iterations = 0;
   let residual = Number.POSITIVE_INFINITY;
   let converged = false;
-  for (let it = 1; it <= COUPLING_MAX_ITERATIONS; it++) {
+  const couplingMax =
+    COUPLING_OVERRIDE.maxIterations > 0 ? COUPLING_OVERRIDE.maxIterations : COUPLING_MAX_ITERATIONS;
+  for (let it = 1; it <= couplingMax; it++) {
     iterations = it;
     if (soilOn) {
       // 結合反復のウォームスタート(前反復の 12 月末貯水)。周期定常への
@@ -833,7 +845,7 @@ export async function computePrecipitation(
   if (diagOut && soil) diagOut.soil = soil;
   const coupling: PrecipCouplingDiagnostics = {
     iterations,
-    maxIterations: COUPLING_MAX_ITERATIONS,
+    maxIterations: couplingMax,
     toleranceMmPerMonth: COUPLING_TOLERANCE_MM_PER_MONTH,
     finalResidualMmPerMonth: residual,
     converged,
