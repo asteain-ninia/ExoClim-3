@@ -55,6 +55,15 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['seaIceInsulationFactor', 0.8, 0.95],
   ['albedoIce', 0.28, 0.42],
   ['permanentIceAlbedo', 0.55, 0.75],
+  // 陸の実効熱容量(水柱換算 m)。**2026-08-01 に追加**。
+  // 追加の根拠(目的関数を見て決めたのではなく、独立した診断から):
+  //   モデルの季節振幅を観測と比べると、内陸(海岸 1000km 以上)で +5.2°C 過大、
+  //   沿岸ではほぼ誤差なし。大陸度のコントラストが過大という診断
+  //   (scripts/exp_season_response.ts)。陸の熱容量はその第一の制御量なのに
+  //   探索空間に入っておらず、較正が触れなかった。
+  //   下見の走査で 1.2 → 4.0 にすると内陸振幅 5.21 → 2.45°C、
+  //   詳細一致率 39.38 → 41.47 と改善する。上限は 4.0 が端に来ないよう 8 まで取る。
+  ['landEffectiveWaterDepthM', 0.5, 8],
   ['sstAnomalyCouplingWm2PerK', 12, 26],
   ['olrAWm2', 201, 206],
   ['diffusionWm2PerK', 0.45, 0.65],
