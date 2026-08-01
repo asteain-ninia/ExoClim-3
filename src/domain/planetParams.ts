@@ -51,6 +51,20 @@ export type TerrainSource =
       landFraction: number;
       /** 地形の起伏の強さ(0.5〜2、1 = 地球程度) */
       reliefScale: number;
+    }
+  | {
+      /**
+       * 外部から与える 1° 格子の地形(創作世界の地図など)。
+       * row 0 = 北端、col 0 = −180° の規約に従うこと。
+       * crestMeters(セル内高分位標高)は任意 — 無ければ平均標高を使う
+       */
+      kind: 'custom';
+      name: string;
+      widthCells: number;
+      heightCells: number;
+      elevationMeters: number[];
+      landMask: number[];
+      crestMeters?: number[];
     };
 
 export interface PlanetParams {

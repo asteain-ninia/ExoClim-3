@@ -172,6 +172,18 @@ export function invalidInputIssues(params: PlanetParams): DiagnosticIssue[] {
   if (t.kind === 'preset') {
     if (!TERRAIN_PRESETS.has(t.preset))
       bad('terrainPreset', `未知の地形プリセット ${String(t.preset)}`);
+  } else if (t.kind === 'custom') {
+    const expected = t.widthCells * t.heightCells;
+    if (!Number.isInteger(t.widthCells) || !Number.isInteger(t.heightCells) || expected <= 0) {
+      bad('customTerrainGrid', `外部地形の格子 ${t.widthCells}x${t.heightCells} が不正`);
+    } else if (t.elevationMeters.length !== expected || t.landMask.length !== expected) {
+      bad(
+        'customTerrainLength',
+        `外部地形の配列長が格子と不一致(標高 ${t.elevationMeters.length} / 陸海 ${t.landMask.length} vs ${expected})`,
+      );
+    } else if (t.elevationMeters.some((v) => !Number.isFinite(v))) {
+      bad('customTerrainElevation', '外部地形の標高に非有限値がある');
+    }
   } else {
     if (!Number.isFinite(t.seed)) bad('terrainSeed', '手続き地形の種子が有限値ではない');
     if (!Number.isFinite(t.landFraction) || t.landFraction < 0 || t.landFraction > 1) {

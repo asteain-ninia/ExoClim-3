@@ -57,6 +57,17 @@ export function resolveTerrain(grid: Grid, source: TerrainSource): TerrainField 
       break;
     case 'procedural':
       return procedural(grid, source.seed, source.landFraction, source.reliefScale);
+    case 'custom':
+      return gridTerrain(
+        grid,
+        {
+          widthCells: source.widthCells,
+          heightCells: source.heightCells,
+          elevationMeters: source.elevationMeters,
+          landMask: source.landMask,
+        },
+        source.crestMeters,
+      );
   }
 }
 
@@ -73,8 +84,20 @@ function uniform(grid: Grid, land: boolean): TerrainField {
 
 /** 実在地球(1° データを目標分解能へ再標本化) */
 function earthTerrain(grid: Grid): TerrainField {
-  const src = earthTerrainJson as EarthTerrainJson;
   const crestSrc = earthCrestJson as EarthCrestJson;
+  return gridTerrain(grid, earthTerrainJson as EarthTerrainJson, crestSrc.crestMeters);
+}
+
+/**
+ * 1° 格子で与えられた地形(実在地球・創作世界の地図など)を目標分解能へ
+ * 再標本化する。crest(セル内高分位標高)は任意で、無ければ平均標高を使う。
+ * 演算は地形の出所に依らず同一 — 入力データの精細さだけが違う
+ */
+function gridTerrain(
+  grid: Grid,
+  src: EarthTerrainJson,
+  crestMeters?: number[],
+): TerrainField {
   const elevationMeters = new Float32Array(grid.cellCount);
   const crestElevationMeters = new Float32Array(grid.cellCount);
   const landMask = new Uint8Array(grid.cellCount);
@@ -102,7 +125,7 @@ function earthTerrain(grid: Grid): TerrainField {
               oceanElevSum += e;
             }
             // 粗格子への集約では稜線は「最大」を取る(遮蔽は最も高い壁で決まる)
-            const c = crestSrc.crestMeters[si] ?? 0;
+            const c = crestMeters?.[si] ?? 0;
             if (c > crestMax) crestMax = c;
             n++;
           }
@@ -126,7 +149,7 @@ function earthTerrain(grid: Grid): TerrainField {
         const i = cellIndex(grid, row, col);
         elevationMeters[i] = src.elevationMeters[si] ?? OCEAN_FLOOR_M;
         landMask[i] = src.landMask[si] ?? 0;
-        crestElevationMeters[i] = Math.max(crestSrc.crestMeters[si] ?? 0, elevationMeters[i] ?? 0);
+        crestElevationMeters[i] = Math.max(crestMeters?.[si] ?? 0, elevationMeters[i] ?? 0);
       }
     }
   }
