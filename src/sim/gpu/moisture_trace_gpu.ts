@@ -16,7 +16,13 @@
 //   - 追跡は各スレッドが自分だけで完結する(近傍との通信なし)。読むのは
 //     標高・稜線・陸海・内海・気温・風・陸面供給で、すべて読み取り専用。
 
-import { GPU_WORKGROUP_SIZE, createFilledBuffer, readBackFloats, type GpuContext } from './device';
+import {
+  GPU_WORKGROUP_SIZE,
+  createFilledBuffer,
+  ReadbackStage,
+  asBufferSource,
+  type GpuContext,
+} from './device';
 import { MONTHS_PER_YEAR } from '@/domain/insolation';
 
 /** GPU へ渡す静的な場(月に依らないもの) */
@@ -238,6 +244,8 @@ export interface TraceGpuResources {
    * @returns [month][cell] の供給場
    */
   run(monthly: TraceMonthlyFields): Promise<Float32Array[]>;
+  /** 読み戻さずに計算だけ投げる(安定性の切り分け用) */
+  dispatchOnly(monthly: TraceMonthlyFields): void;
 }
 
 export function createMoistureTraceGpu(
@@ -284,16 +292,30 @@ export function createMoistureTraceGpu(
     ],
   });
 
+  // 読み戻しは常駐バッファで行う(毎回作り直すと 100 回未満で segfault する)
+  const stage = new ReadbackStage(device, M * N);
   const totalThreads = M * N;
   const groups = Math.ceil(totalThreads / GPU_WORKGROUP_SIZE);
   // CPU 実装と同じ打ち切り(距離基準。解像度を変えても挙動が変わらないように)
   const maxSteps = Math.min(200, Math.ceil(constants.moistureTraceMaxKm / fields.dyKm) + 4);
   const stepWeight = fields.dyKm / 111;
 
+  // 転送用の一時配列は**バッファごとに別々に**持つ。使い回すと同じ配列を
+  // 続けて writeBuffer へ渡すことになり、実測で不安定だった(2026-08-01)
+  const zeroMonth = new Float32Array(N);
+  const scratches = new Map<GPUBuffer, Float32Array>();
   const upload = (buf: GPUBuffer, arrs: Float32Array[] | null): void => {
-    const flat = new Float32Array(M * N);
-    if (arrs) for (let m = 0; m < M; m++) flat.set(arrs[m] ?? new Float32Array(N), m * N);
-    device.queue.writeBuffer(buf, 0, flat);
+    let flat = scratches.get(buf);
+    if (!flat) {
+      flat = new Float32Array(M * N);
+      scratches.set(buf, flat);
+    }
+    if (arrs) {
+      for (let m = 0; m < M; m++) flat.set(arrs[m] ?? zeroMonth, m * N);
+    } else {
+      flat.fill(0);
+    }
+    device.queue.writeBuffer(buf, 0, asBufferSource(flat));
   };
 
   return {
@@ -312,8 +334,23 @@ export function createMoistureTraceGpu(
       ]) {
         b.destroy();
       }
+      stage.destroy();
+    },
+    dispatchOnly(monthly: TraceMonthlyFields): void {
+      submit(monthly, false);
     },
     async run(monthly: TraceMonthlyFields): Promise<Float32Array[]> {
+      // 計算と読み戻しのコピーは 1 回の submit にまとめる(device.ts の注記)
+      submit(monthly, true);
+      const flat = await stage.map(M * N);
+      const out: Float32Array[] = [];
+      for (let m = 0; m < M; m++) out.push(flat.slice(m * N, (m + 1) * N));
+      return out;
+    },
+  };
+
+  function submit(monthly: TraceMonthlyFields, withCopy: boolean): void {
+    {
       upload(bufTemp, monthly.temperature);
       upload(bufU, monthly.windU);
       upload(bufV, monthly.windV);
@@ -344,12 +381,8 @@ export function createMoistureTraceGpu(
       pass.setBindGroup(0, bind);
       pass.dispatchWorkgroups(groups);
       pass.end();
+      if (withCopy) stage.enqueueCopy(enc, bufOut, M * N);
       device.queue.submit([enc.finish()]);
-
-      const flat = await readBackFloats(device, bufOut, M * N);
-      const out: Float32Array[] = [];
-      for (let m = 0; m < M; m++) out.push(flat.slice(m * N, (m + 1) * N));
-      return out;
-    },
-  };
+    }
+  }
 }

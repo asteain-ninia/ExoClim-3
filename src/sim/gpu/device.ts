@@ -18,6 +18,11 @@
 // 渡されなければ CPU 実装へ落ちる(GPU 無しでも同じ結果が得られる —
 // ただし浮動小数の丸めは一致しない。GPU 側を正とする)。
 
+// 静的 import で読む。動的 import にすると 3 回目の readback で
+// アクセス違反(0xC0000005)が起きた(2026-08-01 実測、原因は未特定だが
+// 静的 import では 100 回以上安定する)
+import { create as createWebgpu, globals as webgpuGlobals } from 'webgpu';
+
 export const GPU_WORKGROUP_SIZE = 256;
 
 export interface GpuContext {
@@ -29,6 +34,22 @@ export interface GpuContext {
 
 let cached: GpuContext | null = null;
 let unavailableReason: string | null = null;
+/**
+ * GPU インスタンスとアダプタへの参照を保持する。
+ *
+ * これが無いと、acquireGpu を抜けた時点で adapter がガベージコレクトされ、
+ * その後の GPU 操作がアクセス違反(0xC0000005)で落ちる(2026-08-01 実測)。
+ * 同じコードでも adapter をモジュール直下の const に置くと安定するため、
+ * ネイティブ側がアダプタへの参照を保持していると考えられる。
+ * 症状は「数回の readback のあと突然プロセスが死ぬ」で、
+ * 一見すると mapAsync の不具合に見える — 切り分けに長時間を要した。
+ */
+const keepAlive: { gpu: unknown; adapter: unknown }[] = [];
+
+/** 型定義が Float32Array<ArrayBuffer> を要求するため、転送時に絞り込む */
+export function asBufferSource(a: Float32Array): GPUAllowSharedBufferSource {
+  return a as unknown as GPUAllowSharedBufferSource;
+}
 
 /**
  * GPU を取得する。使えなければ null(呼び出し側は CPU 実装へ落ちる)。
@@ -38,35 +59,46 @@ export async function acquireGpu(): Promise<GpuContext | null> {
   if (cached) return cached;
   if (unavailableReason) return null;
   try {
-    const mod = (await import('webgpu')) as {
-      create: (flags: string[]) => GPU;
-      globals: Record<string, unknown>;
-    };
-    Object.assign(globalThis, mod.globals);
-    const gpu = mod.create([]);
+    Object.assign(globalThis, webgpuGlobals);
+    const gpu = createWebgpu([]);
     const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' });
     if (!adapter) {
       unavailableReason = 'アダプタを取得できない';
       return null;
     }
     const device = await adapter.requestDevice({
+      // 既定の device は adapter より制限が厳しい。実測で踏んだもの:
+      //  - workgroup サイズ既定 256(adapter は 1024)。256 が最良なので実害は
+      //    無いが、明示的に上げておく
+      //  - **ストレージバッファ既定 8 本**(adapter は 16)。風上追跡は 9 本
+      //    要るため、上げないとパイプライン生成が失敗する。しかもエラーは
+      //    既定では黙って捨てられ「結果が全部ゼロ」としてしか現れない
       requiredLimits: {
         maxComputeWorkgroupSizeX: adapter.limits.maxComputeWorkgroupSizeX,
         maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
         maxBufferSize: adapter.limits.maxBufferSize,
+        maxStorageBuffersPerShaderStage: adapter.limits.maxStorageBuffersPerShaderStage,
       },
     });
-    const info = adapter.info as unknown as Record<string, string> | undefined;
+    // 検証エラーは既定では黙って捨てられ、「結果が全部ゼロ」という形でしか
+    // 現れない(2026-08-01 に実際に踏んだ)。必ず表に出す
+    if (process.env['EXOCLIM_GPU_EVENTS'] === '1') {
+      device.addEventListener?.('uncapturederror', (ev: Event) => {
+        const err = (ev as unknown as { error?: { message?: string } }).error;
+        console.error('[WebGPU エラー]', err?.message ?? String(ev));
+      });
+      void device.lost.then((info: { reason?: string; message?: string }) => {
+        console.error(`[WebGPU デバイス消失] ${info.reason ?? '?'}: ${info.message ?? ''}`);
+      });
+    }
+    keepAlive.push({ gpu, adapter });
     cached = {
       device,
-      adapterInfo: info
-        ? [info['vendor'], info['architecture'], info['device'], info['description']]
-            .filter(Boolean)
-            .join(' / ')
-        : 'unknown',
+      adapterInfo: 'WebGPU device',
       destroy(): void {
         device.destroy();
         cached = null;
+        keepAlive.length = 0;
       },
     };
     return cached;
@@ -88,36 +120,87 @@ export function gpuUnavailableReason(): string | null {
 
 // ---- バッファ補助 ----
 
+/**
+ * 初期値つきのバッファを作る。
+ * mappedAtCreation ではなく writeBuffer で埋める — 前者を使うと
+ * 後続の mapAsync が 3 回目でアクセス違反を起こした(2026-08-01 実測)。
+ */
 export function createFilledBuffer(
   device: GPUDevice,
   data: Float32Array,
   usage: GPUBufferUsageFlags,
 ): GPUBuffer {
-  const buf = device.createBuffer({ size: data.byteLength, usage, mappedAtCreation: true });
-  new Float32Array(buf.getMappedRange()).set(data);
-  buf.unmap();
+  const buf = device.createBuffer({
+    size: data.byteLength,
+    usage: usage | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(buf, 0, asBufferSource(data));
   return buf;
 }
 
 /**
- * バッファを読み戻す。**呼ぶ回数を最小にすること** — 1 回あたり約 0.3ms の
- * 固定費に加え、数百回繰り返すと確率的に segfault する。
+ * 読み戻し用の常駐ステージングバッファ。
+ *
+ * 毎回 createBuffer / destroy すると 100 回未満で segfault する
+ * (2026-08-01 実測、3.1MB のバッファで再現)。同じバッファを使い回す。
+ * 較正は 1 プロセスで数千回パイプラインを回すため、ここが持たないと
+ * GPU 化そのものが成立しない。
  */
-export async function readBackFloats(
-  device: GPUDevice,
-  src: GPUBuffer,
-  floatCount: number,
-): Promise<Float32Array> {
-  const stage = device.createBuffer({
-    size: floatCount * 4,
-    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-  });
-  const enc = device.createCommandEncoder();
-  enc.copyBufferToBuffer(src, 0, stage, 0, floatCount * 4);
-  device.queue.submit([enc.finish()]);
-  await stage.mapAsync(GPUMapMode.READ);
-  const out = new Float32Array(stage.getMappedRange().slice(0));
-  stage.unmap();
-  stage.destroy();
-  return out;
+export class ReadbackStage {
+  private buffer: GPUBuffer;
+  private capacityFloats: number;
+  /** 受け取り先も使い回す。毎回 3MB を確保すると GC 負荷で不安定になる */
+  private scratch: Float32Array;
+
+  constructor(
+    private device: GPUDevice,
+    floatCount: number,
+  ) {
+    this.capacityFloats = floatCount;
+    this.buffer = device.createBuffer({
+      size: floatCount * 4,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
+    this.scratch = new Float32Array(floatCount);
+  }
+
+  /**
+   * 計算と同じコマンドエンコーダへコピーを積む。
+   * **計算とコピーは必ず 1 回の submit にまとめること** — 別々に submit すると
+   * 3 回目の読み戻しでアクセス違反(0xC0000005)が起きた(2026-08-01 実測)。
+   */
+  enqueueCopy(enc: GPUCommandEncoder, src: GPUBuffer, floatCount: number): void {
+    if (floatCount > this.capacityFloats) {
+      throw new Error(
+        `ステージングバッファが小さい(要求 ${floatCount} / 確保 ${this.capacityFloats})`,
+      );
+    }
+    enc.copyBufferToBuffer(src, 0, this.buffer, 0, floatCount * 4);
+  }
+
+  /**
+   * submit 済みのコピー結果を読み出す。**呼ぶ回数は最小に**
+   * (1 回あたり約 0.3ms の固定費)。
+   * 返る配列は次回の呼び出しで上書きされる — 保持するなら複製すること。
+   */
+  async map(floatCount: number): Promise<Float32Array> {
+    await this.buffer.mapAsync(GPUMapMode.READ);
+    const view = new Float32Array(this.buffer.getMappedRange(), 0, floatCount);
+    const out = this.scratch.subarray(0, floatCount);
+    out.set(view);
+    this.buffer.unmap();
+    return out;
+  }
+
+  /** コピーと読み出しをまとめて行う(計算と分けて submit する場合のみ) */
+  async read(src: GPUBuffer, floatCount: number): Promise<Float32Array> {
+    const enc = this.device.createCommandEncoder();
+    this.enqueueCopy(enc, src, floatCount);
+    this.device.queue.submit([enc.finish()]);
+    return this.map(floatCount);
+  }
+
+  destroy(): void {
+    this.buffer.destroy();
+  }
 }

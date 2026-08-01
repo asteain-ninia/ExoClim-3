@@ -866,7 +866,7 @@ export function computePrecipitation(
  * (K.crestProminenceFactor。既定 0 = 無効 — 高原の縁と区別できず熱帯を壊した
  * 実測があるため)。演算子は全惑星で同一で、入力データの精細さだけが違う。
  */
-function buildCrestElev(ctx: SimContext): Float32Array {
+export function buildCrestElev(ctx: SimContext): Float32Array {
   const { grid, terrain } = ctx;
   const W = grid.widthCells;
   const H = grid.heightCells;
@@ -900,7 +900,7 @@ function buildCrestElev(ctx: SimContext): Float32Array {
  * 閉じた内海・湖(面積 < 1.2M km² の海成分)のマスク。Fetch 則の対象。
  * 海峡で外洋に繋がる縁辺海(地中海など)は外洋と同成分になり対象外。
  */
-function buildSmallWaterMask(ctx: SimContext): Uint8Array {
+export function buildSmallWaterMask(ctx: SimContext): Uint8Array {
   const { grid, params, terrain } = ctx;
   const W = grid.widthCells;
   const H = grid.heightCells;
@@ -949,7 +949,7 @@ function buildSmallWaterMask(ctx: SimContext): Uint8Array {
  * landSource ≠ null のとき陸セルも(局所降水に応じて)供給源になる。
  * 閉じた内海(smallWater)からの供給は Fetch 則で内陸到達を制限する。
  */
-function traceMoistureSupply(
+export function traceMoistureSupply(
   ctx: SimContext,
   smallWater: Uint8Array,
   crestElev: Float32Array,

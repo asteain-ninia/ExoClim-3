@@ -18,7 +18,7 @@
 // CPU 同士でも貯水が 100%、蒸発散が 5.3% 変わる(2026-08-01 実測)。
 // 実際に下流へ渡るのは蒸発散で、そちらは CPU と 0.002% 一致する。
 
-import { GPU_WORKGROUP_SIZE, createFilledBuffer, readBackFloats, type GpuContext } from './device';
+import { GPU_WORKGROUP_SIZE, createFilledBuffer, ReadbackStage, type GpuContext } from './device';
 import { MONTHS_PER_YEAR } from '@/domain/insolation';
 
 /** 空回しをこの年数ごとに区切り、境界でだけ収束を確かめる(readback 削減) */
@@ -146,6 +146,7 @@ export async function solveSoilWaterGpu(
   const bufOutStore = createFilledBuffer(device, new Float32Array(M * N), ST | CS);
   const bufOutEt = createFilledBuffer(device, new Float32Array(M * N), ST | CS);
   const bufParams = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | CD });
+  const stage = new ReadbackStage(device, M * N);
 
   const module = device.createShaderModule({ code: WGSL });
   const pipeline = device.createComputePipeline({
@@ -191,7 +192,7 @@ export async function solveSoilWaterGpu(
     const batch = Math.min(YEARS_PER_BATCH, limitYears - years);
     dispatch(batch, 0);
     years += batch;
-    const d = await readBackFloats(device, bufDrift, N);
+    const d = Float32Array.from(await stage.read(bufDrift, N));
     // 総和は CPU 側で固定順に取る(GPU の並列リダクションは順序が不定)
     let sum = 0;
     let count = 0;
@@ -210,9 +211,9 @@ export async function solveSoilWaterGpu(
   // 記録年そのものが周期定常であることを保証するため)
   dispatch(1, 1);
   years += 1;
-  const flatStore = await readBackFloats(device, bufOutStore, M * N);
-  const flatEt = await readBackFloats(device, bufOutEt, M * N);
-  const change = await readBackFloats(device, bufDrift, N);
+  const flatStore = Float32Array.from(await stage.read(bufOutStore, M * N));
+  const flatEt = Float32Array.from(await stage.read(bufOutEt, M * N));
+  const change = Float32Array.from(await stage.read(bufDrift, N));
 
   for (const b of [
     bufLand,
@@ -226,6 +227,7 @@ export async function solveSoilWaterGpu(
   ]) {
     b.destroy();
   }
+  stage.destroy();
 
   const storageMm: Float32Array[] = [];
   const actualEtMm: Float32Array[] = [];
