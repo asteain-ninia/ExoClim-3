@@ -89,13 +89,21 @@ export function insolationWm2(luminositySolar: number, semiMajorAxisAu: number):
 
 // ---- 地域枠(derle-climate config/v11_shukkai.json と同一)----
 const WILL_VERTICES: Array<[number, number]> = [
-  [-140, 31], [-133, 34], [-123, 33], [-113, 31], [-103, 28],
-  [-102, 20], [-109, 13], [-121, 11], [-134, 14], [-141, 22],
+  [-140, 31],
+  [-133, 34],
+  [-123, 33],
+  [-113, 31],
+  [-103, 28],
+  [-102, 20],
+  [-109, 13],
+  [-121, 11],
+  [-134, 14],
+  [-141, 22],
 ];
 const ELLIPSES: Record<string, [number, number, number, number]> = {
-  'デーレ中核': [-70.0, 17.0, 14.0, 10.0],
-  'ルティア暫定域': [-73.0, 2.5, 7.0, 5.0],
-  'シャンテリャ本体': [-32.0, 29.0, 9.0, 8.0],
+  デーレ中核: [-70.0, 17.0, 14.0, 10.0],
+  ルティア暫定域: [-73.0, 2.5, 7.0, 5.0],
+  シャンテリャ本体: [-32.0, 29.0, 9.0, 8.0],
 };
 
 function inPolygon(lon: number, lat: number, poly: Array<[number, number]>): boolean {
@@ -144,9 +152,9 @@ export function regionStats(result: PipelineResult): Record<string, RegionStat> 
     }
   }
   const tests: Record<string, (lon: number, lat: number, i: number) => boolean> = {
-    '全球陸域': (_lon, _lat, i) => land[i] === 1,
-    'ウィル地域ポリゴン': (lon, lat, i) => land[i] === 1 && inPolygon(lon, lat, WILL_VERTICES),
-    'デラドゥア狭海沿岸': (_lon, _lat, i) => nearSea[i] === 1,
+    全球陸域: (_lon, _lat, i) => land[i] === 1,
+    ウィル地域ポリゴン: (lon, lat, i) => land[i] === 1 && inPolygon(lon, lat, WILL_VERTICES),
+    デラドゥア狭海沿岸: (_lon, _lat, i) => nearSea[i] === 1,
   };
   for (const [name, e] of Object.entries(ELLIPSES)) {
     const [cx, cy, rx, ry] = e;
@@ -267,8 +275,9 @@ export function countryHabitability(result: PipelineResult): {
   const W = grid.widthCells;
   const RADIUS_DEG = 5;
   const list: CountryHabitability[] = [];
-  for (const c of (derleCountries as { countries: Array<{ name: string; lon: number; lat: number }> })
-    .countries) {
+  for (const c of (
+    derleCountries as { countries: Array<{ name: string; lon: number; lat: number }> }
+  ).countries) {
     let total = 0;
     let ecumene = 0;
     const counts = new Map<string, number>();
@@ -429,14 +438,14 @@ export function polygonHabitability(result: PipelineResult): {
   const namedDeadFrac = named.length > 0 ? namedAllAnecumeneCount / named.length : 0;
   const stubDeadFrac = stubs.length > 0 ? stubAllAnecumeneCount / stubs.length : 0;
   const habitScore01 =
-    1 -
-    (namedDeadFrac + STUB_PENALTY_WEIGHT * stubDeadFrac) / (1 + STUB_PENALTY_WEIGHT);
+    1 - (namedDeadFrac + STUB_PENALTY_WEIGHT * stubDeadFrac) / (1 + STUB_PENALTY_WEIGHT);
   return {
     countries: list,
     namedAllAnecumeneCount,
     stubAllAnecumeneCount,
     penalty:
-      Math.round((namedAllAnecumeneCount + STUB_PENALTY_WEIGHT * stubAllAnecumeneCount) * 100) / 100,
+      Math.round((namedAllAnecumeneCount + STUB_PENALTY_WEIGHT * stubAllAnecumeneCount) * 100) /
+      100,
     minNamedEcumenePct: named.length > 0 ? Math.min(...named.map((c) => c.ecumenePct)) : 0,
     evaluated: list.length,
     habitScore01: Math.round(habitScore01 * 1000) / 1000,

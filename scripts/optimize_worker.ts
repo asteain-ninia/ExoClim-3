@@ -12,7 +12,18 @@ import { EARTH_PARAMS } from '../src/domain/planetParams';
 import { evaluateResult } from './optimize_lib';
 import { openAccel } from './accel_cli';
 
-const accelReady = openAccel(true);
+// EBM の線形解は既定で収束させる(反復 512、隠しパラメータの除去)。
+// CPU 経路だと 1 評価が数分かかり較正が成立しないので、
+// GPU が取れなかったら**黙って遅くならずに**はっきり知らせる
+const accelReady = openAccel(true).then((a) => {
+  if (!a.enabled) {
+    process.stderr.write(
+      '[較正ワーカー] GPU を取得できなかった。収束させた EBM を CPU で回すと ' +
+        '1 評価に数分かかる。EXOCLIM_GPU=0 を外すか、GPU の状態を確認すること。\n',
+    );
+  }
+  return a;
+});
 
 const rl = readline.createInterface({ input: process.stdin });
 let chain: Promise<void> = Promise.resolve();

@@ -7,7 +7,8 @@
 import { acquireGpu, releaseGpu, type GpuContext } from './device';
 import { createMoistureTraceGpu } from './moisture_trace_gpu';
 import { createSoilWaterGpu } from './soil_water_gpu';
-import type { MoistureTraceAccel, SimAccelerator, SoilWaterAccel } from '../accel';
+import { createEbmGpu } from './ebm_gpu';
+import type { EbmAccel, MoistureTraceAccel, SimAccelerator, SoilWaterAccel } from '../accel';
 
 /**
  * GPU 加速器を取得する。GPU が使えなければ null(呼び出し側は素で走らせる)。
@@ -24,6 +25,7 @@ export async function createGpuAccelerator(): Promise<SimAccelerator | null> {
 export function makeAccelerator(gpu: GpuContext): SimAccelerator {
   const traces = new Map<number, MoistureTraceAccel>();
   const soils = new Map<number, SoilWaterAccel>();
+  const ebms = new Map<number, EbmAccel>();
   return {
     moistureTrace(cellCount: number): MoistureTraceAccel {
       let a = traces.get(cellCount);
@@ -41,11 +43,21 @@ export function makeAccelerator(gpu: GpuContext): SimAccelerator {
       }
       return a;
     },
+    ebm(cellCount: number): EbmAccel {
+      let a = ebms.get(cellCount);
+      if (!a) {
+        a = createEbmGpu(gpu, cellCount);
+        ebms.set(cellCount, a);
+      }
+      return a;
+    },
     destroy(): void {
       for (const a of traces.values()) a.destroy();
       for (const a of soils.values()) a.destroy();
+      for (const a of ebms.values()) a.destroy();
       traces.clear();
       soils.clear();
+      ebms.clear();
       releaseGpu();
     },
   };

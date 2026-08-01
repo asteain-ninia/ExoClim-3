@@ -16,7 +16,12 @@ import { execSync } from 'node:child_process';
 import { PNG } from 'pngjs';
 import { runPipelineTimed } from '../src/sim/pipeline';
 import type { PlanetParams } from '../src/domain/planetParams';
-import { KOPPEN_CLASSES, KOPPEN_COLORS, majorClassOf, MAJOR_CLASS_NAMES } from '../src/domain/koppen';
+import {
+  KOPPEN_CLASSES,
+  KOPPEN_COLORS,
+  majorClassOf,
+  MAJOR_CLASS_NAMES,
+} from '../src/domain/koppen';
 import { areaWeightOfRow, latDegOfRow } from '../src/domain/grid';
 import type { PipelineResult } from '../src/sim/types';
 import derleTerrain from '../src/domain/data/derle_terrain_1deg.json';
@@ -71,13 +76,21 @@ function derleParams(greenhouse: number): PlanetParams {
 // ---- derle-climate v11 と同じ地域枠(config/v11_shukkai.json より)----
 // ウィル = 多角形、デーレ中核/ルティア/シャンテリャ = 楕円 [中心経度, 中心緯度, 半径経度, 半径緯度]
 const WILL_VERTICES: Array<[number, number]> = [
-  [-140, 31], [-133, 34], [-123, 33], [-113, 31], [-103, 28],
-  [-102, 20], [-109, 13], [-121, 11], [-134, 14], [-141, 22],
+  [-140, 31],
+  [-133, 34],
+  [-123, 33],
+  [-113, 31],
+  [-103, 28],
+  [-102, 20],
+  [-109, 13],
+  [-121, 11],
+  [-134, 14],
+  [-141, 22],
 ];
 const ELLIPSES: Record<string, [number, number, number, number]> = {
-  'デーレ中核': [-70.0, 17.0, 14.0, 10.0],
-  'ルティア暫定域': [-73.0, 2.5, 7.0, 5.0],
-  'シャンテリャ本体': [-32.0, 29.0, 9.0, 8.0],
+  デーレ中核: [-70.0, 17.0, 14.0, 10.0],
+  ルティア暫定域: [-73.0, 2.5, 7.0, 5.0],
+  シャンテリャ本体: [-32.0, 29.0, 9.0, 8.0],
 };
 
 function inPolygon(lon: number, lat: number, poly: Array<[number, number]>): boolean {
@@ -106,7 +119,7 @@ function regionStats(result: PipelineResult) {
         const r = row + dr;
         if (r < 0 || r >= grid.heightCells) continue;
         for (let dc = -3; dc <= 3; dc++) {
-          const c = ((col + dc) % W + W) % W;
+          const c = (((col + dc) % W) + W) % W;
           if (!land[r * W + c]) {
             found = true;
             break;
@@ -117,9 +130,9 @@ function regionStats(result: PipelineResult) {
     }
   }
   const regions: Record<string, (lon: number, lat: number, i: number) => boolean> = {
-    '全球陸域': (_lon, _lat, i) => land[i] === 1,
-    'ウィル地域ポリゴン': (lon, lat, i) => land[i] === 1 && inPolygon(lon, lat, WILL_VERTICES),
-    'デラドゥア狭海沿岸': (_lon, _lat, i) => nearSea[i] === 1,
+    全球陸域: (_lon, _lat, i) => land[i] === 1,
+    ウィル地域ポリゴン: (lon, lat, i) => land[i] === 1 && inPolygon(lon, lat, WILL_VERTICES),
+    デラドゥア狭海沿岸: (_lon, _lat, i) => nearSea[i] === 1,
   };
   for (const [name, e] of Object.entries(ELLIPSES)) {
     const [cx, cy, rx, ry] = e;
@@ -228,7 +241,11 @@ function renderPng(name: string, result: PipelineResult, kind: 'koppen' | 'temp'
       let rgb: readonly [number, number, number];
       if (kind === 'koppen') {
         rgb = land[i]
-          ? ((KOPPEN_COLORS[result.koppen.classId[i] ?? 0] ?? [0, 0, 0]) as unknown as [number, number, number])
+          ? ((KOPPEN_COLORS[result.koppen.classId[i] ?? 0] ?? [0, 0, 0]) as unknown as [
+              number,
+              number,
+              number,
+            ])
           : [15, 30, 55];
       } else if (kind === 'temp') {
         const x = Math.max(-45, Math.min(45, result.temperature.annualMeanC[i] ?? 0)) / 45;
@@ -240,7 +257,10 @@ function renderPng(name: string, result: PipelineResult, kind: 'koppen' | 'temp'
       } else {
         if (!land[i]) rgb = [15, 30, 55];
         else {
-          const v = Math.min(1, Math.log1p(result.precipitation.annualPrecipMm[i] ?? 0) / Math.log1p(4000));
+          const v = Math.min(
+            1,
+            Math.log1p(result.precipitation.annualPrecipMm[i] ?? 0) / Math.log1p(4000),
+          );
           rgb = [Math.round(250 - 210 * v), Math.round(245 - 120 * v), Math.round(220 - 60 * v)];
         }
       }
@@ -258,9 +278,7 @@ function renderPng(name: string, result: PipelineResult, kind: 'koppen' | 'temp'
   fs.writeFileSync(path.join(OUT_DIR, name), PNG.sync.write(png));
 }
 
-const runs: Array<{ label: string; greenhouse: number }> = [
-  { label: 'physical', greenhouse: 1.0 },
-];
+const runs: Array<{ label: string; greenhouse: number }> = [{ label: 'physical', greenhouse: 1.0 }];
 // 正典の全球平均 8°C に合わせる温室効果を二分探索で求める
 {
   // 事前探索(2026-08-01)で 1.375 → 3.68°C、2.25 → 15.36°C を確認済み
@@ -300,12 +318,17 @@ for (const run of runs) {
       `全球平均 ${s.globalMeanC}°C / 陸平均気温 ${s.landMeanC}°C / 陸平均降水 ${s.landPrecipMmPerYear}mm`,
   );
   console.log(
-    `  大分類: ` +
-      s.majorSharePct.map((p, k) => `${MAJOR_CLASS_NAMES[k]} ${p}%`).join(' / '),
+    `  大分類: ` + s.majorSharePct.map((p, k) => `${MAJOR_CLASS_NAMES[k]} ${p}%`).join(' / '),
   );
   console.log(`  上位: ${s.topClasses.map((c) => `${c.cls} ${c.pct}%`).join(', ')}`);
   for (const [name, r] of Object.entries(regions)) {
-    const v = r as { tempC: number; precipMm: number; dryPct: number; tropicalPct: number; temperatePct: number };
+    const v = r as {
+      tempC: number;
+      precipMm: number;
+      dryPct: number;
+      tropicalPct: number;
+      temperatePct: number;
+    };
     console.log(
       `    ${name}: ${v.tempC}°C / ${v.precipMm}mm / 乾燥B ${v.dryPct}% / 熱帯A ${v.tropicalPct}% / 温帯+冷帯 ${v.temperatePct}%`,
     );

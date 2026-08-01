@@ -29,7 +29,7 @@ const itcz = computeItcz(ctx);
 const wind = computeWindBelt(ctx, itcz);
 const ocean = computeOceanCurrent(ctx, itcz, wind);
 const airflow = computeAirflow(ctx, itcz, wind);
-const temp = computeTemperature(ctx, itcz, wind, ocean, airflow);
+const temp = await computeTemperature(ctx, itcz, wind, ocean, airflow);
 console.log('気温まで', ((Date.now() - t0) / 1000).toFixed(1), 's');
 
 const grid = ctx.grid;

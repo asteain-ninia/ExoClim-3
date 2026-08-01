@@ -207,6 +207,8 @@ export interface SimAccelerator {
   /** 使えなければ null(呼び出し側は CPU 実装へ落ちる) */
   moistureTrace(cellCount: number): MoistureTraceAccel | null;
   soilWater(cellCount: number): SoilWaterAccel | null;
+  /** EBM は粗格子(既定 2°)のセル数で常駐する */
+  ebm(cellCount: number): EbmAccel | null;
   /** 常駐資源をすべて解放する */
   destroy(): void;
 }

@@ -45,9 +45,7 @@ const best = JSON.parse(fs.readFileSync(path.resolve(bestPath), 'utf8')) as Reco
         `来歴の不一致: 較正 ${meta.runName ?? '?'} は ${meta.gitCommit.slice(0, 7)} で開始したが、` +
           `現在の HEAD は ${head.slice(0, 7)}。`,
       );
-      console.error(
-        '較正の走行中にコードが変わっている。この結果の自己採点は現在のコードで',
-      );
+      console.error('較正の走行中にコードが変わっている。この結果の自己採点は現在のコードで');
       console.error('再現しない。採用してはならない(較正をやり直すこと)。');
       process.exit(3);
     }

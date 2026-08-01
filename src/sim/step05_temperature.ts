@@ -22,6 +22,7 @@ import { resolveTerrain } from '@/domain/terrain';
 import type { TerrainField } from '@/domain/terrain';
 import { MODEL_CONSTANTS as K } from './constants';
 import { chamferDistanceCells } from './context';
+import type { EbmConstants, EbmStaticFields, RunOptions } from './accel';
 import type {
   AirflowResult,
   ItczResult,
@@ -33,8 +34,6 @@ import type {
 
 const RHO_C_WATER = 4.19e6; // J/m³/K
 const SECONDS_PER_EARTH_YEAR = 3.156e7;
-const GS_SWEEPS = 8;
-
 /**
  * 陰的ステップの線形解を「収束した」とみなす許容差(°C)。
  *
@@ -64,12 +63,44 @@ export const EBM_MAX_SWEEPS = 400;
  */
 export const EBM_SOLVER = {
   order: 'gauss-seidel' as 'gauss-seidel' | 'red-black',
-  /** > 0 で回数固定(調査用)。0 なら EBM_SOLVE_TOLERANCE_C まで反復する */
-  sweeps: GS_SWEEPS as number,
+  /**
+   * > 0 で回数固定。0(既定)なら**収束させる**:
+   * CPU は EBM_SOLVE_TOLERANCE_C まで反復し(上限 EBM_MAX_SWEEPS)、
+   * GPU は EBM_GPU_ITERATIONS 回まわして残差を記録・検証する。
+   *
+   * 回数を固定するのは調査のときだけ。既定を「収束」にしたのが
+   * 隠しパラメータ GS_SWEEPS = 8 の除去そのもの(2026-08-01)。
+   * CPU 経路は収束まで回すと 1 実行に数分かかるため、
+   * 性質だけを見るテストは明示的に GS_SWEEPS を指定してよい。
+   */
+  sweeps: 0 as number,
 };
 
-/** 直近の実行で線形解に要したスイープ数(診断・報告用。物理結果には含めない) */
-export const EBM_SOLVER_STATS = { totalSweeps: 0, steps: 0, maxSweeps: 0, capHits: 0 };
+/**
+ * GPU 経路の 1 ステップあたり反復回数。
+ *
+ * **決め打ちの魔法数ではない**: GPU は全ステップの残差を記録し、
+ * EBM_SOLVER_STATS.maxResidualC として返す。許容差を満たしているかは
+ * 実行のたびに検証できる(scripts/check_ebm_gpu.ts)。
+ * 残差基準を GPU 内で判定しないのは、判定に読み戻しが要り、
+ * 往復を数百回繰り返すと不安定になるため(src/sim/gpu/device.ts の注記)。
+ *
+ * 512 の根拠(実測 2026-08-01、scripts/exp_ebm_gpu_iters.ts):
+ *   反復  128 → 残差 3.6e-2 / 256 → 2.6e-3 / **512 → 1.7e-5** / 1024 → 0
+ *   許容差 1e-3 を満たす最小の 2 冪が 512。気温場は 256 の時点で
+ *   512 と 0.0012°C しか違わず、採点も同一だが、**しきい値は緩めない**。
+ */
+export const EBM_GPU_ITERATIONS = 512;
+
+/** 直近の実行の診断(報告用。物理結果には含めない) */
+export const EBM_SOLVER_STATS = {
+  totalSweeps: 0,
+  steps: 0,
+  maxSweeps: 0,
+  capHits: 0,
+  /** GPU 経路で観測した最大残差(°C) */
+  maxResidualC: 0,
+};
 
 interface CoarseCell {
   landFrac: number;
@@ -77,14 +108,15 @@ interface CoarseCell {
   sstAnomalyC: number;
 }
 
-export function computeTemperature(
+export async function computeTemperature(
   ctx: SimContext,
   itcz: ItczResult,
   windBelt: WindBeltResult,
   ocean: OceanCurrentResult,
   airflow: AirflowResult,
   priorPrecip?: { monthlyPrecipMm: Float32Array[] },
-): TemperatureResult {
+  opts?: RunOptions,
+): Promise<TemperatureResult> {
   const { params } = ctx;
   const cg = createGrid(Math.max(K.ebmResolutionDeg, params.gridResolutionDeg));
   const CW = cg.widthCells;
@@ -500,9 +532,100 @@ export function computeTemperature(
     return { monthAccum, monthCount, finalT: t };
   };
 
+  // ---- GPU 加速器がある場合の積分 ----
+  // 加速器は「渡されたら使う」だけで、無ければ上の CPU 実装に落ちる。
+  // 赤黒順序で反復するが、収束させれば線形系の解は一意なので行優先と同じ答えになる
+  // (docs/実験記録_EBM赤黒順序_2026-08-01.md)
+  const ebmAccel = opts?.accel?.ebm(N) ?? null;
+  const f32 = (a: ArrayLike<number>, n = a.length): Float32Array => {
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i++) out[i] = a[i] ?? 0;
+    return out;
+  };
+  const buildEbmFields = (
+    permanentIce: Uint8Array | null,
+    initialT?: Float64Array,
+  ): EbmStaticFields => {
+    const insolFlat = new Float32Array(MONTHS_PER_YEAR * CH);
+    for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+      for (let row = 0; row < CH; row++) {
+        insolFlat[m * CH + row] = insolation.monthlyByRow[m]?.[row] ?? 0;
+      }
+    }
+    const landFracArr = new Float32Array(N);
+    for (let i = 0; i < N; i++) landFracArr[i] = coarse[i]?.landFrac ?? 0;
+    return {
+      widthCells: CW,
+      heightCells: CH,
+      dtSeconds: dt,
+      stepsPerYear: K.ebmStepsPerYear,
+      years: K.ebmYears,
+      heatCap: f32(heatCap),
+      aEff: f32(aEff),
+      surfAlbedoBase: f32(surfAlbedoBase),
+      iceOnset: f32(iceOnset),
+      qFlux: f32(qFlux),
+      elevM: f32(elevM),
+      landFrac: landFracArr,
+      diffFactor: f32(diffFactor),
+      interior01: f32(interior01),
+      permanentIce: permanentIce ? f32(permanentIce) : new Float32Array(N),
+      cosCenter: f32(cosCenter),
+      metricZonal: f32(metricZonal),
+      rowIsChannel: f32(rowIsChannel),
+      insolMonthlyByRow: insolFlat,
+      insolAnnualByRow: f32(insolation.annualMeanByRow, CH),
+      cloudAlbedo: cloudAlbedoMonthly,
+      windU: windOnCg.u,
+      windV: windOnCg.v,
+      evapAnom: evapAnomWm2,
+      ridgeLatN: f32(windBelt.monthlyRidgeLatNDeg),
+      ridgeLatS: f32(windBelt.monthlyRidgeLatSDeg),
+      meanRidgeN,
+      meanRidgeS,
+      initialT: initialT ? f32(initialT) : null,
+    };
+  };
+  const ebmConstants: EbmConstants = {
+    lapseRateGammaCPerM: gamma,
+    iceRampWidthC: K.iceRampWidthC,
+    albedoIce: K.albedoIce,
+    permanentIceAlbedo: K.permanentIceAlbedo,
+    seaIceInsulationFactor: K.seaIceInsulationFactor,
+    olrBWm2PerC: K.olrBWm2PerC,
+    diffusionBase: dBase,
+    zonalDiffusionFactor: K.zonalDiffusionFactor,
+    hadleyDiffusionBoost: K.hadleyDiffusionBoost,
+    circumpolarChannelFactor: K.circumpolarChannelFactor,
+    summerAdvectionFactor: K.summerAdvectionFactor,
+    zonalAdvectionCouplingWm2PerK: K.zonalAdvectionCouplingWm2PerK,
+    winterInversionDiffusionFactor: K.winterInversionDiffusionFactor,
+    winterInversionAdvectionFactor: K.winterInversionAdvectionFactor,
+    solveToleranceC: EBM_SOLVE_TOLERANCE_C,
+    iterationsPerStep: EBM_SOLVER.sweeps > 0 ? EBM_SOLVER.sweeps : EBM_GPU_ITERATIONS,
+  };
+  const integrateAny = async (
+    permanentIce: Uint8Array | null,
+    initialT?: Float64Array,
+  ): Promise<{ monthAccum: Float64Array[]; monthCount: number[]; finalT: Float64Array }> => {
+    if (!ebmAccel) return integrate(permanentIce, initialT);
+    const r = await ebmAccel.run(buildEbmFields(permanentIce, initialT), ebmConstants);
+    EBM_SOLVER_STATS.maxResidualC = Math.max(EBM_SOLVER_STATS.maxResidualC, r.maxResidualC);
+    const toF64 = (a: Float32Array): Float64Array => {
+      const out = new Float64Array(a.length);
+      out.set(a);
+      return out;
+    };
+    return {
+      monthAccum: r.monthAccum.map(toF64),
+      monthCount: r.monthCount,
+      finalT: toF64(r.finalT),
+    };
+  };
+
   // パス 1: 恒常氷なしで積分 → 年平均と最暖月の複合条件で氷床を判定
   // (年平均だけではシベリア(夏 +19°C)を誤って氷床にしてしまう)
-  const pass1 = integrate(null);
+  const pass1 = await integrateAny(null);
   const permanentIce = new Uint8Array(N);
   for (let i = 0; i < N; i++) {
     let annual = 0;
@@ -555,7 +678,7 @@ export function computeTemperature(
     if (!changed) break;
   }
   // パス 2: 氷床アルベドを反映して確定
-  const pass2 = integrate(permanentIce, pass1.finalT);
+  const pass2 = await integrateAny(permanentIce, pass1.finalT);
 
   return downscale(ctx, cg, pass2.monthAccum, pass2.monthCount, gamma);
 }

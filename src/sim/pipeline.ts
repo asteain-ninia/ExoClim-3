@@ -126,7 +126,7 @@ async function runPipelineCore(
   const ocean = await time('step3_ocean', () => computeOceanCurrent(context, itcz, windBelt));
   const airflow = await time('step4_airflow', () => computeAirflow(context, itcz, windBelt));
   const temperature1 = await time('step5_temperature', () =>
-    computeTemperature(context, itcz, windBelt, ocean, airflow),
+    computeTemperature(context, itcz, windBelt, ocean, airflow, undefined, opts),
   );
   const precipitation1 = await time('step6_precipitation', () =>
     computePrecipitation(
@@ -150,7 +150,7 @@ async function runPipelineCore(
   let precipitation = precipitation1;
   if (MODEL_CONSTANTS.evapCoolingWm2PerMmDay > 0) {
     temperature = await time('step5b_temperature', () =>
-      computeTemperature(context, itcz, windBelt, ocean, airflow, precipitation1),
+      computeTemperature(context, itcz, windBelt, ocean, airflow, precipitation1, opts),
     );
     // 2 パス目が最終場になるため、診断も 2 パス目のもので上書きする
     precipitation = await time('step6b_precipitation', () =>

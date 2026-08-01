@@ -76,19 +76,31 @@ console.log(
     `整合 ${best.score}/7 / 全土アネクメーネ国 ${best.allAnecumeneCountries}`,
 );
 for (const [k, v] of Object.entries(best.checks)) {
-  const metricKey = k === 'derle_not_tropical' ? 'derle_tropical' : k === 'shanteriya_not_arid' ? 'shanteriya_dry' : k === 'global_not_overdry' ? 'global_dry' : k;
-  console.log(`  ${v ? '○' : '✗'} ${LORE_CHECKS[k]?.label}: ${(best.metrics[metricKey] ?? 0).toFixed(1)}%`);
+  const metricKey =
+    k === 'derle_not_tropical'
+      ? 'derle_tropical'
+      : k === 'shanteriya_not_arid'
+        ? 'shanteriya_dry'
+        : k === 'global_not_overdry'
+          ? 'global_dry'
+          : k;
+  console.log(
+    `  ${v ? '○' : '✗'} ${LORE_CHECKS[k]?.label}: ${(best.metrics[metricKey] ?? 0).toFixed(1)}%`,
+  );
 }
 
 // 最良構成での国別居住可能性
 const bestOverrides: DerleOverrides = {};
-if (best.surfacePressureBar !== undefined) bestOverrides.surfacePressureBar = best.surfacePressureBar;
+if (best.surfacePressureBar !== undefined)
+  bestOverrides.surfacePressureBar = best.surfacePressureBar;
 if (best.greenhouse !== undefined) bestOverrides.greenhouse = best.greenhouse;
 const { habit } = await runDerle(bestOverrides);
 const worst = [...habit.countries].sort((a, b) => a.ecumenePct - b.ecumenePct).slice(0, 8);
 console.log('\n居住可能率が低い国(下位 8):');
 for (const c of worst) {
-  console.log(`  ${c.name}: エクメーネ ${c.ecumenePct}% (優占 ${c.topClass}, 陸 ${c.landCells} セル)`);
+  console.log(
+    `  ${c.name}: エクメーネ ${c.ecumenePct}% (優占 ${c.topClass}, 陸 ${c.landCells} セル)`,
+  );
 }
 
 fs.writeFileSync(

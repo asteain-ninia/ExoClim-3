@@ -19,7 +19,9 @@ const run = async (label: string): Promise<number> => {
   const t = performance.now();
   const { stepTimingsMs } = await runPipelineTimed(EARTH_PARAMS);
   const ms = stepTimingsMs.step6_precipitation ?? 0;
-  console.log(`${label.padEnd(28)} step6 = ${ms.toFixed(0).padStart(7)}ms  (全体 ${(performance.now() - t).toFixed(0)}ms)`);
+  console.log(
+    `${label.padEnd(28)} step6 = ${ms.toFixed(0).padStart(7)}ms  (全体 ${(performance.now() - t).toFixed(0)}ms)`,
+  );
   return ms;
 };
 
@@ -31,7 +33,9 @@ K['soilWaterCapacityMm'] = 0;
 const noSoil = await run('土壌無効(容量 0)');
 K['soilWaterCapacityMm'] = baseCapacity;
 
-console.log(`\n土壌の取り分: ${(full - noSoil).toFixed(0)}ms(step6 の ${(((full - noSoil) / full) * 100).toFixed(0)}%)`);
+console.log(
+  `\n土壌の取り分: ${(full - noSoil).toFixed(0)}ms(step6 の ${(((full - noSoil) / full) * 100).toFixed(0)}%)`,
+);
 console.log(
   `土壌以外(風上追跡 + 変換 + 収束指数など): ${noSoil.toFixed(0)}ms(${((noSoil / full) * 100).toFixed(0)}%)`,
 );

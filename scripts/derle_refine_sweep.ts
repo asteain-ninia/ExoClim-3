@@ -87,7 +87,9 @@ for (const [k, v] of Object.entries(best.checks)) {
         : k === 'global_not_overdry'
           ? 'global_dry'
           : k;
-  console.log(`  ${v ? '○' : '✗'} ${LORE_CHECKS[k]?.label}: ${(best.metrics[mk] ?? 0).toFixed(1)}%`);
+  console.log(
+    `  ${v ? '○' : '✗'} ${LORE_CHECKS[k]?.label}: ${(best.metrics[mk] ?? 0).toFixed(1)}%`,
+  );
 }
 
 fs.writeFileSync(

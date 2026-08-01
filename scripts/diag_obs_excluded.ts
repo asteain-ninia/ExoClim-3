@@ -80,9 +80,7 @@ console.log('\nモデル陸からの距離(セル)別:');
 for (const d of [...byDist.keys()].sort((a, b) => a - b)) {
   const w = byDist.get(d) ?? 0;
   const label = d === 99 ? '7 セル以上離れている' : `${d} セル`;
-  console.log(
-    `  ${label.padEnd(22, '　')} ${((w / wExcluded) * 100).toFixed(1).padStart(6)}%`,
-  );
+  console.log(`  ${label.padEnd(22, '　')} ${((w / wExcluded) * 100).toFixed(1).padStart(6)}%`);
 }
 
 console.log('\n緯度帯別:');

@@ -97,9 +97,7 @@ for (const dRow of SHIFTS) {
   }
   console.log(String(dRow).padStart(6) + '  ' + cells.join(''));
 }
-console.log(
-  `\n最良: 緯度 ${best.dLat} / 経度 ${best.dLon} セルずらしで ${best.pct.toFixed(2)}%`,
-);
+console.log(`\n最良: 緯度 ${best.dLat} / 経度 ${best.dLon} セルずらしで ${best.pct.toFixed(2)}%`);
 if (best.dLat === 0 && best.dLon === 0) {
   console.log('→ 位置合わせは正しい(ずらしても改善しない)');
 } else {
