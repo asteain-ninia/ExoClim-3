@@ -81,6 +81,15 @@ fn monthlyF(field : u32, month : u32, i : u32) -> f32 {
 }
 fn latOfRow(r : u32) -> f32 { return 90.0 - (f32(r) + 0.5) * P.resDeg; }
 
+/** 行の実効南北拡散係数(ハドレー増強込み)。面の伝導度はこの両側平均 */
+fn dMeridOfRow(r : u32) -> f32 {
+  let lat = latOfRow(r);
+  var ridgeAbs = P.ridgeAbsS;
+  if (lat >= 0.0) { ridgeAbs = P.ridgeAbsN; }
+  let hadleyW = max(0.0, 1.0 - (lat / ridgeAbs) * (lat / ridgeAbs));
+  return P.dBase * (1.0 + P.hadleyBoost * hadleyW);
+}
+
 // ---- 第 1 段: 実効熱容量・実効拡散係数・右辺(t に依存する) ----
 @compute @workgroup_size(${GPU_WORKGROUP_SIZE})
 fn prepA(@builtin(global_invocation_id) gid : vec3<u32>) {
@@ -130,18 +139,25 @@ fn prepB(@builtin(global_invocation_id) gid : vec3<u32>) {
   let gz = (P.dBase * P.zonalDiff * rowF(1u, r)) / (P.dPhi * P.dPhi);
   var ridgeAbs = P.ridgeAbsS;
   if (lat >= 0.0) { ridgeAbs = P.ridgeAbsN; }
-  let hadleyW = max(0.0, 1.0 - (lat / ridgeAbs) * (lat / ridgeAbs));
-  let dMerid = P.dBase * (1.0 + P.hadleyBoost * hadleyW);
   let phiEdgeN = (lat + P.resDeg * 0.5) * 0.017453292519943295;
   let phiEdgeS = (lat - P.resDeg * 0.5) * 0.017453292519943295;
   var chanN = 1.0;
   if (rowF(2u, r) >= 0.5 || (r > 0u && rowF(2u, r - 1u) >= 0.5)) { chanN = P.chanFactor; }
   var chanS = 1.0;
   if (rowF(2u, r) >= 0.5 || (r < H - 1u && rowF(2u, r + 1u) >= 0.5)) { chanS = P.chanFactor; }
+  // 南北の面伝導度は**面の量**。ハドレー増強は緯度で変わるので、自セルの緯度で
+  // 評価すると i→j と j→i が食い違う(Codex レビュー 2026-08-02)。
+  // 面の値 = 両側セルの実効南北拡散係数の平均。cosC で割るのは体積規格化
   var gN = 0.0;
-  if (r > 0u) { gN = (chanN * dMerid * cos(phiEdgeN)) / (P.dPhi * P.dPhi * cosC); }
+  if (r > 0u) {
+    let dm = 0.5 * (dMeridOfRow(r) + dMeridOfRow(r - 1u));
+    gN = (chanN * dm * cos(phiEdgeN)) / (P.dPhi * P.dPhi * cosC);
+  }
   var gS = 0.0;
-  if (r < H - 1u) { gS = (chanS * dMerid * cos(phiEdgeS)) / (P.dPhi * P.dPhi * cosC); }
+  if (r < H - 1u) {
+    let dm = 0.5 * (dMeridOfRow(r) + dMeridOfRow(r + 1u));
+    gS = (chanS * dm * cos(phiEdgeS)) / (P.dPhi * P.dPhi * cosC);
+  }
   var isSummer = P.summerS == 1u;
   if (lat >= 0.0) { isSummer = P.summerN == 1u; }
   var seasonFactor = 1.0;
@@ -369,6 +385,16 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
       const CH = fields.heightCells;
       if (CW * CH !== N) throw new Error(`EBM のセル数が違う(確保 ${N} / 要求 ${CW * CH})`);
       if (CH > MAX_ROWS) throw new Error(`行数が上限を超えた(${CH} > ${MAX_ROWS})`);
+      // 市松 (row+col)%2 が経度の折り返しで成立するのは**経度セル数が偶数**のとき
+      // だけ。奇数だと col=CW-1 と col=0 が同色になり、同じディスパッチ内で
+      // 同一セルの読み書きが競合して結果が非決定になる(Codex レビュー 2026-08-02)。
+      // 解像度は 0.25〜5° を許しているので 2.7°(CW=133)などで実際に起こりうる。
+      if (CW % 2 !== 0) {
+        throw new Error(
+          `EBM の GPU 経路は経度セル数が偶数であることを要求する(CW=${CW})。` +
+            '赤黒順序の市松が経度の折り返しで壊れる。CPU 経路(行優先)を使うこと',
+        );
+      }
 
       const cellSrc = [
         fields.heatCap,
@@ -515,7 +541,16 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
         const v = flat[M * N + N + s] ?? 0;
         if (v > maxResidualC) maxResidualC = v;
       }
-      return { monthAccum, monthCount, finalT, maxResidualC };
+      // 許容差を満たしたかを**返す**。渡された許容差を使わずに残差を記録する
+      // だけだと、ある惑星条件で反復が足りなくてもそのまま採用されてしまう
+      // (Codex レビュー 2026-08-02)
+      return {
+        monthAccum,
+        monthCount,
+        finalT,
+        maxResidualC,
+        converged: maxResidualC <= k.solveToleranceC,
+      };
     },
   };
 }

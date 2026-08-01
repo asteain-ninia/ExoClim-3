@@ -189,6 +189,8 @@ export interface EbmAccelResult {
   finalT: Float32Array;
   /** 全時間ステップを通じた最大残差(°C)。許容差を超えたら収束していない */
   maxResidualC: number;
+  /** 全ステップで許容差を満たしたか。false なら反復回数が足りない */
+  converged: boolean;
 }
 
 export interface EbmAccel {

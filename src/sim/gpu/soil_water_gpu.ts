@@ -61,7 +61,22 @@ fn petMm(t : f32, scale : f32) -> f32 {
 fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
   let i = gid.x;
   if (i >= P.cellCount) { return; }
-  if (landMask[i] < 0.5) { return; }
+  // 海セルは**出力を 0 で埋めてから**抜ける。埋めないと、同じセル数のまま
+  // 地形を変えたとき「前回は陸・今回は海」のセルに前回の ET・貯水・流出が
+  // 残る(Codex レビュー 2026-08-02 で実機再現。CPU 実装は 0 のまま)
+  if (landMask[i] < 0.5) {
+    if (P.recordYear == 1u) {
+      for (var m : u32 = 0u; m < 12u; m = m + 1u) {
+        let idx = m * P.cellCount + i;
+        outStore[idx] = 0.0;
+        outEt[idx] = 0.0;
+        outRunoff[idx] = 0.0;
+        outWet[idx] = 0.0;
+      }
+    }
+    drift[i] = 0.0;
+    return;
+  }
 
   var s = storage_[i];
   let cap = P.capacityMm;
@@ -221,12 +236,15 @@ export function createSoilWaterGpu(gpu: GpuContext, cellCount: number): SoilWate
       device.queue.writeBuffer(bufStorage, 0, asBufferSource(scratchInit));
 
       // ---- 空回し。readback はバッチ境界のみ ----
+      // 記録年を 1 年ぶん残す(CPU 実装と同じく、総年数が maxYears を超えない。
+      // Codex レビュー 2026-08-02: 旧実装は上限到達後も無条件に +1 年していた)
       const limitYears = Math.max(1, Math.round(maxYears));
+      const spinLimit = Math.max(0, limitYears - 1);
       let years = 0;
       let converged = false;
       let meanDrift = Number.POSITIVE_INFINITY;
-      while (years < limitYears) {
-        const batch = Math.min(YEARS_PER_BATCH, limitYears - years);
+      while (years < spinLimit) {
+        const batch = Math.min(YEARS_PER_BATCH, spinLimit - years);
         dispatch(capacityMm, petScaleMmPerMonth, batch, 0, [{ src: bufDrift, at: 0, n: N }]);
         years += batch;
         const d = await stage.map(N);
@@ -255,6 +273,19 @@ export function createSoilWaterGpu(gpu: GpuContext, cellCount: number): SoilWate
       ]);
       years += 1;
       const flat = await stage.map(4 * M * N + N);
+      // 診断は**記録年のもの**で揃える(空回しバッチ末の値ではない)。
+      // Codex レビュー 2026-08-02: 平均ドリフトと最大ドリフトが別々の年から
+      // 採られていた
+      {
+        let sum = 0;
+        let count = 0;
+        for (let i = 0; i < N; i++) {
+          if (scratchLand[i]! < 0.5) continue;
+          sum += Math.abs(flat[4 * M * N + i] ?? 0);
+          count++;
+        }
+        meanDrift = count > 0 ? sum / count : 0;
+      }
 
       const storageMm: Float32Array[] = [];
       const actualEtMm: Float32Array[] = [];

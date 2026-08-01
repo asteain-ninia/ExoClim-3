@@ -417,6 +417,14 @@ export async function computeTemperature(
       // 経度セル数が奇数だと経度の折り返しで col=CW-1 と col=0 が同色になり、
       // 市松が壊れる(同色内の並列性が失われる)。その場合は赤黒を使わない
       const passesPerSweep = EBM_SOLVER.order === 'red-black' && CW % 2 === 0 ? 2 : 1;
+      // 行ごとの実効南北拡散係数(ハドレー増強込み)。面の伝導度はこの両側平均
+      const dMeridOfRow = new Float64Array(CH);
+      for (let row = 0; row < CH; row++) {
+        const lat = latDegOfRow(cg, row);
+        const ridgeAbs = lat >= 0 ? ridgeAbsN : ridgeAbsS;
+        const hadleyW = Math.max(0, 1 - (lat / ridgeAbs) * (lat / ridgeAbs));
+        dMeridOfRow[row] = dBase * (1 + K.hadleyDiffusionBoost * hadleyW);
+      }
       let sweepsUsed = 0;
       let converged = false;
       for (let sweep = 0; sweep < sweepLimit * passesPerSweep; sweep++) {
@@ -427,9 +435,6 @@ export async function computeTemperature(
           const cosC = Math.max(1e-3, cosCenter[row] ?? 1e-3);
           const gz = (dBase * K.zonalDiffusionFactor * (metricZonal[row] ?? 1)) / (dPhi * dPhi);
           const ridgeAbs = lat >= 0 ? ridgeAbsN : ridgeAbsS;
-          // ハドレー域はリッジ内側で南北拡散を増強(熱帯の平坦な温度場を再現)
-          const hadleyW = Math.max(0, 1 - (lat / ridgeAbs) * (lat / ridgeAbs));
-          const dMerid = dBase * (1 + K.hadleyDiffusionBoost * hadleyW);
           const phiEdgeN = ((lat + cg.resolutionDeg / 2) * Math.PI) / 180;
           const phiEdgeS = ((lat - cg.resolutionDeg / 2) * Math.PI) / 180;
           const chanN =
@@ -440,9 +445,27 @@ export async function computeTemperature(
             rowIsChannel[row] || (row < CH - 1 && rowIsChannel[row + 1])
               ? K.circumpolarChannelFactor
               : 1;
-          const gN = row > 0 ? (chanN * dMerid * Math.cos(phiEdgeN)) / (dPhi * dPhi * cosC) : 0;
+          // 南北の面伝導度は**面の量**でなければならない。ハドレー増強は緯度で
+          // 変わるので、自セルの緯度で評価すると i→j と j→i が食い違う
+          // (リッジ付近の 32°/30° 界面で約 4.6%。Codex レビュー 2026-08-02)。
+          // 面の値 = 両側セルの実効南北拡散係数(ハドレー増強込み)の平均。
+          // cosC で割るのは各セルの体積で規格化するためで、これは非対称で正しい
+          const gN =
+            row > 0
+              ? (chanN *
+                  0.5 *
+                  ((dMeridOfRow[row] ?? 0) + (dMeridOfRow[row - 1] ?? 0)) *
+                  Math.cos(phiEdgeN)) /
+                (dPhi * dPhi * cosC)
+              : 0;
           const gS =
-            row < CH - 1 ? (chanS * dMerid * Math.cos(phiEdgeS)) / (dPhi * dPhi * cosC) : 0;
+            row < CH - 1
+              ? (chanS *
+                  0.5 *
+                  ((dMeridOfRow[row] ?? 0) + (dMeridOfRow[row + 1] ?? 0)) *
+                  Math.cos(phiEdgeS)) /
+                (dPhi * dPhi * cosC)
+              : 0;
           const seasonFactor = (lat >= 0 ? summerN : summerS) ? K.summerAdvectionFactor : 1;
           // 南北結合はリッジより極側のみ(温帯低気圧の南北混合が実在する帯)。
           // ハドレー域の南北輸送は拡散増強で表現済みで、そこに v 結合を足すと
@@ -611,6 +634,10 @@ export async function computeTemperature(
     if (!ebmAccel) return integrate(permanentIce, initialT);
     const r = await ebmAccel.run(buildEbmFields(permanentIce, initialT), ebmConstants);
     EBM_SOLVER_STATS.maxResidualC = Math.max(EBM_SOLVER_STATS.maxResidualC, r.maxResidualC);
+    if (!r.converged) {
+      // 黙って未収束の結果を採用しない。反復回数が足りない条件を知らせる
+      EBM_SOLVER_STATS.capHits++;
+    }
     const toF64 = (a: Float32Array): Float64Array => {
       const out = new Float64Array(a.length);
       out.set(a);
