@@ -16,7 +16,7 @@ import { EARTH_PARAMS } from '../src/domain/planetParams';
 import { areaWeightOfRow } from '../src/domain/grid';
 import { getClimObs } from './scoring';
 
-const { result, precipDiag: d } = runPipelineWithPrecipDiag(EARTH_PARAMS);
+const { result, precipDiag: d } = await runPipelineWithPrecipDiag(EARTH_PARAMS);
 const grid = result.context.grid;
 const land = result.context.terrain.landMask;
 const W = grid.widthCells;

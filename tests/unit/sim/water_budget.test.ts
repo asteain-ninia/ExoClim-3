@@ -64,17 +64,17 @@ export function landWaterBudget(result: PipelineResult, soil: SoilWaterResult): 
 describe('統合水収支(第四 FB P0-1)', () => {
   let run: { result: PipelineResult; precipDiag: unknown; soil: SoilWaterResult | null };
 
-  beforeAll(() => {
-    const r = runPipelineWithPrecipDiag({ ...EARTH_PARAMS, gridResolutionDeg: 2 });
+  beforeAll(async () => {
+    const r = await runPipelineWithPrecipDiag({ ...EARTH_PARAMS, gridResolutionDeg: 2 });
     run = { result: r.result, precipDiag: r.precipDiag, soil: r.soil };
   }, 600_000);
 
-  it('診断つき実行が土壌診断を返す(捨てない)', () => {
+  it('診断つき実行が土壌診断を返す(捨てない)', async () => {
     expect(run.soil).not.toBeNull();
     expect(run.soil?.actualEtMm.length).toBe(12);
   });
 
-  it('全球陸の年水収支が閉じる(|P − ET − 流出 − ΔS| ≤ 1mm/年)', () => {
+  it('全球陸の年水収支が閉じる(|P − ET − 流出 − ΔS| ≤ 1mm/年)', async () => {
     const b = landWaterBudget(run.result, run.soil!);
     expect(Math.abs(b.signedResidual)).toBeLessThanOrEqual(1);
     expect(b.precip).toBeGreaterThan(100); // 退化していない
@@ -84,12 +84,12 @@ describe('統合水収支(第四 FB P0-1)', () => {
     expect(Math.abs(b.storageChange)).toBeLessThanOrEqual(1);
   });
 
-  it('セル別年収支の絶対残差平均が 2mm/年以下', () => {
+  it('セル別年収支の絶対残差平均が 2mm/年以下', async () => {
     const b = landWaterBudget(run.result, run.soil!);
     expect(b.meanAbsResidual).toBeLessThanOrEqual(2);
   });
 
-  it('結合反復が上限に到達せず収束している(診断に記録)', () => {
+  it('結合反復が上限に到達せず収束している(診断に記録)', async () => {
     const c = run.result.precipitation.coupling;
     expect(c).toBeDefined();
     expect(c.converged).toBe(true);
@@ -97,7 +97,7 @@ describe('統合水収支(第四 FB P0-1)', () => {
     expect(c.finalResidualMmPerMonth).toBeLessThanOrEqual(c.toleranceMmPerMonth);
   });
 
-  it('退化条件(全海・全陸・無降水・高傾斜)で有限かつ収束する', () => {
+  it('退化条件(全海・全陸・無降水・高傾斜)で有限かつ収束する', async () => {
     const cases: Array<[string, PlanetParams]> = [
       [
         '全海',
@@ -133,7 +133,7 @@ describe('統合水収支(第四 FB P0-1)', () => {
       ],
     ];
     for (const [label, p] of cases) {
-      const r = runPipelineWithPrecipDiag(p);
+      const r = await runPipelineWithPrecipDiag(p);
       expect(r.result.precipitation.coupling.converged, label).toBe(true);
       for (let m = 0; m < 12; m++) {
         const arr = r.result.precipitation.monthlyPrecipMm[m]!;

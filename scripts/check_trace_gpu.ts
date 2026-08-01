@@ -21,7 +21,7 @@ import { acquireGpu, releaseGpu } from '../src/sim/gpu/device';
 import { createMoistureTraceGpu } from '../src/sim/gpu/moisture_trace_gpu';
 
 async function main(): Promise<void> {
-  const result = runPipeline(EARTH_PARAMS);
+  const result = await runPipeline(EARTH_PARAMS);
   const ctx = result.context;
   const grid = ctx.grid;
   const N = grid.cellCount;
@@ -66,39 +66,38 @@ async function main(): Promise<void> {
   console.log(`GPU: ${gpu.adapterInfo}`);
 
   try {
-    gpu.device.pushErrorScope('validation');
-    const res = createMoistureTraceGpu(
-      gpu,
-      {
-        widthCells: grid.widthCells,
-        heightCells: grid.heightCells,
-        dyKm,
-        radiusKm: ctx.params.body.radiusKm,
-        resolutionDeg: grid.resolutionDeg,
-        elevationMeters: ctx.terrain.elevationMeters,
-        crestElevationMeters: crestElev,
-        landMask: Float32Array.from(ctx.terrain.landMask),
-        smallWater: Float32Array.from(smallWater),
-      },
-      {
-        orographicDepletionM: K.orographicDepletionM,
-        moistureTraceMaxKm: K.moistureTraceMaxKm,
-        moistureDecayLandKm: K.moistureDecayLandKm,
-        moistureDecayOceanKm: K.moistureDecayOceanKm,
-        fetchOpenOceanCapKm: K.fetchOpenOceanCapKm,
-      },
-    );
+    const fields = {
+      widthCells: grid.widthCells,
+      heightCells: grid.heightCells,
+      dyKm,
+      radiusKm: ctx.params.body.radiusKm,
+      resolutionDeg: grid.resolutionDeg,
+      elevationMeters: ctx.terrain.elevationMeters,
+      crestElevationMeters: crestElev,
+      landMask: Float32Array.from(ctx.terrain.landMask),
+      smallWater: Float32Array.from(smallWater),
+    };
+    const constants = {
+      orographicDepletionM: K.orographicDepletionM,
+      moistureTraceMaxKm: K.moistureTraceMaxKm,
+      moistureDecayLandKm: K.moistureDecayLandKm,
+      moistureDecayOceanKm: K.moistureDecayOceanKm,
+      fetchOpenOceanCapKm: K.fetchOpenOceanCapKm,
+    };
+    const monthly = { temperature, windU, windV, landSource: null };
 
+    gpu.device.pushErrorScope('validation');
+    const res = createMoistureTraceGpu(gpu, N);
     const err = await gpu.device.popErrorScope();
     if (err) console.error('[パイプライン生成エラー]', err.message);
 
     // 暖機(シェーダのコンパイルを計測から外す)
     gpu.device.pushErrorScope('validation');
-    await res.run({ temperature, windU, windV, landSource: null });
+    await res.run(fields, constants, monthly);
     const err2 = await gpu.device.popErrorScope();
     if (err2) console.error('[実行エラー]', err2.message);
     const t1 = performance.now();
-    const out = await res.run({ temperature, windU, windV, landSource: null });
+    const out = await res.run(fields, constants, monthly);
     const gpuMs = performance.now() - t1;
     console.log(`GPU: 12 か月で ${gpuMs.toFixed(1)}ms(高速化 ${(cpuMs / gpuMs).toFixed(1)} 倍)`);
 
@@ -161,8 +160,8 @@ async function main(): Promise<void> {
     }
 
     // ---- 決定性(3 回連続でビット一致するか)----
-    const a1 = await res.run({ temperature, windU, windV, landSource: null });
-    const a2 = await res.run({ temperature, windU, windV, landSource: null });
+    const a1 = await res.run(fields, constants, monthly);
+    const a2 = await res.run(fields, constants, monthly);
     let same = true;
     for (let m = 0; m < 12 && same; m++) {
       for (let i = 0; i < N; i++) {

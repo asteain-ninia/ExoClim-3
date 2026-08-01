@@ -10,7 +10,7 @@ import { runPipeline } from '../src/sim/pipeline';
 import { EARTH_PARAMS } from '../src/domain/planetParams';
 import { buildCrestElev, buildSmallWaterMask } from '../src/sim/step06_precipitation';
 
-const result = runPipeline(EARTH_PARAMS);
+const result = await runPipeline(EARTH_PARAMS);
 const ctx = result.context;
 const N = ctx.grid.cellCount;
 

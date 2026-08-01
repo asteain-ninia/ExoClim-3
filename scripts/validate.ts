@@ -10,6 +10,7 @@ import { PNG } from 'pngjs';
 import { MODEL_CONSTANTS } from '../src/sim/constants';
 import { EARTH_PARAMS } from '../src/domain/planetParams';
 import { runPipelineTimed } from '../src/sim/pipeline';
+import { openAccel } from './accel_cli';
 import { KOPPEN_CLASSES, KOPPEN_COLORS, MAJOR_CLASS_NAMES } from '../src/domain/koppen';
 import type { PipelineResult } from '../src/sim/types';
 import {
@@ -92,7 +93,7 @@ function constantsDigest(): string {
   return (h >>> 0).toString(16);
 }
 
-function main(): void {
+async function main(): Promise<void> {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   if (HOLDOUT_FOLD !== null) {
     const statePath = path.join(process.cwd(), 'out', 'optimize', `state_fold${HOLDOUT_FOLD}.json`);
@@ -103,9 +104,12 @@ function main(): void {
         `fold ${HOLDOUT_FOLD} の区画成績が真の保留評価`,
     );
   }
+  const accel = await openAccel();
   const t0 = Date.now();
   console.log('パイプライン実行中(実在地球 1°)…');
-  const { result, stepTimingsMs } = runPipelineTimed(EARTH_PARAMS);
+  const { result, stepTimingsMs } = await runPipelineTimed(EARTH_PARAMS, accel.opts).finally(() =>
+    accel.close(),
+  );
   console.log('所要時間:', ((Date.now() - t0) / 1000).toFixed(1), 's', stepTimingsMs);
 
   const koppenObs = getKoppenObs();
@@ -865,4 +869,4 @@ function printSummary(report: {
   console.log(`\nPNG とレポート: ${OUT_DIR}`);
 }
 
-main();
+void main();

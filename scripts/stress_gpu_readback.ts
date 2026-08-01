@@ -64,7 +64,7 @@ async function main(): Promise<void> {
     }
     console.log('合成データを使用(パイプラインを回さない)');
   } else {
-    const result = runPipeline(EARTH_PARAMS);
+    const result = await runPipeline(EARTH_PARAMS);
     const ctx = result.context;
     grid = ctx.grid;
     radiusKm = ctx.params.body.radiusKm;
@@ -88,35 +88,38 @@ async function main(): Promise<void> {
   console.log(`GPU: ${gpu.adapterInfo}`);
   console.log(`${REPEATS} 回の readback を試みる(100 回ごとに報告)`);
 
-  const res = createMoistureTraceGpu(
-    gpu,
-    {
-      widthCells: grid.widthCells,
-      heightCells: grid.heightCells,
-      dyKm,
-      radiusKm,
-      resolutionDeg: grid.resolutionDeg,
-      elevationMeters,
-      crestElevationMeters: crestElev,
-      landMask,
-      smallWater: smallWaterF,
-    },
-    {
-      orographicDepletionM: K.orographicDepletionM,
-      moistureTraceMaxKm: K.moistureTraceMaxKm,
-      moistureDecayLandKm: K.moistureDecayLandKm,
-      moistureDecayOceanKm: K.moistureDecayOceanKm,
-      fetchOpenOceanCapKm: K.fetchOpenOceanCapKm,
-    },
-  );
+  const res = createMoistureTraceGpu(gpu, grid.cellCount);
+  const fields = {
+    widthCells: grid.widthCells,
+    heightCells: grid.heightCells,
+    dyKm,
+    radiusKm,
+    resolutionDeg: grid.resolutionDeg,
+    elevationMeters,
+    crestElevationMeters: crestElev,
+    landMask,
+    smallWater: smallWaterF,
+  };
+  const constants = {
+    orographicDepletionM: K.orographicDepletionM,
+    moistureTraceMaxKm: K.moistureTraceMaxKm,
+    moistureDecayLandKm: K.moistureDecayLandKm,
+    moistureDecayOceanKm: K.moistureDecayOceanKm,
+    fetchOpenOceanCapKm: K.fetchOpenOceanCapKm,
+  };
 
   const t0 = performance.now();
   let checksum = 0;
   for (let i = 1; i <= REPEATS; i++) {
     if (MODE === 'noread') {
-      res.dispatchOnly({ temperature, windU, windV, landSource: null });
+      res.dispatchOnly(fields, constants, { temperature, windU, windV, landSource: null });
     } else {
-      const out = await res.run({ temperature, windU, windV, landSource: null });
+      const out = await res.run(fields, constants, {
+        temperature,
+        windU,
+        windV,
+        landSource: null,
+      });
       checksum += out[0]![12345] ?? 0;
     }
     if (i % EVERY === 0) {

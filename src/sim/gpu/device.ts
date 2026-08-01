@@ -98,7 +98,10 @@ export async function acquireGpu(): Promise<GpuContext | null> {
       destroy(): void {
         device.destroy();
         cached = null;
-        keepAlive.length = 0;
+        // **keepAlive は空にしない**。ここで参照を落とすと gpu/adapter が GC 対象に
+        // なり、プロセス終了時にアクセス違反で落ちる(2026-08-01 実測: destroy 後も
+        // 処理を続けるスクリプトが終了時に segfault した)。保持量は数十バイトで、
+        // 解放しても得るものは無い
       },
     };
     return cached;
@@ -170,12 +173,26 @@ export class ReadbackStage {
    * 3 回目の読み戻しでアクセス違反(0xC0000005)が起きた(2026-08-01 実測)。
    */
   enqueueCopy(enc: GPUCommandEncoder, src: GPUBuffer, floatCount: number): void {
-    if (floatCount > this.capacityFloats) {
+    this.enqueueCopyAt(enc, src, 0, floatCount);
+  }
+
+  /**
+   * 複数のバッファを 1 枚のステージングへ並べて積む。
+   * 読み戻しは 1 回あたり約 0.3ms の固定費なので、
+   * **複数の結果は必ず 1 回の map にまとめる**。
+   */
+  enqueueCopyAt(
+    enc: GPUCommandEncoder,
+    src: GPUBuffer,
+    dstFloatOffset: number,
+    floatCount: number,
+  ): void {
+    if (dstFloatOffset + floatCount > this.capacityFloats) {
       throw new Error(
-        `ステージングバッファが小さい(要求 ${floatCount} / 確保 ${this.capacityFloats})`,
+        `ステージングバッファが小さい(要求 ${dstFloatOffset + floatCount} / 確保 ${this.capacityFloats})`,
       );
     }
-    enc.copyBufferToBuffer(src, 0, this.buffer, 0, floatCount * 4);
+    enc.copyBufferToBuffer(src, 0, this.buffer, dstFloatOffset * 4, floatCount * 4);
   }
 
   /**

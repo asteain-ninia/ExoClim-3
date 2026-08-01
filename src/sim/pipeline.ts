@@ -21,15 +21,21 @@ import { computeKoppen } from './step07_koppen';
 import type { PipelineResult } from './types';
 import { MODEL_CONSTANTS } from './constants';
 import { assertComputableInputs, buildDiagnostics } from './diagnostics';
+import type { RunOptions } from './accel';
 
-/** 区間計測フック。物理側は時計を読まず、計測側だけがこの中で時刻を扱う */
-type SectionTimer = <T>(label: string, fn: () => T) => T;
+/**
+ * 区間計測フック。物理側は時計を読まず、計測側だけがこの中で時刻を扱う。
+ *
+ * 非同期なのは GPU 加速器のため(WebGPU の読み戻しは await を要する)。
+ * 加速器を渡さなければ CPU 実装のみが走り、await は即座に解決する。
+ */
+type SectionTimer = <T>(label: string, fn: () => T | Promise<T>) => Promise<T>;
 
-const noTimer: SectionTimer = (_label, fn) => fn();
+const noTimer: SectionTimer = async (_label, fn) => fn();
 
 /** 物理結果のみ(決定的)。計測が要る場合は runPipelineTimed を使う */
-export function runPipeline(params: PlanetParams): PipelineResult {
-  return runPipelineCore(params, noTimer);
+export function runPipeline(params: PlanetParams, opts?: RunOptions): Promise<PipelineResult> {
+  return runPipelineCore(params, noTimer, undefined, opts);
 }
 
 /**
@@ -37,48 +43,55 @@ export function runPipeline(params: PlanetParams): PipelineResult {
  * 捕捉して返す。物理結果は runPipeline と同一(診断は書込のみの受け皿 —
  * テストでビット一致を担保)
  */
-export function runPipelineWithPrecipDiag(params: PlanetParams): {
+export async function runPipelineWithPrecipDiag(
+  params: PlanetParams,
+  opts?: RunOptions,
+): Promise<{
   result: PipelineResult;
   precipDiag: PrecipDiagnostics;
   /** 土壌水分の周期定常解(無効時は null — ゼロ収支を成功に見せない) */
   soil: SoilWaterResult | null;
-} {
+}> {
   const box: PrecipDiagBox = {};
-  const result = runPipelineCore(params, noTimer, box);
+  const result = await runPipelineCore(params, noTimer, box, opts);
   if (!box.fields) throw new Error('降水診断が生成されなかった(内部エラー)');
   return { result, precipDiag: box.fields, soil: box.soil ?? null };
 }
 
 /** 物理結果 + ステップ別所要時間(計測は時刻依存 — 物理結果には含めない) */
-export function runPipelineTimed(params: PlanetParams): {
+export async function runPipelineTimed(
+  params: PlanetParams,
+  opts?: RunOptions,
+): Promise<{
   result: PipelineResult;
   stepTimingsMs: Record<string, number>;
-} {
+}> {
   const timings: Record<string, number> = {};
-  const timer: SectionTimer = (label, fn) => {
+  const timer: SectionTimer = async (label, fn) => {
     const t0 = performance.now();
-    const out = fn();
+    const out = await fn();
     timings[label] = Math.round(performance.now() - t0);
     return out;
   };
-  return { result: runPipelineCore(params, timer), stepTimingsMs: timings };
+  return { result: await runPipelineCore(params, timer, undefined, opts), stepTimingsMs: timings };
 }
 
-function runPipelineCore(
+async function runPipelineCore(
   params: PlanetParams,
   time: SectionTimer,
   precipDiagBox?: PrecipDiagBox,
-): PipelineResult {
+  opts?: RunOptions,
+): Promise<PipelineResult> {
   // 事前検査(変更レビュー FB): 計算不能な入力は配列確保・反復の前に明示エラー
   assertComputableInputs(params);
 
-  const context = time('context', () => buildSimContext(params));
+  const context = await time('context', () => buildSimContext(params));
 
   // ---- プレパス: 半球間 SST 非対称 → ITCZ の北偏オフセット ----
   // 実物の ITCZ は暖かい半球へ寄る(~3°/K)。海流場(周極海峡で切られる
   // 南半球 vs 暖流ドリフトの北半球)が持つ非対称を測り、線に恒常オフセットを
   // 与える。ステップ 1-3 のプレパスは計 ~150ms(ストリームライン含む)
-  const hemisOffsetDeg = time('step0_hemis', () => {
+  const hemisOffsetDeg = await time('step0_hemis', () => {
     if (MODEL_CONSTANTS.itczHemisOffsetPerC <= 0) return 0;
     const itcz0 = computeItcz(context);
     const wb0 = computeWindBelt(context, itcz0);
@@ -108,15 +121,24 @@ function runPipelineCore(
     return Math.max(-6, Math.min(6, MODEL_CONSTANTS.itczHemisOffsetPerC * deltaC));
   });
 
-  const itcz = time('step1_itcz', () => computeItcz(context, hemisOffsetDeg));
-  const windBelt = time('step2_windbelt', () => computeWindBelt(context, itcz));
-  const ocean = time('step3_ocean', () => computeOceanCurrent(context, itcz, windBelt));
-  const airflow = time('step4_airflow', () => computeAirflow(context, itcz, windBelt));
-  const temperature1 = time('step5_temperature', () =>
+  const itcz = await time('step1_itcz', () => computeItcz(context, hemisOffsetDeg));
+  const windBelt = await time('step2_windbelt', () => computeWindBelt(context, itcz));
+  const ocean = await time('step3_ocean', () => computeOceanCurrent(context, itcz, windBelt));
+  const airflow = await time('step4_airflow', () => computeAirflow(context, itcz, windBelt));
+  const temperature1 = await time('step5_temperature', () =>
     computeTemperature(context, itcz, windBelt, ocean, airflow),
   );
-  const precipitation1 = time('step6_precipitation', () =>
-    computePrecipitation(context, itcz, windBelt, ocean, airflow, temperature1, precipDiagBox),
+  const precipitation1 = await time('step6_precipitation', () =>
+    computePrecipitation(
+      context,
+      itcz,
+      windBelt,
+      ocean,
+      airflow,
+      temperature1,
+      precipDiagBox,
+      opts,
+    ),
   );
 
   // ---- 蒸発冷却フィードバック(降水 → 気温 → 降水の 2 パス目)----
@@ -127,16 +149,27 @@ function runPipelineCore(
   let temperature = temperature1;
   let precipitation = precipitation1;
   if (MODEL_CONSTANTS.evapCoolingWm2PerMmDay > 0) {
-    temperature = time('step5b_temperature', () =>
+    temperature = await time('step5b_temperature', () =>
       computeTemperature(context, itcz, windBelt, ocean, airflow, precipitation1),
     );
     // 2 パス目が最終場になるため、診断も 2 パス目のもので上書きする
-    precipitation = time('step6b_precipitation', () =>
-      computePrecipitation(context, itcz, windBelt, ocean, airflow, temperature, precipDiagBox),
+    precipitation = await time('step6b_precipitation', () =>
+      computePrecipitation(
+        context,
+        itcz,
+        windBelt,
+        ocean,
+        airflow,
+        temperature,
+        precipDiagBox,
+        opts,
+      ),
     );
   }
 
-  const koppen = time('step7_koppen', () => computeKoppen(context, temperature, precipitation));
+  const koppen = await time('step7_koppen', () =>
+    computeKoppen(context, temperature, precipitation),
+  );
 
   // P1-3: 適用範囲診断。範囲外は値を切り詰めず「判定不能」を宣言する
   const diagnostics = buildDiagnostics(params, temperature, precipitation);

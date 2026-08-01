@@ -269,7 +269,7 @@ const runs: Array<{ label: string; greenhouse: number }> = [
   let best = 1.8;
   for (let it = 0; it < 5; it++) {
     const mid = (lo + hi) / 2;
-    const { result } = runPipelineTimed(derleParams(mid));
+    const { result } = await runPipelineTimed(derleParams(mid));
     const s = summarize(result);
     console.log(`  探索 ${it + 1}: 温室 ${mid.toFixed(3)} → 全球平均 ${s.globalMeanC}°C`);
     best = mid;
@@ -283,7 +283,7 @@ const runs: Array<{ label: string; greenhouse: number }> = [
 const summaries: Record<string, unknown> = {};
 for (const run of runs) {
   const t0 = Date.now();
-  const { result } = runPipelineTimed(derleParams(run.greenhouse));
+  const { result } = await runPipelineTimed(derleParams(run.greenhouse));
   const s = summarize(result);
   const regions = regionStats(result);
   summaries[run.label] = {

@@ -15,7 +15,7 @@ const pressure = Number(process.argv[2] ?? 3);
 const greenhouse = Number(process.argv[3] ?? 1.65);
 const o: DerleOverrides = { surfacePressureBar: pressure, greenhouse };
 
-const { lore, habit, polyHabit } = runDerle(o);
+const { lore, habit, polyHabit } = await runDerle(o);
 
 console.log(`構成: 気圧 ${pressure} bar / 温室 ${greenhouse}`);
 console.log(

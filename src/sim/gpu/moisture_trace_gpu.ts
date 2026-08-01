@@ -16,54 +16,14 @@
 //   - 追跡は各スレッドが自分だけで完結する(近傍との通信なし)。読むのは
 //     標高・稜線・陸海・内海・気温・風・陸面供給で、すべて読み取り専用。
 
-import {
-  GPU_WORKGROUP_SIZE,
-  createFilledBuffer,
-  ReadbackStage,
-  asBufferSource,
-  type GpuContext,
-} from './device';
+import { GPU_WORKGROUP_SIZE, ReadbackStage, asBufferSource, type GpuContext } from './device';
 import { MONTHS_PER_YEAR } from '@/domain/insolation';
-
-/** GPU へ渡す静的な場(月に依らないもの) */
-export interface TraceStaticFields {
-  widthCells: number;
-  heightCells: number;
-  /** 南北セル寸法(km)。ステップ長の基準 */
-  dyKm: number;
-  /** 惑星半径(km)。行ごとの東西セル寸法を求めるのに使う */
-  radiusKm: number;
-  resolutionDeg: number;
-  elevationMeters: Float32Array;
-  crestElevationMeters: Float32Array;
-  /** 1 = 陸 */
-  landMask: Float32Array;
-  /** 1 = 閉じた内海・湖(Fetch 則の対象) */
-  smallWater: Float32Array;
-}
-
-/** 月ごとに変わる場 */
-export interface TraceMonthlyFields {
-  /** [month][cell] 気温 °C */
-  temperature: Float32Array[];
-  /** [month][cell] 東西風 m/s */
-  windU: Float32Array[];
-  /** [month][cell] 南北風 m/s */
-  windV: Float32Array[];
-  /**
-   * [month][cell] 陸面供給の強さ。null なら陸は供給源にならない(パス 1)
-   */
-  landSource: Float32Array[] | null;
-}
-
-/** 移植する較正定数(呼び出し側が MODEL_CONSTANTS から渡す) */
-export interface TraceConstants {
-  orographicDepletionM: number;
-  moistureTraceMaxKm: number;
-  moistureDecayLandKm: number;
-  moistureDecayOceanKm: number;
-  fetchOpenOceanCapKm: number;
-}
+import type {
+  MoistureTraceAccel,
+  TraceConstants,
+  TraceMonthlyFields,
+  TraceStaticFields,
+} from '../accel';
 
 const WGSL = /* wgsl */ `
 struct Params {
@@ -237,33 +197,34 @@ fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
 `;
 
 /** GPU 側の常駐資源。月ごと・反復ごとに作り直さない */
-export interface TraceGpuResources {
-  destroy(): void;
-  /**
-   * 12 か月ぶんの供給場を一度に解く。
-   * @returns [month][cell] の供給場
-   */
-  run(monthly: TraceMonthlyFields): Promise<Float32Array[]>;
+export interface TraceGpuResources extends MoistureTraceAccel {
   /** 読み戻さずに計算だけ投げる(安定性の切り分け用) */
-  dispatchOnly(monthly: TraceMonthlyFields): void;
+  dispatchOnly(
+    fields: TraceStaticFields,
+    constants: TraceConstants,
+    monthly: TraceMonthlyFields,
+  ): void;
 }
 
-export function createMoistureTraceGpu(
-  gpu: GpuContext,
-  fields: TraceStaticFields,
-  constants: TraceConstants,
-): TraceGpuResources {
+/**
+ * セル数だけを固定した常駐資源を作る。
+ *
+ * 静的な場(標高・稜線・陸海・内海)も**毎回転送する**。1MB 弱なので費用は
+ * 無視でき、地形が変わる呼び出し(惑星を変える較正・デーレ)でキャッシュの
+ * 無効化を誤る危険を無くせる。正しさを微小な最適化より優先する。
+ */
+export function createMoistureTraceGpu(gpu: GpuContext, cellCount: number): TraceGpuResources {
   const { device } = gpu;
-  const N = fields.widthCells * fields.heightCells;
+  const N = cellCount;
   const M = MONTHS_PER_YEAR;
   const ST = GPUBufferUsage.STORAGE;
   const CS = GPUBufferUsage.COPY_SRC;
   const CD = GPUBufferUsage.COPY_DST;
 
-  const bufElev = createFilledBuffer(device, fields.elevationMeters, ST);
-  const bufCrest = createFilledBuffer(device, fields.crestElevationMeters, ST);
-  const bufLand = createFilledBuffer(device, fields.landMask, ST);
-  const bufSmall = createFilledBuffer(device, fields.smallWater, ST);
+  const bufElev = device.createBuffer({ size: N * 4, usage: ST | CD });
+  const bufCrest = device.createBuffer({ size: N * 4, usage: ST | CD });
+  const bufLand = device.createBuffer({ size: N * 4, usage: ST | CD });
+  const bufSmall = device.createBuffer({ size: N * 4, usage: ST | CD });
   const bufTemp = device.createBuffer({ size: M * N * 4, usage: ST | CD });
   const bufU = device.createBuffer({ size: M * N * 4, usage: ST | CD });
   const bufV = device.createBuffer({ size: M * N * 4, usage: ST | CD });
@@ -294,11 +255,7 @@ export function createMoistureTraceGpu(
 
   // 読み戻しは常駐バッファで行う(毎回作り直すと 100 回未満で segfault する)
   const stage = new ReadbackStage(device, M * N);
-  const totalThreads = M * N;
-  const groups = Math.ceil(totalThreads / GPU_WORKGROUP_SIZE);
-  // CPU 実装と同じ打ち切り(距離基準。解像度を変えても挙動が変わらないように)
-  const maxSteps = Math.min(200, Math.ceil(constants.moistureTraceMaxKm / fields.dyKm) + 4);
-  const stepWeight = fields.dyKm / 111;
+  const groups = Math.ceil((M * N) / GPU_WORKGROUP_SIZE);
 
   // 転送用の一時配列は**バッファごとに別々に**持つ。使い回すと同じ配列を
   // 続けて writeBuffer へ渡すことになり、実測で不安定だった(2026-08-01)
@@ -316,6 +273,15 @@ export function createMoistureTraceGpu(
       flat.fill(0);
     }
     device.queue.writeBuffer(buf, 0, asBufferSource(flat));
+  };
+  const uploadStatic = (buf: GPUBuffer, a: Float32Array): void => {
+    let s = scratches.get(buf);
+    if (!s) {
+      s = new Float32Array(N);
+      scratches.set(buf, s);
+    }
+    s.set(a.length === N ? a : a.subarray(0, N));
+    device.queue.writeBuffer(buf, 0, asBufferSource(s));
   };
 
   return {
@@ -336,12 +302,25 @@ export function createMoistureTraceGpu(
       }
       stage.destroy();
     },
-    dispatchOnly(monthly: TraceMonthlyFields): void {
-      submit(monthly, false);
+    dispatchOnly(
+      fields: TraceStaticFields,
+      constants: TraceConstants,
+      monthly: TraceMonthlyFields,
+    ): void {
+      submit(fields, constants, monthly, false);
     },
-    async run(monthly: TraceMonthlyFields): Promise<Float32Array[]> {
+    async run(
+      fields: TraceStaticFields,
+      constants: TraceConstants,
+      monthly: TraceMonthlyFields,
+    ): Promise<Float32Array[]> {
+      if (fields.widthCells * fields.heightCells !== N) {
+        throw new Error(
+          `追跡器のセル数が違う(確保 ${N} / 要求 ${fields.widthCells * fields.heightCells})`,
+        );
+      }
       // 計算と読み戻しのコピーは 1 回の submit にまとめる(device.ts の注記)
-      submit(monthly, true);
+      submit(fields, constants, monthly, true);
       const flat = await stage.map(M * N);
       const out: Float32Array[] = [];
       for (let m = 0; m < M; m++) out.push(flat.slice(m * N, (m + 1) * N));
@@ -349,40 +328,50 @@ export function createMoistureTraceGpu(
     },
   };
 
-  function submit(monthly: TraceMonthlyFields, withCopy: boolean): void {
-    {
-      upload(bufTemp, monthly.temperature);
-      upload(bufU, monthly.windU);
-      upload(bufV, monthly.windV);
-      upload(bufLandSrc, monthly.landSource);
+  function submit(
+    fields: TraceStaticFields,
+    constants: TraceConstants,
+    monthly: TraceMonthlyFields,
+    withCopy: boolean,
+  ): void {
+    uploadStatic(bufElev, fields.elevationMeters);
+    uploadStatic(bufCrest, fields.crestElevationMeters);
+    uploadStatic(bufLand, fields.landMask);
+    uploadStatic(bufSmall, fields.smallWater);
+    upload(bufTemp, monthly.temperature);
+    upload(bufU, monthly.windU);
+    upload(bufV, monthly.windV);
+    upload(bufLandSrc, monthly.landSource);
 
-      const u = new ArrayBuffer(64);
-      const ui = new Uint32Array(u);
-      const uf = new Float32Array(u);
-      ui[0] = fields.widthCells;
-      ui[1] = fields.heightCells;
-      ui[2] = N;
-      ui[3] = maxSteps;
-      uf[4] = fields.dyKm;
-      uf[5] = fields.radiusKm;
-      uf[6] = fields.resolutionDeg;
-      uf[7] = stepWeight;
-      uf[8] = constants.orographicDepletionM;
-      uf[9] = constants.moistureTraceMaxKm;
-      uf[10] = constants.moistureDecayLandKm;
-      uf[11] = constants.moistureDecayOceanKm;
-      uf[12] = constants.fetchOpenOceanCapKm;
-      ui[13] = monthly.landSource ? 1 : 0;
-      device.queue.writeBuffer(bufParams, 0, u);
+    // CPU 実装と同じ打ち切り(距離基準。解像度を変えても挙動が変わらないように)
+    const maxSteps = Math.min(200, Math.ceil(constants.moistureTraceMaxKm / fields.dyKm) + 4);
+    const stepWeight = fields.dyKm / 111;
+    const u = new ArrayBuffer(64);
+    const ui = new Uint32Array(u);
+    const uf = new Float32Array(u);
+    ui[0] = fields.widthCells;
+    ui[1] = fields.heightCells;
+    ui[2] = N;
+    ui[3] = maxSteps;
+    uf[4] = fields.dyKm;
+    uf[5] = fields.radiusKm;
+    uf[6] = fields.resolutionDeg;
+    uf[7] = stepWeight;
+    uf[8] = constants.orographicDepletionM;
+    uf[9] = constants.moistureTraceMaxKm;
+    uf[10] = constants.moistureDecayLandKm;
+    uf[11] = constants.moistureDecayOceanKm;
+    uf[12] = constants.fetchOpenOceanCapKm;
+    ui[13] = monthly.landSource ? 1 : 0;
+    device.queue.writeBuffer(bufParams, 0, u);
 
-      const enc = device.createCommandEncoder();
-      const pass = enc.beginComputePass();
-      pass.setPipeline(pipeline);
-      pass.setBindGroup(0, bind);
-      pass.dispatchWorkgroups(groups);
-      pass.end();
-      if (withCopy) stage.enqueueCopy(enc, bufOut, M * N);
-      device.queue.submit([enc.finish()]);
-    }
+    const enc = device.createCommandEncoder();
+    const pass = enc.beginComputePass();
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, bind);
+    pass.dispatchWorkgroups(groups);
+    pass.end();
+    if (withCopy) stage.enqueueCopy(enc, bufOut, M * N);
+    device.queue.submit([enc.finish()]);
   }
 }

@@ -5,7 +5,7 @@ import { runPipeline } from '../src/sim/pipeline';
 import { KOPPEN_CLASSES } from '../src/domain/koppen';
 import { rowOfLatDeg, colOfLonDeg } from '../src/domain/grid';
 
-const result = runPipeline(EARTH_PARAMS);
+const result = await runPipeline(EARTH_PARAMS);
 const grid = result.context.grid;
 
 const SITES: Array<[string, number, number]> = [

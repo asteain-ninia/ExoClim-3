@@ -5,7 +5,7 @@ import { KOPPEN_CLASSES } from '../src/domain/koppen';
 import { rowOfLatDeg, colOfLonDeg } from '../src/domain/grid';
 
 const params = { ...EARTH_PARAMS, gridResolutionDeg: 2 };
-const r = runPipeline(params);
+const r = await runPipeline(params);
 const g = r.context.grid;
 console.log('grid', g.widthCells, 'x', g.heightCells);
 

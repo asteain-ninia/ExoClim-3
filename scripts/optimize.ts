@@ -13,6 +13,7 @@ import * as path from 'node:path';
 import { execSync, spawn, type ChildProcess } from 'node:child_process';
 import * as readline from 'node:readline';
 import { runPipeline } from '../src/sim/pipeline';
+import { openAccel } from './accel_cli';
 import { MODEL_CONSTANTS } from '../src/sim/constants';
 import { EARTH_PARAMS } from '../src/domain/planetParams';
 import { SPACE, evaluateResult, type Scores } from './optimize_lib';
@@ -111,20 +112,24 @@ interface Backend {
 }
 
 function sequentialBackend(state: OptState): Backend {
+  const accelReady = openAccel(true);
   return {
     async evalBatch(items) {
+      const accel = await accelReady;
       const out: Scores[] = [];
       for (const it of items) {
         Object.assign(MODEL_CONSTANTS, it.vector);
         const t0 = Date.now();
-        const result = runPipeline(EARTH_PARAMS);
+        const result = await runPipeline(EARTH_PARAMS, accel.opts);
         const s = evaluateResult(result, HOLDOUT_FOLD);
         logEval(state, it.tag, s, (Date.now() - t0) / 1000);
         out.push(s);
       }
       return out;
     },
-    close() {},
+    close() {
+      void accelReady.then((a) => a.close());
+    },
   };
 }
 

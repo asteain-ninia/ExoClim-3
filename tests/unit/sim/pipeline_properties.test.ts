@@ -44,20 +44,20 @@ function globalMeanC(result: PipelineResult): number {
 
 let aqua: PipelineResult;
 
-beforeAll(() => {
-  aqua = runPipeline(AQUA_TILT0);
+beforeAll(async () => {
+  aqua = await runPipeline(AQUA_TILT0);
 }, 300_000);
 
 describe('パイプラインの性質(P1-4)', () => {
-  it('同一入力で物理結果が配列まで決定的(地球 2° を 2 回実行)', () => {
+  it('同一入力で物理結果が配列まで決定的(地球 2° を 2 回実行)', async () => {
     const p = { ...EARTH_PARAMS, gridResolutionDeg: RES };
-    const a = runPipeline(p);
-    const b = runPipeline(p);
+    const a = await runPipeline(p);
+    const b = await runPipeline(p);
     expect(digest(a)).toBe(digest(b));
     expectAllFinite(a, '地球 2°');
   }, 300_000);
 
-  it('全海(傾斜 0)が有限で、季節・南北・経度対称', () => {
+  it('全海(傾斜 0)が有限で、季節・南北・経度対称', async () => {
     expectAllFinite(aqua, '全海 2°');
     expect(aqua.diagnostics.status).toBe('ok');
     const grid = aqua.context.grid;
@@ -93,8 +93,8 @@ describe('パイプラインの性質(P1-4)', () => {
     }
   }, 300_000);
 
-  it('全陸が有限で適用域内', () => {
-    const result = runPipeline({
+  it('全陸が有限で適用域内', async () => {
+    const result = await runPipeline({
       ...EARTH_PARAMS,
       gridResolutionDeg: RES,
       terrain: { kind: 'preset', preset: 'all_land' },
@@ -103,23 +103,23 @@ describe('パイプラインの性質(P1-4)', () => {
     expect(result.diagnostics.status).toBe('ok');
   }, 300_000);
 
-  it('放射照度 +10% で全球平均気温が低下しない', () => {
-    const brighter = runPipeline({
+  it('放射照度 +10% で全球平均気温が低下しない', async () => {
+    const brighter = await runPipeline({
       ...AQUA_TILT0,
       orbital: { ...AQUA_TILT0.orbital, starLuminositySolar: 1.1 },
     });
     expect(globalMeanC(brighter)).toBeGreaterThanOrEqual(globalMeanC(aqua));
   }, 300_000);
 
-  it('温室効果 +20% で全球平均気温が低下しない', () => {
-    const warmer = runPipeline({
+  it('温室効果 +20% で全球平均気温が低下しない', async () => {
+    const warmer = await runPipeline({
       ...AQUA_TILT0,
       atmosphere: { ...AQUA_TILT0.atmosphere, greenhouseStrength: 1.2 },
     });
     expect(globalMeanC(warmer)).toBeGreaterThanOrEqual(globalMeanC(aqua));
   }, 300_000);
 
-  it('検査の実効性: 1 配列の改変で決定性が、1 値の NaN で有限性が破れる(P2-2)', () => {
+  it('検査の実効性: 1 配列の改変で決定性が、1 値の NaN で有限性が破れる(P2-2)', async () => {
     const before = digest(aqua);
     const arr = aqua.ocean.sstAnomalyC;
     const orig = arr[7] ?? 0;
@@ -139,23 +139,23 @@ describe('パイプラインの性質(P1-4)', () => {
     }
   });
 
-  it('時計 API の無い環境でも物理計算が動き、runPipelineTimed と全物理場が一致(P2-1)', () => {
+  it('時計 API の無い環境でも物理計算が動き、runPipelineTimed と全物理場が一致(P2-1)', async () => {
     const saved = globalThis.performance;
     let noClock: PipelineResult;
     try {
       Reflect.deleteProperty(globalThis, 'performance');
-      noClock = runPipeline(AQUA_TILT0);
+      noClock = await runPipeline(AQUA_TILT0);
     } finally {
       (globalThis as Record<string, unknown>)['performance'] = saved;
     }
     expect(digest(noClock)).toBe(digest(aqua));
-    const timed = runPipelineTimed(AQUA_TILT0);
+    const timed = await runPipelineTimed(AQUA_TILT0);
     expect(digest(timed.result)).toBe(digest(aqua));
     expect(Object.keys(timed.stepTimingsMs).length).toBeGreaterThan(5);
   }, 300_000);
 
-  it('逆行で東西風(貿易風・偏西風)の符号が反転する', () => {
-    const retro = runPipeline({
+  it('逆行で東西風(貿易風・偏西風)の符号が反転する', async () => {
+    const retro = await runPipeline({
       ...AQUA_TILT0,
       body: { ...AQUA_TILT0.body, rotationDirection: -1 },
     });

@@ -41,7 +41,7 @@ console.log('気圧 | 温室 | 全球 | 陸平均 | 陸降水 | 整合 | 全土�
 for (const p of PRESSURES) {
   for (const g of GREENHOUSES) {
     const o: DerleOverrides = { surfacePressureBar: p, greenhouse: g };
-    const { lore, habit } = runDerle(o);
+    const { lore, habit } = await runDerle(o);
     const totalScore = lore.score + (habit.allAnecumeneCount === 0 ? 1 : 0);
     rows.push({
       ...o,
@@ -84,7 +84,7 @@ for (const [k, v] of Object.entries(best.checks)) {
 const bestOverrides: DerleOverrides = {};
 if (best.surfacePressureBar !== undefined) bestOverrides.surfacePressureBar = best.surfacePressureBar;
 if (best.greenhouse !== undefined) bestOverrides.greenhouse = best.greenhouse;
-const { habit } = runDerle(bestOverrides);
+const { habit } = await runDerle(bestOverrides);
 const worst = [...habit.countries].sort((a, b) => a.ecumenePct - b.ecumenePct).slice(0, 8);
 console.log('\n居住可能率が低い国(下位 8):');
 for (const c of worst) {

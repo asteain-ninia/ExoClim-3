@@ -22,6 +22,7 @@ import type {
   TemperatureResult,
   WindBeltResult,
 } from './types';
+import type { RunOptions, TraceConstants, TraceStaticFields } from './accel';
 
 /** 飽和水蒸気圧 hPa(Magnus 式)。水蒸気供給のスケールとして使用 */
 export function saturationVaporPressureHpa(tempC: number): number {
@@ -423,7 +424,7 @@ interface PrecipDiagMonth {
   preAdjustMm: Float32Array;
 }
 
-export function computePrecipitation(
+export async function computePrecipitation(
   ctx: SimContext,
   itcz: ItczResult,
   windBelt: WindBeltResult,
@@ -431,7 +432,8 @@ export function computePrecipitation(
   airflow: AirflowResult,
   temperature: TemperatureResult,
   diagOut?: PrecipDiagBox,
-): PrecipitationResult {
+  opts?: RunOptions,
+): Promise<PrecipitationResult> {
   const { grid, params, terrain } = ctx;
   const monthlyPrecipMm: Float32Array[] = [];
   const annualPrecipMm = new Float32Array(grid.cellCount);
@@ -507,18 +509,65 @@ export function computePrecipitation(
     }
   }
 
+  // ---- 風上追跡(12 か月)。加速器があれば 1 カーネルで一度に解く ----
+  // 加速器は「渡されたら使う」だけで、無ければ CPU 実装に落ちる(src/sim/accel.ts)。
+  // GPU 版は 12 か月ぶんを 777,600 スレッドで一度に解くため、月ごとに呼ばず
+  // **12 か月を配列で渡す**形にしている
+  const traceAccel = opts?.accel?.moistureTrace(grid.cellCount) ?? null;
+  const traceFields: TraceStaticFields | null = traceAccel
+    ? {
+        widthCells: grid.widthCells,
+        heightCells: grid.heightCells,
+        dyKm,
+        radiusKm: params.body.radiusKm,
+        resolutionDeg: grid.resolutionDeg,
+        elevationMeters: terrain.elevationMeters,
+        crestElevationMeters: crestElev,
+        landMask: Float32Array.from(terrain.landMask),
+        smallWater: Float32Array.from(smallWater),
+      }
+    : null;
+  const traceConstants: TraceConstants = {
+    orographicDepletionM: K.orographicDepletionM,
+    moistureTraceMaxKm: K.moistureTraceMaxKm,
+    moistureDecayLandKm: K.moistureDecayLandKm,
+    moistureDecayOceanKm: K.moistureDecayOceanKm,
+    fetchOpenOceanCapKm: K.fetchOpenOceanCapKm,
+  };
+  const traceAllMonths = async (landSource: Float32Array[] | null): Promise<Float32Array[]> => {
+    if (traceAccel && traceFields) {
+      return traceAccel.run(traceFields, traceConstants, {
+        temperature: temperature.monthlyTemperatureC,
+        windU: airflow.monthlyWindU,
+        windV: airflow.monthlyWindV,
+        landSource,
+      });
+    }
+    const out: Float32Array[] = [];
+    for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+      const tField = temperature.monthlyTemperatureC[m];
+      const u = airflow.monthlyWindU[m];
+      const v = airflow.monthlyWindV[m];
+      out.push(
+        tField && u && v
+          ? traceMoistureSupply(
+              ctx,
+              smallWater,
+              crestElev,
+              tField,
+              u,
+              v,
+              landSource?.[m] ?? null,
+              0,
+            )
+          : new Float32Array(grid.cellCount),
+      );
+    }
+    return out;
+  };
+
   // ---- パス 1: 海洋のみを供給源として風上追跡(全月)----
-  const supplies1: Float32Array[] = [];
-  for (let m = 0; m < MONTHS_PER_YEAR; m++) {
-    const tField = temperature.monthlyTemperatureC[m];
-    const u = airflow.monthlyWindU[m];
-    const v = airflow.monthlyWindV[m];
-    supplies1.push(
-      tField && u && v
-        ? traceMoistureSupply(ctx, smallWater, crestElev, tField, u, v, null, 0)
-        : new Float32Array(grid.cellCount),
-    );
-  }
+  const supplies1 = await traceAllMonths(null);
   const blend = (arr: Float32Array[], m: number): Float32Array =>
     blendSupplyMonths(arr, m, grid.cellCount);
 
@@ -656,7 +705,7 @@ export function computePrecipitation(
     return wsum > 0 ? acc / (wsum * MONTHS_PER_YEAR) : 0;
   };
 
-  const supplies2: Float32Array[] = [];
+  let supplies2: Float32Array[] = [];
   for (let m = 0; m < MONTHS_PER_YEAR; m++) supplies2.push(new Float32Array(grid.cellCount));
 
   // 初期推定: 海洋のみ供給 → 変換 → 後処理(演算子は反復内と同一)
@@ -673,6 +722,34 @@ export function computePrecipitation(
 
   const soilOn = K.soilWaterCapacityMm > 0;
   const isLand = (i: number): boolean => terrain.landMask[i] === 1;
+  const soilAccel = soilOn ? (opts?.accel?.soilWater(grid.cellCount) ?? null) : null;
+  const solveSoil = async (
+    precip: Float32Array[],
+    warmStart?: ArrayLike<number>,
+  ): Promise<SoilWaterResult> => {
+    if (soilAccel) {
+      return soilAccel.run({
+        landMask: terrain.landMask,
+        precipByMonth: precip,
+        tempByMonth: temperature.monthlyTemperatureC,
+        capacityMm: K.soilWaterCapacityMm,
+        petScaleMmPerMonth: K.soilPetScaleMmPerMonth,
+        maxYears: K.soilSpinupYears,
+        toleranceMm: SOIL_SPINUP_TOLERANCE_MM,
+        initialStorage: warmStart,
+      });
+    }
+    return solveSoilWater(
+      grid.cellCount,
+      isLand,
+      precip,
+      temperature.monthlyTemperatureC,
+      K.soilWaterCapacityMm,
+      K.soilSpinupYears,
+      0,
+      warmStart,
+    );
+  };
   let soil: SoilWaterResult | null = null;
   let iterations = 0;
   let residual = Number.POSITIVE_INFINITY;
@@ -680,25 +757,14 @@ export function computePrecipitation(
   for (let it = 1; it <= COUPLING_MAX_ITERATIONS; it++) {
     iterations = it;
     if (soilOn) {
-      soil = solveSoilWater(
-        grid.cellCount,
-        isLand,
-        precipEst,
-        temperature.monthlyTemperatureC,
-        K.soilWaterCapacityMm,
-        K.soilSpinupYears,
-        0,
-        // 結合反復のウォームスタート(前反復の 12 月末貯水)。周期定常への
-        // 収束判定は同じなので解は許容差内で同一、空回し年数だけ減る
-        soil?.storageMm[MONTHS_PER_YEAR - 1],
-      );
+      // 結合反復のウォームスタート(前反復の 12 月末貯水)。周期定常への
+      // 収束判定は同じなので解は許容差内で同一、空回し年数だけ減る
+      soil = await solveSoil(precipEst, soil?.storageMm[MONTHS_PER_YEAR - 1]);
     }
+    const landSources: Float32Array[] = [];
     for (let m = 0; m < MONTHS_PER_YEAR; m++) {
-      const tField = temperature.monthlyTemperatureC[m];
-      const u = airflow.monthlyWindU[m];
-      const v = airflow.monthlyWindV[m];
-      if (!tField || !u || !v) continue;
       const landSource = new Float32Array(grid.cellCount);
+      landSources.push(landSource);
       const etM = soil?.actualEtMm[m];
       for (let i = 0; i < grid.cellCount; i++) {
         if (!terrain.landMask[i]) continue;
@@ -713,8 +779,8 @@ export function computePrecipitation(
           : Math.min(1, (precipEst[m]?.[i] ?? 0) / 40);
         landSource[i] = K.landRecyclingStrength * wetness;
       }
-      supplies2[m] = traceMoistureSupply(ctx, smallWater, crestElev, tField, u, v, landSource, 0);
     }
+    supplies2 = await traceAllMonths(landSources);
     const next: Float32Array[] = [];
     for (let m = 0; m < MONTHS_PER_YEAR; m++) {
       next.push(monthlyConvert(m, blend(supplies2, m)));
@@ -730,14 +796,7 @@ export function computePrecipitation(
   // 最終の土壌診断は収束後の最終降水場で解き直す(返す ET・流出・貯水が
   // 最終降水と同じ周期解になり、統合水収支が閉じる)
   if (soilOn) {
-    soil = solveSoilWater(
-      grid.cellCount,
-      isLand,
-      precipEst,
-      temperature.monthlyTemperatureC,
-      K.soilWaterCapacityMm,
-      K.soilSpinupYears,
-    );
+    soil = await solveSoil(precipEst);
   }
   if (diagOut && soil) diagOut.soil = soil;
   const coupling: PrecipCouplingDiagnostics = {

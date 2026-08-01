@@ -14,17 +14,17 @@ const P2 = { ...EARTH_PARAMS, gridResolutionDeg: 2 };
 let plain: PipelineResult;
 let diagRun: { result: PipelineResult; precipDiag: PrecipDiagnostics };
 
-beforeAll(() => {
-  plain = runPipeline(P2);
-  diagRun = runPipelineWithPrecipDiag(P2);
+beforeAll(async () => {
+  plain = await runPipeline(P2);
+  diagRun = await runPipelineWithPrecipDiag(P2);
 }, 300_000);
 
 describe('降水内部要因の診断(R1)', () => {
-  it('診断の有無で物理結果が配列までビット一致(通常実行を退行させない)', () => {
+  it('診断の有無で物理結果が配列までビット一致(通常実行を退行させない)', async () => {
     expect(digestOf(diagRun.result)).toBe(digestOf(plain));
   });
 
-  it('全因子から最終降水を全セル(陸含む)で再構成できる', () => {
+  it('全因子から最終降水を全セル(陸含む)で再構成できる', async () => {
     const d = diagRun.precipDiag;
     const scale = d.mmPerSupplyUnit;
     let checked = 0;
@@ -60,7 +60,7 @@ describe('降水内部要因の診断(R1)', () => {
     expect(maxFinalErrMm).toBeLessThan(0.01); // 最終降水の再構成(mm、全セル)
   });
 
-  it('後処理差分は陸のみ(海セルでは 0 = 最終と変換直後が一致)', () => {
+  it('後処理差分は陸のみ(海セルでは 0 = 最終と変換直後が一致)', async () => {
     const d = diagRun.precipDiag;
     const land = diagRun.result.context.terrain.landMask;
     let landDeltaCells = 0;
@@ -80,7 +80,7 @@ describe('降水内部要因の診断(R1)', () => {
     expect(landDeltaCells).toBeGreaterThan(0); // 後処理が実在することの確認
   });
 
-  it('倍率は物理的に妥当な範囲(遮蔽・沈降残存は (0,1]、持上げは ≥1 または雨陰下限以上)', () => {
+  it('倍率は物理的に妥当な範囲(遮蔽・沈降残存は (0,1]、持上げは ≥1 または雨陰下限以上)', async () => {
     const d = diagRun.precipDiag;
     for (let m = 0; m < 12; m += 4) {
       for (let i = 0; i < (d.liftItcz[m]?.length ?? 0); i += 17) {

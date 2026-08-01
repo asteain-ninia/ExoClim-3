@@ -10,6 +10,7 @@ import type { PlanetParams } from '../src/domain/planetParams';
 import { KOPPEN_CLASSES, majorClassOf } from '../src/domain/koppen';
 import { areaWeightOfRow, latDegOfRow } from '../src/domain/grid';
 import type { PipelineResult } from '../src/sim/types';
+import type { RunOptions } from '../src/sim/accel';
 import derleTerrain from '../src/domain/data/derle_terrain_1deg.json';
 import derleCountries from '../src/domain/data/derle_countries.json';
 import derlePolygons from '../src/domain/data/derle_country_polygons.json';
@@ -457,8 +458,8 @@ export function globalMeanTempC(result: PipelineResult): number {
   return s / w;
 }
 
-export function runDerle(o: number | DerleOverrides) {
-  const result = runPipeline(derleParams(o));
+export async function runDerle(o: number | DerleOverrides, opts: RunOptions = {}) {
+  const result = await runPipeline(derleParams(o), opts);
   const regions = regionStats(result);
   const lore = evaluateLore(regions);
   lore.globalMeanC = Math.round(globalMeanTempC(result) * 100) / 100;

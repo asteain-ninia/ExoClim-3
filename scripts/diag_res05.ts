@@ -3,7 +3,10 @@ import { EARTH_PARAMS } from '../src/domain/planetParams';
 import { runPipelineTimed } from '../src/sim/pipeline';
 
 const t0 = Date.now();
-const { result: r, stepTimingsMs } = runPipelineTimed({ ...EARTH_PARAMS, gridResolutionDeg: 0.5 });
+const { result: r, stepTimingsMs } = await runPipelineTimed({
+  ...EARTH_PARAMS,
+  gridResolutionDeg: 0.5,
+});
 const total = (Date.now() - t0) / 1000;
 console.log('0.5° 合計', total.toFixed(1), 's', stepTimingsMs);
 console.log('格子', r.context.grid.widthCells, 'x', r.context.grid.heightCells);

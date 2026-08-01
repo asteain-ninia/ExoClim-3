@@ -42,8 +42,8 @@ interface Row extends DerleOverrides {
 
 const rows: Row[] = [];
 
-function evaluate(stage: string, o: DerleOverrides): Row {
-  const { lore } = runDerle(o);
+async function evaluate(stage: string, o: DerleOverrides): Promise<Row> {
+  const { lore } = await runDerle(o);
   const row: Row = {
     stage,
     ...o,
@@ -76,7 +76,7 @@ function evaluate(stage: string, o: DerleOverrides): Row {
 // ---- 段階 1: 気温(温室効果) ----
 console.log('=== 段階 1: 気温の走査 ===');
 for (const g of [1.35, 1.5, 1.65, 1.8, 1.95, 2.1, 2.25, 2.4, 2.6]) {
-  evaluate('温度', { greenhouse: g });
+  await evaluate('温度', { greenhouse: g });
 }
 let best = rows.reduce((a, b) => (b.score > a.score ? b : a));
 const bestG = best.greenhouse ?? 1.8;
@@ -86,7 +86,7 @@ console.log(`→ 最良の温室効果 ${bestG}(整合 ${best.score}/7、全球 
 console.log('=== 段階 2: 地軸傾斜の走査 ===');
 for (const tilt of [10, 15, 19.505, 25, 30, 35]) {
   if (tilt === DERLE_BASE.axialTiltDeg) continue; // 段階 1 で計測済み
-  evaluate('傾斜', { greenhouse: bestG, axialTiltDeg: tilt });
+  await evaluate('傾斜', { greenhouse: bestG, axialTiltDeg: tilt });
 }
 best = rows.reduce((a, b) => (b.score > a.score ? b : a));
 const bestTilt = best.axialTiltDeg ?? DERLE_BASE.axialTiltDeg;
@@ -96,7 +96,7 @@ console.log(`→ 最良の傾斜 ${bestTilt}°(整合 ${best.score}/7)\n`);
 console.log('=== 段階 3: 自転周期の走査 ===');
 for (const rot of [16, 20, 24, 28.4698, 34, 40, 48]) {
   if (rot === DERLE_BASE.rotationPeriodHours && bestTilt === DERLE_BASE.axialTiltDeg) continue;
-  evaluate('自転', {
+  await evaluate('自転', {
     greenhouse: bestG,
     axialTiltDeg: bestTilt,
     rotationPeriodHours: rot,
@@ -112,7 +112,7 @@ console.log(
 console.log('=== 段階 4: 最良構成での温度の詰め ===');
 const around = best;
 for (const dg of [-0.1, -0.05, 0.05, 0.1]) {
-  evaluate('詰め', {
+  await evaluate('詰め', {
     greenhouse: Math.round(((around.greenhouse ?? bestG) + dg) * 100) / 100,
     axialTiltDeg: around.axialTiltDeg ?? DERLE_BASE.axialTiltDeg,
     rotationPeriodHours: around.rotationPeriodHours ?? DERLE_BASE.rotationPeriodHours,

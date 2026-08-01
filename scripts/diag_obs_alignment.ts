@@ -20,7 +20,7 @@ import { getKoppenObs } from './scoring';
 import { areaWeightOfRow, wrapCol } from '../src/domain/grid';
 import { majorClassOf } from '../src/domain/koppen';
 
-const result = runPipeline(EARTH_PARAMS);
+const result = await runPipeline(EARTH_PARAMS);
 const grid = result.context.grid;
 const W = grid.widthCells;
 const H = grid.heightCells;

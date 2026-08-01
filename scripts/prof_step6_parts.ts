@@ -15,20 +15,20 @@ import { MODEL_CONSTANTS } from '../src/sim/constants';
 const K = MODEL_CONSTANTS as unknown as Record<string, number>;
 const baseCapacity = K['soilWaterCapacityMm'] ?? 600;
 
-const run = (label: string): number => {
+const run = async (label: string): Promise<number> => {
   const t = performance.now();
-  const { stepTimingsMs } = runPipelineTimed(EARTH_PARAMS);
+  const { stepTimingsMs } = await runPipelineTimed(EARTH_PARAMS);
   const ms = stepTimingsMs.step6_precipitation ?? 0;
   console.log(`${label.padEnd(28)} step6 = ${ms.toFixed(0).padStart(7)}ms  (全体 ${(performance.now() - t).toFixed(0)}ms)`);
   return ms;
 };
 
 // 暖機(JIT)
-run('暖機(捨てる)');
+await run('暖機(捨てる)');
 
-const full = run('既定');
+const full = await run('既定');
 K['soilWaterCapacityMm'] = 0;
-const noSoil = run('土壌無効(容量 0)');
+const noSoil = await run('土壌無効(容量 0)');
 K['soilWaterCapacityMm'] = baseCapacity;
 
 console.log(`\n土壌の取り分: ${(full - noSoil).toFixed(0)}ms(step6 の ${(((full - noSoil) / full) * 100).toFixed(0)}%)`);

@@ -24,11 +24,11 @@ function precipOf(values: number[]): PrecipitationResult {
 }
 
 describe('適用範囲診断(P1-3)', () => {
-  it('地球入力は事前診断ゼロ件', () => {
+  it('地球入力は事前診断ゼロ件', async () => {
     expect(diagnoseInputs(EARTH_PARAMS)).toEqual([]);
   });
 
-  it('科学的範囲外の入力は理由つきエラー(計算は可能)', () => {
+  it('科学的範囲外の入力は理由つきエラー(計算は可能)', async () => {
     const hot: PlanetParams = {
       ...EARTH_PARAMS,
       orbital: { ...EARTH_PARAMS.orbital, starLuminositySolar: 1000 },
@@ -38,7 +38,7 @@ describe('適用範囲診断(P1-3)', () => {
     expect(invalidInputIssues(hot)).toEqual([]); // 計算自体は可能(invalid ではない)
   });
 
-  it('計算不能な入力は計算前に明示エラー(invalid_input — 事前診断)', () => {
+  it('計算不能な入力は計算前に明示エラー(invalid_input — 事前診断)', async () => {
     const cases: Array<[string, PlanetParams]> = [
       ['格子分解能 0', { ...EARTH_PARAMS, gridResolutionDeg: 0 }],
       ['格子分解能 NaN', { ...EARTH_PARAMS, gridResolutionDeg: Number.NaN }],
@@ -64,7 +64,7 @@ describe('適用範囲診断(P1-3)', () => {
       // (UI とヘッドレスが同一コードを表示できる)
       let caught: unknown = null;
       try {
-        runPipeline(p);
+        await runPipeline(p);
       } catch (e) {
         caught = e;
       }
@@ -84,17 +84,17 @@ describe('適用範囲診断(P1-3)', () => {
     expect(() => assertComputableInputs(EARTH_PARAMS)).not.toThrow();
   });
 
-  it('高加熱端の気温(数千 °C)は判定不能', () => {
+  it('高加熱端の気温(数千 °C)は判定不能', async () => {
     const issues = diagnoseFields(tempOf([2000, 20]), precipOf([50, 60]));
     expect(issues.some((x) => x.code === 'field:temp:domain')).toBe(true);
   });
 
-  it('数十億 mm/月の降水を正常結果として返さない', () => {
+  it('数十億 mm/月の降水を正常結果として返さない', async () => {
     const issues = diagnoseFields(tempOf([20, 25]), precipOf([3.4e9, 50]));
     expect(issues.some((x) => x.code === 'field:precip:domain')).toBe(true);
   });
 
-  it('非有限・負の降水も判定不能', () => {
+  it('非有限・負の降水も判定不能', async () => {
     expect(
       diagnoseFields(tempOf([Number.NaN, 20]), precipOf([50, 60])).some(
         (x) => x.code === 'field:temp:nonfinite',
@@ -107,26 +107,26 @@ describe('適用範囲診断(P1-3)', () => {
     ).toBe(true);
   });
 
-  it('地球圏内の場は診断ゼロ件(適用域は地球極値を余裕込みで含む)', () => {
+  it('地球圏内の場は診断ゼロ件(適用域は地球極値を余裕込みで含む)', async () => {
     expect(FIELD_DOMAIN.monthlyTempMinC).toBeLessThan(-89);
     expect(FIELD_DOMAIN.monthlyTempMaxC).toBeGreaterThan(57);
     expect(diagnoseFields(tempOf([-89, 57]), precipOf([0, 9300]))).toEqual([]);
   });
 
-  it('統合(2° 地球): 従来どおり計算可能で status = ok', () => {
-    const result = runPipeline({ ...EARTH_PARAMS, gridResolutionDeg: 2 });
+  it('統合(2° 地球): 従来どおり計算可能で status = ok', async () => {
+    const result = await runPipeline({ ...EARTH_PARAMS, gridResolutionDeg: 2 });
     expect(result.diagnostics.status).toBe('ok');
     expect(result.diagnostics.issues.filter((x) => x.severity === 'error')).toEqual([]);
   }, 300_000);
 
-  it('統合(2° 高加熱端): 判定不能が宣言される', () => {
+  it('統合(2° 高加熱端): 判定不能が宣言される', async () => {
     const hot: PlanetParams = {
       ...EARTH_PARAMS,
       gridResolutionDeg: 2,
       terrain: { kind: 'preset', preset: 'aquaplanet' },
       orbital: { ...EARTH_PARAMS.orbital, starLuminositySolar: 25, semiMajorAxisAu: 0.5 },
     };
-    const result = runPipeline(hot);
+    const result = await runPipeline(hot);
     const d = buildDiagnostics(hot, result.temperature, result.precipitation);
     expect(result.diagnostics.status).toBe('out_of_domain');
     expect(d.status).toBe('out_of_domain');

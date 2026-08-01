@@ -16,7 +16,7 @@ const OUT_DIR = path.join(process.cwd(), 'out', 'experiments', 'r1-precip-diag')
 fs.mkdirSync(OUT_DIR, { recursive: true });
 
 console.log('パイプライン実行中(実在地球 1°、R1 診断つき)…');
-const { result, precipDiag, soil } = runPipelineWithPrecipDiag(EARTH_PARAMS);
+const { result, precipDiag, soil } = await runPipelineWithPrecipDiag(EARTH_PARAMS);
 const grid = result.context.grid;
 const land = result.context.terrain.landMask;
 

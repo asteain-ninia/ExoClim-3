@@ -43,7 +43,7 @@ console.log('気圧 | 温室 | 全球 | 陸降水 | 整合 | 死国(名/スタ�
 for (const p of PRESSURES) {
   for (const g of GREENHOUSES) {
     const o: DerleOverrides = { surfacePressureBar: p, greenhouse: g };
-    const { lore, polyHabit } = runDerle(o);
+    const { lore, polyHabit } = await runDerle(o);
     const total = Math.round((lore.score + HABIT_WEIGHT * polyHabit.habitScore01) * 1000) / 1000;
     rows.push({
       surfacePressureBar: p,
