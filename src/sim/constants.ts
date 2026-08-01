@@ -33,7 +33,7 @@ export const MODEL_CONSTANTS = {
    * ハドレー域(リッジ内側)の南北拡散増強。等方拡散 EBM は熱帯を単調減少に
    * してしまうが、実物はハドレー循環が |lat|<25° を平坦に均す。
    */
-  hadleyDiffusionBoost: 0.7244,
+  hadleyDiffusionBoost: 0.72784469,
   /** 周極海峡と見なす緯度行の陸面積率の上限と適用緯度上限(極海の氷蓋下は対象外) */
   channelLandFracMax: 0.04,
   channelMaxAbsLatDeg: 70,
@@ -56,7 +56,7 @@ export const MODEL_CONSTANTS = {
   iceOnsetC: -6,
   iceRampWidthC: 5,
   /** 恒常氷床の地表アルベドと判定(パス1の年平均・最暖月の複合条件) */
-  permanentIceAlbedo: 0.612,
+  permanentIceAlbedo: 0.62,
   permanentIceAnnualMeanC: -8,
   permanentIceWarmestMonthC: 2,
   /**
@@ -70,26 +70,26 @@ export const MODEL_CONSTANTS = {
    */
   channelCloudBoost: 0.667,
   /** 雲アルベドの循環変調: 沈降域(亜熱帯高圧帯)での低減率と ITCZ での増加率 */
-  subsidenceCloudReduction: 0.6038,
+  subsidenceCloudReduction: 0.59997212,
   /** 沈降晴天の海上での効き(貿易風積雲・層積雲が残るため陸より弱い) */
-  subsidenceOceanFactor: 0.37,
+  subsidenceOceanFactor: 0.42564099,
   convectiveCloudBoost: 0.4546,
   /** ストームトラック帯(海上)の雲増加率と雲アルベド上限 */
-  stormTrackCloudBoost: 0.584,
+  stormTrackCloudBoost: 0.536,
   cloudAlbedoMax: 0.4,
   /** 夏半球のストーム雲の海上残存率(陸側ジェットは弱まるが海は夏も曇天) */
-  stormCloudSummerOcean: 0.7507,
+  stormCloudSummerOcean: 0.7647,
   /** 雲変調に使う ITCZ 幅の倍率(実物の雲帯は降水影響圏より狭い) */
-  itczCloudWidthFactor: 0.778,
+  itczCloudWidthFactor: 0.78875325,
   /** 寒流(SST 負偏差)上の層積雲デッキ: 偏差 -2°C で雲 +この比率 */
-  stratocumulusBoostPerNegC: 0.574,
+  stratocumulusBoostPerNegC: 0.59992,
   /** 冬(月日射 < 年平均)の陸上における移流結合の低減率(接地逆転層) */
   winterInversionAdvectionFactor: 0.35,
   /**
    * 冬の接地逆転層は移流だけでなく拡散(自由大気との混合)も絶縁する。
    * 内陸度 1 の冬に拡散をこの係数まで低減(シベリア・南極内陸の冬の冷え込み)
    */
-  winterInversionDiffusionFactor: 0.5643,
+  winterInversionDiffusionFactor: 0.5363,
   /** 周極海峡行の海洋混合層の増深倍率(遮られない流路の深い鉛直混合) */
   channelMixedLayerBoost: 3.0,
   /** 気温減率(°C/km、標高降尺度と OLR 標高補正に使用) */
@@ -106,7 +106,7 @@ export const MODEL_CONSTANTS = {
    * 流される誤った物理になる(較正ログ 2026-07-29)。到達距離 ≈ 結合/(B+Dk²)
    * 換算で 1500〜2500 km 相当。
    */
-  zonalAdvectionCouplingWm2PerK: 40.6,
+  zonalAdvectionCouplingWm2PerK: 35.2,
   /** EBM 積分年数と 1 年のステップ数 */
   ebmYears: 4,
   ebmStepsPerYear: 240,
@@ -115,15 +115,15 @@ export const MODEL_CONSTANTS = {
 
   // ---- Step 1 ITCZ (docs/spec/01_ITCZ.md) ----
   /** 熱赤道の赤緯追従率(海上基準) */
-  itczDeclinationFollowRatio: 0.2996,
+  itczDeclinationFollowRatio: 0.28,
   /**
    * 半球間非対称による ITCZ の恒常オフセット(度 per °C。暖かい半球へ寄る。
    * 文献値 ~3°/K。SST 非対称はプレパスで測定、オフセットは ±6° クランプ) */
-  itczHemisOffsetPerC: 5,
+  itczHemisOffsetPerC: 2.48,
   /**
    * 海上の季節追従の減衰(Log/Pasta: ITCZ は海上でほとんど動かない)。
    * 経度列の帯内陸率 0 のときの追従率倍率(1 = 減衰なし) */
-  itczOceanFollowDamp: 0.4798,
+  itczOceanFollowDamp: 0.498,
   /** 大陸モンスーンによる追加引き寄せ(度、夏半球の陸割合 1.0 のとき) */
   itczMonsoonPullDeg: 7.792,
   /**
@@ -151,7 +151,7 @@ export const MODEL_CONSTANTS = {
    * 赤道常湿帯: 年平均 ITCZ 線の残留影響(0〜1)。実物の熱赤道近傍は年 2 回の
    * 通過と近接で乾季にも雨が残る(赤道 = 雨林の定量化)。幅は半幅 ×0.7
    */
-  equatorialItczResidual: 0.482,
+  equatorialItczResidual: 0.606,
   /** 経度方向平滑化の半幅(度)。広すぎるとモンスーンの経度応答が希釈される */
   itczSmoothingHalfWidthDeg: 12,
 
@@ -175,7 +175,7 @@ export const MODEL_CONSTANTS = {
    * 半永続低気圧 — アリューシャン/アイスランド低相当)。海氷は後段のため
    * 極前線相対で配置。回転成分を通じて冬の西岸への暖気移流を生む
    */
-  subpolarWinterLowHpa: 6.558,
+  subpolarWinterLowHpa: 6.878,
   /**
    * 亜熱帯高気圧の離散セル化(WL#29): 帯ではなく海盆ごとのセルで、
    * 「自転方向の東」に大陸が近い側(= 寒流の流れる海盆東縁)ほど強い。
@@ -203,7 +203,7 @@ export const MODEL_CONSTANTS = {
   // ---- Step 4 気流 (docs/spec/04_気流.md) ----
   /** 貿易風・偏西風・極東風の基準風速(m/s) */
   tradeWindMs: 6.92,
-  westerlyWindMs: 7.7,
+  westerlyWindMs: 7.05,
   polarEasterlyMs: 3,
   /** 気圧勾配風の結合係数(m/s per hPa/1000km): 回転成分と横断成分 */
   pressureGradientRotationalMsPerHpaPerMm: 3.2,
@@ -213,9 +213,9 @@ export const MODEL_CONSTANTS = {
   /** 水蒸気供給の海上減衰距離(km) */
   moistureDecayOceanKm: 1758,
   /** 陸上減衰距離(km、再循環なしの素の値) */
-  moistureDecayLandKm: 1908,
+  moistureDecayLandKm: 2142,
   /** 陸面再蒸発の強さ(0〜1、二回目のパスで局所降水に比例) */
-  landRecyclingStrength: 0.35,
+  landRecyclingStrength: 0.454,
   /**
    * 再循環の反復回数。1 だと海から遠い赤道内陸の雨林が立ち上がれない
    * (実物は降水の 5〜8 割が再循環の自己保持 — 仮想大陸で実測)
@@ -280,17 +280,17 @@ export const MODEL_CONSTANTS = {
    * ITCZ 傘の海洋性ゲート: 供給(無次元)がこの値で傘が全開。乾燥内陸の
    * トラフ直下(アラビア型)では傘が開かず、湿潤収束(ベンガル型)では開く
    */
-  itczLiftSupplyNorm: 0.92664,
+  itczLiftSupplyNorm: 0.6,
   /** ストームトラック(温帯低気圧帯)の増幅 */
   stormTrackBoost: 0.705,
   /** 寒候期のストームトラック追加増幅 */
   stormTrackWinterBoost: 0.15,
   /** 地形性上昇の増幅(基準勾配あたり) */
-  orographicBoost: 0.9,
+  orographicBoost: 1.00368,
   /** 風下雨陰の最大抑制(0〜1 が残存率の下限) */
-  rainShadowFloor: 0.27888,
+  rainShadowFloor: 0.30268,
   /** 亜熱帯高圧帯(沈降域)の抑制率(0〜1)。下降枝全域(リッジ−16°〜+5°)に適用 */
-  subsidenceSuppression: 0.7632,
+  subsidenceSuppression: 0.7376,
   /** 沈降抑制に対する ITCZ 影響の防護係数(1 = 完全防護) */
   subsidenceItczProtection: 0.92732,
   /**
@@ -300,7 +300,7 @@ export const MODEL_CONSTANTS = {
   eastCoastSubsidenceRelief: 0.647,
   eastCoastSubsidenceDecayKm: 844,
   /** \u6771\u5cb8\u7de9\u548c\u306e\u4f9b\u7d66\u5b9f\u7e3e\u30b2\u30fc\u30c8(\u3053\u306e\u4f9b\u7d66\u3067\u5168\u958b\u3002\u4e7e\u3044\u305f\u6d41\u5165\u306e\u6d77\u3092\u9664\u5916) */
-  eastReliefSupplyNorm: 0.476,
+  eastReliefSupplyNorm: 0.496,
   /** 寒候期でも残る前線性の最低水蒸気(qRel の下限。弱い前線雪の表現) */
   stormMinQRel: 0.55,
   /** 高温湿潤の陸での対流性増幅(T≥22°C かつ供給豊富で最大 +この倍率) */
@@ -311,23 +311,23 @@ export const MODEL_CONSTANTS = {
    * 前線収束の持ち上げ(WL#29 セル衝突線の定量化)。湿潤空気の極向き移流 ×
    * 供給の極向き勾配に比例。ITCZ 傘とストーム帯の間(梅雨帯)を埋める
    */
-  frontalLiftBoost: 0.864,
+  frontalLiftBoost: 0.91584,
   /**
    * 寒候期の弱前線の床: 冬のストーム帯内の最乾月に残る降水
    * (最多雨月のこの割合、上限 mm)。年総量は保存(湿潤月から比例控除)。
    * タイガの Dw 化(実物は Df)と Cwa 最多/最少比 276 への対策
    */
-  winterFloorFracOfWettest: 0.40376,
+  winterFloorFracOfWettest: 0.4232,
   winterFloorMaxMm: 34,
   /** 夏半球の偏西風移流の弱化率(ジェットの季節弱化) */
-  summerAdvectionFactor: 0.5932,
+  summerAdvectionFactor: 0.6,
   /**
    * ストームトラック帯の渦による水蒸気供給(月平均風では運べない移動性低気圧の
    * 混合を表す)。海岸距離の減衰長と強度。derle 教訓 §8.2「月平均風だけでは
    * 中緯度の冬雨・内陸湿潤が出ない」への対応。
    */
-  stormMoistureSupply: 1.964,
-  stormMoistureDecayKm: 1848,
+  stormMoistureSupply: 2.076,
+  stormMoistureDecayKm: 1956,
   /**
    * 経路上昇の脱水スケール(m)。風上追跡の前方経路で空気がこの高度を上るごとに
    * 水蒸気が e 分の 1 に減る(風上斜面で雨として落ちた分。パタゴニア・チベット
@@ -339,11 +339,11 @@ export const MODEL_CONSTANTS = {
   /** 風上山脈による遮蔽: この比高(m)以上で最大遮蔽、遮蔽時の残存率 */
   upwindBlockReliefM: 1800,
   upwindBlockScanKm: 900,
-  upwindBlockFloor: 0.1826,
+  upwindBlockFloor: 0.2222,
   /** 寒流沿岸の追加抑制率 */
-  coldCoastSuppression: 0.352,
+  coldCoastSuppression: 0.26352,
   /** 全球スケール係数(供給×持ち上げ → mm/月) */
-  precipScaleMmPerUnit: 8.2,
+  precipScaleMmPerUnit: 8.44,
 
   // ---- 共通 ----
   /** 海面凍結温度(°C) */
