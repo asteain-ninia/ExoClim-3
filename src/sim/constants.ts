@@ -217,11 +217,6 @@ export const MODEL_CONSTANTS = {
   /** 陸面再蒸発の強さ(0〜1、二回目のパスで局所降水に比例) */
   landRecyclingStrength: 0.454,
   /**
-   * 再循環の反復回数。1 だと海から遠い赤道内陸の雨林が立ち上がれない
-   * (実物は降水の 5〜8 割が再循環の自己保持 — 仮想大陸で実測)
-   */
-  recyclingIterations: 2,
-  /**
    * R3 土壌水分(地域降水 FB §7): 根群域の植物利用可能水量(mm)。
    * 0 = 無効(旧来の「当月降水に比例」へ戻す)。熱帯林の深根系は 2〜3m 級で
    * 300mm 前後。記憶の時定数 ≈ 容量 / 可能蒸発散(300/140 ≈ 2 か月)
@@ -354,13 +349,6 @@ export const MODEL_CONSTANTS = {
    * 極域の季節振幅が 1/3 になる(80N: モデル 9°C vs 実測 30°C — 2026-07-30)
    */
   seaIceInsulationFactor: 0.9432,
-  /**
-   * 0 層海氷: 成長率(m/°C/日、凍結点以下 1°C あたり)・最大氷厚(m)・
-   * 融解潜熱(J/m³)。融解中の海面は凍結点に固定される(北極の夏 −0.3°C の再現)
-   */
-  seaIceGrowthMPerDegDay: 0.0006,
-  seaIceMaxThicknessM: 2.5,
-  seaIceLatentJPerM3: 3.0e8,
 } as const;
 
 export type ModelConstants = typeof MODEL_CONSTANTS;

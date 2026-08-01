@@ -124,7 +124,11 @@ export function computeAirflow(
   return { monthlyWindU, monthlyWindV };
 }
 
-/** 帯の内側で滑らかに 0→1→0(端で弱まる)…中央で最大の重み */
+/**
+ * 帯の内側の重み。端で 0.5、中央で 1.0(0.5→1→0.5)。
+ * 帯の境界でも風は消えない — 隣の帯へ連続に受け渡すため下限 0.5 を持つ。
+ * (旧コメントは「0→1→0」と書いていたが実装と不一致だった。挙動は不変)
+ */
 function bandWeight(lat: number, edge0: number, edge1: number): number {
   const t = (lat - edge0) / (edge1 - edge0);
   if (t < 0 || t > 1) return 0;
