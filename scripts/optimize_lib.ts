@@ -79,6 +79,13 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['westerlyWindMs', 6.5, 9],
 ];
 
+/**
+ * 数値的に解けなかった評価に与える不適合度。
+ * 較正が「収束しない領域」へ逃げ込むのを防ぐ(未収束は歴史的に成績を
+ * よく見せる方向に働く — GS_SWEEPS の件)。**棄却であって減点ではない**。
+ */
+export const UNSOLVED_FITNESS = -1e6;
+
 export interface Scores {
   majorPct: number;
   detailPct: number;

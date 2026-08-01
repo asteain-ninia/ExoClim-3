@@ -64,6 +64,17 @@ export const EBM_MAX_SWEEPS = 400;
 export const EBM_SOLVER = {
   order: 'gauss-seidel' as 'gauss-seidel' | 'red-black',
   /**
+   * 反復回数と緩和年数を「収束するまで自動で増やす」か。
+   *
+   * 較正では **false にする**。理由は費用ではなく設計の正しさ:
+   * 自動で増やすと、収束しにくいパラメータ領域は「高くつく」だけで
+   * 探索対象として残ってしまう。本来そこは**棄却されるべき**である
+   * (許容差内で解けないモデルは採用できない)。
+   * false のとき、予算内で収束しなければ EBM_SOLVER_STATS.capHits に計上し、
+   * 呼び出し側(較正)がその評価を失格にする。
+   */
+  adaptive: true,
+  /**
    * > 0 で回数固定。0(既定)なら**収束させる**:
    * CPU は EBM_SOLVE_TOLERANCE_C まで反復し(上限 EBM_MAX_SWEEPS)、
    * GPU は EBM_GPU_ITERATIONS 回まわして残差を記録・検証する。
@@ -733,15 +744,22 @@ export async function computeTemperature(
     // 熱容量が小さく対角優位が弱いため足りない(2026-08-02 実測)。
     // 収束するまで倍々に増やす。回数を固定すると、地球以外で黙って
     // 未収束の答えを採用してしまう(惑星デザイナとしては致命的)
-    const adaptive = EBM_SOLVER.sweeps === 0;
+    const adaptive = EBM_SOLVER.sweeps === 0 && EBM_SOLVER.adaptive;
     // 全熱容量で回す年数も**収束するまで増やす**。海洋の時定数 τ ≈ 3.2 年に対し
     // 従来の 2 年は 0.6τ しかなく、周期定常に遠く届いていなかった(2026-08-02)。
     // 年数を固定すると、その実装詳細が答えを決めてしまう(反復回数と同じ構造)。
     const yearAdaptive = adaptive && EBM_FULL_CAPACITY_YEARS.years <= 0;
-    let fullYears = yearAdaptive
-      ? Math.max(fullCapacityHint, EBM_FULL_CAPACITY_START_YEARS)
-      : EBM_FULL_CAPACITY_YEARS.years;
-    let iters = adaptive ? gpuIterationHint : ebmConstants.iterationsPerStep;
+    // 自動化しない場合も、年数は既定(検証済みの出発点)を使う
+    let fullYears =
+      EBM_FULL_CAPACITY_YEARS.years > 0
+        ? EBM_FULL_CAPACITY_YEARS.years
+        : Math.max(yearAdaptive ? fullCapacityHint : 0, EBM_FULL_CAPACITY_START_YEARS);
+    let iters =
+      EBM_SOLVER.sweeps > 0
+        ? ebmConstants.iterationsPerStep
+        : adaptive
+          ? gpuIterationHint
+          : EBM_GPU_ITERATIONS;
     const runOnce = async (): Promise<Awaited<ReturnType<typeof ebmAccel.run>>> =>
       ebmAccel.run(
         { ...fields, years: fullYears + SPINUP_ACCEL_YEARS, fullCapacityYears: fullYears },
@@ -771,8 +789,9 @@ export async function computeTemperature(
     EBM_SOLVER_STATS.fullCapacityYears = fullYears;
     EBM_SOLVER_STATS.maxResidualC = Math.max(EBM_SOLVER_STATS.maxResidualC, r.maxResidualC);
     if (iters > EBM_SOLVER_STATS.maxSweeps) EBM_SOLVER_STATS.maxSweeps = iters;
-    if (!r.converged) {
-      // 上限まで増やしても収束しなかった。黙って採用せず診断に残す
+    // 予算内で収束しなかった / 周期定常に達しなかったら診断に残す。
+    // 較正はこれを見て評価そのものを失格にする(黙って採用しない)
+    if (!r.converged || r.meanYearDriftC > EBM_PERIODIC_TOLERANCE_C) {
       EBM_SOLVER_STATS.capHits++;
     }
     const toF64 = (a: Float32Array): Float64Array => {

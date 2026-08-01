@@ -9,8 +9,14 @@ import * as readline from 'node:readline';
 import { runPipeline } from '../src/sim/pipeline';
 import { MODEL_CONSTANTS } from '../src/sim/constants';
 import { EARTH_PARAMS } from '../src/domain/planetParams';
-import { evaluateResult } from './optimize_lib';
+import { evaluateResult, UNSOLVED_FITNESS } from './optimize_lib';
+import { EBM_SOLVER, EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
 import { openAccel } from './accel_cli';
+
+// 較正では反復回数・緩和年数を**自動で増やさない**。
+// 増やすと、収束しにくい領域が「高くつく」だけで探索対象に残ってしまう。
+// 本来そこは棄却されるべきなので、予算を固定して未収束は失格にする。
+EBM_SOLVER.adaptive = false;
 
 // EBM の線形解は既定で収束させる(反復 512、隠しパラメータの除去)。
 // CPU 経路だと 1 評価が数分かかり較正が成立しないので、
@@ -39,8 +45,11 @@ rl.on('line', (line) => {
       Object.assign(MODEL_CONSTANTS, msg.vector);
       const accel = await accelReady;
       const t0 = Date.now();
+      EBM_SOLVER_STATS.capHits = 0;
       const result = await runPipeline(EARTH_PARAMS, accel.opts);
       const scores = evaluateResult(result, msg.holdoutFold);
+      // 予算内で解けなかった定数ベクトルは**失格**にする(減点ではない)
+      if (EBM_SOLVER_STATS.capHits > 0) scores.fitness = UNSOLVED_FITNESS;
       process.stdout.write(
         JSON.stringify({ id: msg.id, scores, sec: Math.round((Date.now() - t0) / 100) / 10 }) +
           '\n',
