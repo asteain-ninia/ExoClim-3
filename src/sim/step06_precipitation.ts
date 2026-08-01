@@ -509,6 +509,23 @@ export async function computePrecipitation(
     }
   }
 
+  // 近傍最冷 SST 偏差(寒流沿岸の判定)。月に依らないので 1 回だけ解く。
+  // 対象は寒流沿岸の条件に入りうるセルだけ(陸・|緯度| 10〜50°・海岸 300km 以内)
+  const coldAnomalyCache = new Float32Array(grid.cellCount);
+  {
+    const W = grid.widthCells;
+    for (let row = 0; row < grid.heightCells; row++) {
+      const aLat = Math.abs(latDegOfRow(grid, row));
+      if (aLat <= 10 || aLat >= 50) continue;
+      for (let col = 0; col < W; col++) {
+        const i = row * W + col;
+        if (!terrain.landMask[i]) continue;
+        if ((ctx.landDistToCoastKm[i] ?? 1e9) >= 300) continue;
+        coldAnomalyCache[i] = nearestOceanAnomaly(ctx, ocean, row, col);
+      }
+    }
+  }
+
   // ---- 風上追跡(12 か月)。加速器があれば 1 カーネルで一度に解く ----
   // 加速器は「渡されたら使う」だけで、無ければ CPU 実装に落ちる(src/sim/accel.ts)。
   // GPU 版は 12 か月ぶんを 777,600 スレッドで一度に解くため、月ごとに呼ばず
@@ -601,6 +618,7 @@ export async function computePrecipitation(
       eastOceanSstA,
       meanItczCenters,
       crestElev,
+      coldAnomalyCache,
     );
   };
 
@@ -863,6 +881,7 @@ export async function computePrecipitation(
         eastOceanSstA,
         meanItczCenters,
         crestElev,
+        coldAnomalyCache,
         diagM,
       );
       // 海洋由来 = 海のみトレース(パス 1)、陸面再循環由来 = 全供給 − 海のみ
@@ -1152,6 +1171,12 @@ function convertToPrecip(
   eastOceanSstA: Float32Array,
   meanItczCenters: Float32Array,
   crestElev: Float32Array,
+  /**
+   * 近傍最冷 SST 偏差の事前計算([cell]、null なら都度計算)。
+   * ocean.sstAnomalyC だけの関数で**月に依らない**のに、旧実装は月ごとに
+   * 解き直していた(12 倍の無駄)。値は同じなので結果は変わらない
+   */
+  coldAnomalyCache: Float32Array | null,
   diagM?: PrecipDiagMonth,
 ): Float32Array {
   const { grid, params, terrain } = ctx;
@@ -1313,7 +1338,9 @@ function convertToPrecip(
       if (terrain.landMask[i] && aLat > 10 && aLat < 50) {
         const coastKm = ctx.landDistToCoastKm[i] ?? 1e9;
         if (coastKm < 300) {
-          const cold = nearestOceanAnomaly(ctx, ocean, row, col);
+          const cold = coldAnomalyCache
+            ? (coldAnomalyCache[i] ?? 0)
+            : nearestOceanAnomaly(ctx, ocean, row, col);
           if (cold < -0.8) {
             coldCoastF = 1 - K.coldCoastSuppression * Math.min(1, -cold / 2.5);
             lift *= coldCoastF;

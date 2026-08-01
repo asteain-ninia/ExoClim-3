@@ -35,6 +35,42 @@ const RHO_C_WATER = 4.19e6; // J/m³/K
 const SECONDS_PER_EARTH_YEAR = 3.156e7;
 const GS_SWEEPS = 8;
 
+/**
+ * 陰的ステップの線形解を「収束した」とみなす許容差(°C)。
+ *
+ * **較正つまみではない**。数値解法の打ち切り誤差の上限であって物理量ではなく、
+ * 較正ベクトル(MODEL_CONSTANTS)には入れない。値は結果を見る前に固定した。
+ * 1e-3°C は気候の意味を持つ最小の差(0.1°C 級)より 2 桁小さい。
+ *
+ * なぜ回数ではなく残差で止めるか(2026-08-01 の実測):
+ *   固定 8 スイープでは線形解が全く収束しておらず、16・32・…・256 と増やすと
+ *   気温場が面積平均で計 2.1°C 動き、大分類一致率が 74.32 → 71.93 へ単調に
+ *   悪化した。つまり「8 回で打ち切る」という実装詳細が答えを決めており、
+ *   拡散・移流係数はその打ち切り誤差を打ち消す向きに較正されていた。
+ *   これは CLAUDE.md が禁じる隠しパラメータそのもの。
+ *   詳細: docs/実験記録_EBM赤黒順序_2026-08-01.md
+ */
+export const EBM_SOLVE_TOLERANCE_C = 1e-3;
+
+/** 発散・病的入力の保険。ここに達したら収束せずと報告する(黙って続けない) */
+export const EBM_MAX_SWEEPS = 400;
+
+/**
+ * 反復の実験用スイッチ。
+ *  - order: 'gauss-seidel'(行優先・逐次)/ 'red-black'(市松・並列可)。
+ *    収束すれば線形系の解は一意なので、どちらでも同じ答えになる。
+ *  - sweeps: > 0 なら残差基準を使わずその回数で打ち切る(収束の調査用)。
+ * docs/実験記録_EBM赤黒順序_2026-08-01.md の事前登録実験で使う。
+ */
+export const EBM_SOLVER = {
+  order: 'gauss-seidel' as 'gauss-seidel' | 'red-black',
+  /** > 0 で回数固定(調査用)。0 なら EBM_SOLVE_TOLERANCE_C まで反復する */
+  sweeps: GS_SWEEPS as number,
+};
+
+/** 直近の実行で線形解に要したスイープ数(診断・報告用。物理結果には含めない) */
+export const EBM_SOLVER_STATS = { totalSweeps: 0, steps: 0, maxSweeps: 0, capHits: 0 };
+
 interface CoarseCell {
   landFrac: number;
   meanLandElevM: number;
@@ -265,6 +301,8 @@ export function computeTemperature(
     // 断熱×融解固定の正帰還で南極海リングが夏に融け残り −60S が −14°C へ
     // 暴走(双安定)。温度ランプ近似を維持する(較正記録参照)
     const capEff = new Float64Array(N);
+    /** 直近の論理スイープでの最大 |Δt|(°C)。残差基準の打ち切りに使う */
+    let maxDelta = 0;
     const monthAccum: Float64Array[] = Array.from(
       { length: MONTHS_PER_YEAR },
       () => new Float64Array(N),
@@ -337,7 +375,21 @@ export function computeTemperature(
           dfEff[i] = (diffFactor[i] ?? 1) * invD;
         }
       }
-      for (let sweep = 0; sweep < GS_SWEEPS; sweep++) {
+      // 反復の打ち切り: 既定は残差基準(EBM_SOLVE_TOLERANCE_C)。
+      // EBM_SOLVER.sweeps > 0 のときだけ回数固定にする(収束の調査用)。
+      const fixedSweeps = EBM_SOLVER.sweeps > 0 ? EBM_SOLVER.sweeps : 0;
+      const sweepLimit = fixedSweeps > 0 ? fixedSweeps : EBM_MAX_SWEEPS;
+      // 赤黒順序では 1 スイープを「赤 → 黒」の 2 巡に分ける。市松の色は
+      // (row + col) の偶奇。5 点ステンシルの隣接は必ず相手色なので、
+      // 同色内は完全に並列(= GPU 化できる)で、相手色は更新済みを読む。
+      // 経度セル数が奇数だと経度の折り返しで col=CW-1 と col=0 が同色になり、
+      // 市松が壊れる(同色内の並列性が失われる)。その場合は赤黒を使わない
+      const passesPerSweep = EBM_SOLVER.order === 'red-black' && CW % 2 === 0 ? 2 : 1;
+      let sweepsUsed = 0;
+      let converged = false;
+      for (let sweep = 0; sweep < sweepLimit * passesPerSweep; sweep++) {
+        const colorPass = passesPerSweep === 2 ? sweep % 2 : -1;
+        if (colorPass <= 0) maxDelta = 0; // 論理スイープの頭で残差を測り直す
         for (let row = 0; row < CH; row++) {
           const lat = latDegOfRow(cg, row);
           const cosC = Math.max(1e-3, cosCenter[row] ?? 1e-3);
@@ -368,6 +420,7 @@ export function computeTemperature(
           const isWinterRow =
             (insolation.monthlyByRow[m0]?.[row] ?? 0) < (insolation.annualMeanByRow[row] ?? 0);
           for (let col = 0; col < CW; col++) {
+            if (colorPass >= 0 && (row + col) % 2 !== colorPass) continue;
             const i = row * CW + col;
             const uMs = uField?.[i] ?? 0;
             const vMs = vField?.[i] ?? 0;
@@ -411,11 +464,29 @@ export function computeTemperature(
               gSEff * (t[south] ?? 0) +
               advCu * (t[upwindU] ?? 0) +
               advCv * (t[upwindV] ?? 0);
-            t[i] = ((rhs[i] ?? 0) + off) / diag;
+            const next = ((rhs[i] ?? 0) + off) / diag;
+            const d = Math.abs(next - (t[i] ?? 0));
+            if (d > maxDelta) maxDelta = d;
+            t[i] = next;
           }
         }
-        relaxPolarRows(cg, t);
+        // 極行の緩和は「1 スイープの終わり」に 1 回。赤黒では黒の後だけ
+        if (colorPass < 0 || colorPass === 1) {
+          // 極行の平滑も反復作用素の一部なので、その変化量も残差に算入する
+          const polarDelta = relaxPolarRows(cg, t);
+          if (polarDelta > maxDelta) maxDelta = polarDelta;
+          sweepsUsed++;
+          // 残差基準(回数固定のときは判定しない)
+          if (fixedSweeps === 0 && maxDelta < EBM_SOLVE_TOLERANCE_C) {
+            converged = true;
+            break;
+          }
+        }
       }
+      EBM_SOLVER_STATS.totalSweeps += sweepsUsed;
+      EBM_SOLVER_STATS.steps++;
+      if (sweepsUsed > EBM_SOLVER_STATS.maxSweeps) EBM_SOLVER_STATS.maxSweeps = sweepsUsed;
+      if (fixedSweeps === 0 && !converged) EBM_SOLVER_STATS.capHits++;
 
       if (step >= (K.ebmYears - 1) * K.ebmStepsPerYear) {
         const mIdx = Math.min(MONTHS_PER_YEAR - 1, Math.floor(yearFrac * MONTHS_PER_YEAR));
@@ -650,8 +721,14 @@ function aggregateWinds(
   return { u: uMonthly, v: vMonthly };
 }
 
-function relaxPolarRows(cg: Grid, t: Float64Array): void {
+/**
+ * 極行の帯状平滑。**反復作用素の一部**であり、スイープの後に毎回掛かる。
+ * したがって収束解では極行が経度方向に一様になる(relax(t*) = t* の条件)。
+ * @returns この操作で動いた最大 |Δt|(°C)。残差基準に算入する
+ */
+function relaxPolarRows(cg: Grid, t: Float64Array): number {
   const CW = cg.widthCells;
+  let maxDelta = 0;
   for (let row = 0; row < cg.heightCells; row++) {
     const lat = latDegOfRow(cg, row);
     if (Math.abs(lat) < 84) continue;
@@ -660,9 +737,13 @@ function relaxPolarRows(cg: Grid, t: Float64Array): void {
     const mean = sum / CW;
     for (let col = 0; col < CW; col++) {
       const i = row * CW + col;
-      t[i] = (t[i] ?? 0) * 0.5 + mean * 0.5;
+      const next = (t[i] ?? 0) * 0.5 + mean * 0.5;
+      const d = Math.abs(next - (t[i] ?? 0));
+      if (d > maxDelta) maxDelta = d;
+      t[i] = next;
     }
   }
+  return maxDelta;
 }
 
 function downscale(

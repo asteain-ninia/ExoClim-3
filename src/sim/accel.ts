@@ -98,6 +98,104 @@ export interface SoilWaterAccel {
   destroy(): void;
 }
 
+// ---- EBM(step5 気温)----
+
+/**
+ * EBM の時間積分 1 パスぶんの入力。
+ * すべて EBM 粗格子(既定 2°)の上の量で、月に依らないものと月別のものを分ける。
+ */
+export interface EbmStaticFields {
+  widthCells: number;
+  heightCells: number;
+  /** 時間ステップ(秒) */
+  dtSeconds: number;
+  stepsPerYear: number;
+  years: number;
+  /** [cell] 熱容量 J/m²/K */
+  heatCap: Float32Array;
+  /** [cell] 標高補正込みの OLR 切片 */
+  aEff: Float32Array;
+  /** [cell] 氷なしの地表アルベド */
+  surfAlbedoBase: Float32Array;
+  /** [cell] 結氷開始温度 °C */
+  iceOnset: Float32Array;
+  /** [cell] Q フラックス W/m²(中立化済み) */
+  qFlux: Float32Array;
+  /** [cell] 陸の平均標高 × 陸率(m) */
+  elevM: Float32Array;
+  /** [cell] 陸率 0〜1 */
+  landFrac: Float32Array;
+  /** [cell] 海の拡散増強込みの拡散係数倍率 */
+  diffFactor: Float32Array;
+  /** [cell] 内陸度 0〜1 */
+  interior01: Float32Array;
+  /** [cell] 1 = 恒常氷床(パス 1 では全 0) */
+  permanentIce: Float32Array;
+  /** [row] 中心緯度の cos */
+  cosCenter: Float32Array;
+  /** [row] 東西の計量(cap 済み) */
+  metricZonal: Float32Array;
+  /** [row] 1 = 周極海峡の行 */
+  rowIsChannel: Float32Array;
+  /** [month][row] 月平均日射 W/m² を平坦化した 12*CH */
+  insolMonthlyByRow: Float32Array;
+  /** [row] 年平均日射 W/m² */
+  insolAnnualByRow: Float32Array;
+  /** [month][cell] 雲アルベド */
+  cloudAlbedo: Float32Array[];
+  /** [month][cell] EBM 格子上の東西風 m/s */
+  windU: Float32Array[];
+  /** [month][cell] 同・南北風 */
+  windV: Float32Array[];
+  /** [month][cell] 蒸発冷却の異常フラックス W/m²(無ければ null) */
+  evapAnom: Float32Array[] | null;
+  /** [month] リッジ緯度(北/南)と、その年平均(夏判定用) */
+  ridgeLatN: Float32Array;
+  ridgeLatS: Float32Array;
+  meanRidgeN: number;
+  meanRidgeS: number;
+  /** [cell] 初期温度。null なら緯度からの既定値 */
+  initialT: Float32Array | null;
+}
+
+/** EBM に渡す較正定数(呼び出し側が MODEL_CONSTANTS から渡す) */
+export interface EbmConstants {
+  lapseRateGammaCPerM: number;
+  iceRampWidthC: number;
+  albedoIce: number;
+  permanentIceAlbedo: number;
+  seaIceInsulationFactor: number;
+  olrBWm2PerC: number;
+  diffusionBase: number;
+  zonalDiffusionFactor: number;
+  hadleyDiffusionBoost: number;
+  circumpolarChannelFactor: number;
+  summerAdvectionFactor: number;
+  zonalAdvectionCouplingWm2PerK: number;
+  winterInversionDiffusionFactor: number;
+  winterInversionAdvectionFactor: number;
+  /** 反復の打ち切り(°C)。較正つまみではない — 数値誤差の上限 */
+  solveToleranceC: number;
+  /** 1 時間ステップあたりの反復回数(残差は記録して検証する) */
+  iterationsPerStep: number;
+}
+
+export interface EbmAccelResult {
+  /** [month][cell] 最終年の月別温度の積算 */
+  monthAccum: Float32Array[];
+  /** [month] 積算した回数 */
+  monthCount: number[];
+  /** [cell] パス終了時の温度(次パスのウォームスタート用) */
+  finalT: Float32Array;
+  /** 全時間ステップを通じた最大残差(°C)。許容差を超えたら収束していない */
+  maxResidualC: number;
+}
+
+export interface EbmAccel {
+  run(fields: EbmStaticFields, constants: EbmConstants): Promise<EbmAccelResult>;
+  destroy(): void;
+}
+
 /**
  * 計算加速器。セル数ごとに常駐資源を持つ。
  *
