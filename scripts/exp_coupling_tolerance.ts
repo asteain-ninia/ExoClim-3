@@ -30,8 +30,9 @@ import {
 const accel = await openAccel();
 
 const couplingOf = (r: PipelineResult): { iterations: number; converged: boolean } => {
-  const c = (r.precipitation as unknown as { coupling?: { iterations: number; converged: boolean } })
-    .coupling;
+  const c = (
+    r.precipitation as unknown as { coupling?: { iterations: number; converged: boolean } }
+  ).coupling;
   return { iterations: c?.iterations ?? -1, converged: c?.converged ?? false };
 };
 

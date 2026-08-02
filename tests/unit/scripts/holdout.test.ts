@@ -20,7 +20,7 @@ import {
   type ClimateFixture,
   type KoppenFixture,
 } from '../../../scripts/scoring';
-import { evaluateResult } from '../../../scripts/optimize_lib';
+import { OBJECTIVE_V3, evaluateResult } from '../../../scripts/optimize_lib';
 import { syntheticResult } from '../../helpers/syntheticResult';
 
 describe('空間ホールドアウト分割(P1-1)', () => {
@@ -112,14 +112,30 @@ describe('空間ホールドアウト分割(P1-1)', () => {
       const k = koppenScore(result, undefined, keep);
       const fld = fieldScore(result, undefined, keep);
       const gateTerm = (17 * s.gates) / training.length;
-      const expected =
+      // v2(旧定義。併記のために計算し続けている)
+      const expectedV2 =
         k.majorPct +
         1.1 * gateTerm +
         0.25 * k.detailPct -
         0.35 * fld.tempRmseC -
         0.004 * fld.precipRmseMm -
         (0.02 * Math.abs(fld.landMeanModelMm - fld.landMeanObsMm)) / 10;
-      expect(s.fitness).toBeCloseTo(expected, 10); // ITCZ 項なしで厳密に再構成できる
+      expect(s.fitnessV2).toBeCloseTo(expectedV2, 10); // ITCZ 項なしで厳密に再構成できる
+      // v3(探索が最大化する量)。季節指標を含み、観測のばらつきで無次元化する
+      const W = OBJECTIVE_V3;
+      const expectedV3 =
+        k.majorPct +
+        1.1 * gateTerm +
+        0.25 * k.detailPct -
+        W.wTempMean * (fld.tempRmseC / fld.obsSdTempC) -
+        W.wTempRange * (fld.tempRangeRmseC / fld.obsSdTempRangeC) -
+        W.wTempPhase * (fld.tempPhaseRmseDays / W.phaseScaleDays) -
+        W.wPrecipAnnual * (fld.precipRmseMm / fld.obsSdPrecipMm) -
+        W.wPrecipDriest * (fld.precipDriestRmseMm / fld.obsSdPrecipDriestMm) -
+        W.wPrecipWettest * (fld.precipWettestRmseMm / fld.obsSdPrecipWettestMm) -
+        W.wLandMean *
+          (Math.abs(fld.landMeanModelMm - fld.landMeanObsMm) / Math.max(1e-9, fld.landMeanObsMm));
+      expect(s.fitness).toBeCloseTo(expectedV3, 10); // ITCZ 項なしで厳密に再構成できる
       expect(s.itczRmse).toBeGreaterThan(0); // 参考値としての報告は継続
     }
   });

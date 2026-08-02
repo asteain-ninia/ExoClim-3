@@ -13,10 +13,18 @@ async function main(): Promise<void> {
     const result = await runPipeline(EARTH_PARAMS, accel.opts);
     const s = evaluateResult(result);
     console.log(
-      `fit=${s.fitness.toFixed(2)} 大分類=${s.majorPct.toFixed(2)} 詳細=${s.detailPct.toFixed(2)} ` +
-        `ゲート=${s.gates} 気温RMSE=${s.tempRmse.toFixed(2)} 降水RMSE=${Math.round(s.precipRmse)} ` +
-        `ITCZ線RMSE(雨量重み)=${s.itczRmse.toFixed(2)} 陸平均=${Math.round(s.landMeanMm)}`,
+      `v3=${s.fitness.toFixed(2)} v2=${s.fitnessV2.toFixed(2)} ` +
+        `大分類=${s.majorPct.toFixed(2)} 詳細=${s.detailPct.toFixed(2)} ゲート=${s.gates}`,
     );
+    console.log(
+      `  気温: 年平均RMSE=${s.tempRmse.toFixed(2)}°C 年較差RMSE=${s.tempRangeRmse.toFixed(2)}°C ` +
+        `位相RMS=${s.tempPhaseRmseDays.toFixed(1)}日`,
+    );
+    console.log(
+      `  降水: 年RMSE=${Math.round(s.precipRmse)}mm 最少月RMSE=${s.precipDriestRmse.toFixed(1)}mm ` +
+        `最多月RMSE=${s.precipWettestRmse.toFixed(1)}mm 陸平均=${Math.round(s.landMeanMm)}mm`,
+    );
+    console.log(`  循環: ITCZ線RMSE=${s.itczRmse.toFixed(2)}°`);
   } finally {
     accel.close();
   }

@@ -9,11 +9,71 @@
 // 壊れた採点は必ず FAIL(変更レビュー FB P0-2 — NaN は大小比較が全て false に
 // なるため、素通りで PASS してしまう JavaScript の罠への対処)。
 
-// ---- 退行防止ゲート ----
-// 凍結日: 2026-07-31。根拠: v2 採用モデル(較正記録参照)の実測値
-// (大分類 73.93% / 詳細 42.74% / ゲート 14 / 気温 RMSE 3.65°C / 降水 RMSE 773mm /
-//  ITCZ 線 RMSE 8.33° — すべて面積重み付き正本)に、意図した変更の判断誤差を
-// 吸収する小さな余裕幅を加えた線。これを下回る変更は退行として非零終了する。
+// ---- 数値的健全性ゲート(2026-08-02 追加、常に強制)----
+// **これだけは必ず非零終了にする**。スコアの上下と違い、
+// 「解けていない」「保存していない」は改善でも探索でもなく、ただの誤りだから。
+//
+// 経緯: 2026-08-02 に EBM の数値欠陥が 3 件見つかり、いずれも較正が
+// その誤差を打ち消す向きに物理係数を決めていた(反復 8 回打ち切り、
+// 界面のエネルギー非保存、緩和 2 年)。
+// **未収束は歴史的に成績をよく見せる方向に働く**ので、
+// スコアの門より先にここを締める。
+export const NUMERICAL_GATES = {
+  frozenAt: '2026-08-02',
+  /** EBM の線形解の残差(°C)。src/sim/step05_temperature.ts と同じ値 */
+  ebmSolveToleranceC: 1e-3,
+  /** EBM の年次ドリフト(°C、面積重み平均)。周期定常への到達 */
+  ebmPeriodicToleranceC: 0.05,
+} as const;
+
+export interface NumericalMetrics {
+  /** EBM の全ステップ最大残差 °C */
+  ebmMaxResidualC: number;
+  /** EBM の年次ドリフト(面積重み平均)°C */
+  ebmMeanYearDriftC: number;
+  /** 降水の結合反復が収束したか */
+  precipCouplingConverged: boolean;
+  /** 土壌の空回しが収束したか(無効時は true) */
+  soilConverged: boolean;
+}
+
+export function evaluateNumericalSoundness(
+  m: NumericalMetrics,
+  g: typeof NUMERICAL_GATES = NUMERICAL_GATES,
+): GateVerdict {
+  const failures = nonFiniteFailures([
+    ['EBM 最大残差', m.ebmMaxResidualC],
+    ['EBM 年次ドリフト', m.ebmMeanYearDriftC],
+  ]);
+  if (m.ebmMaxResidualC > g.ebmSolveToleranceC) {
+    failures.push(
+      `EBM の線形解が未収束(残差 ${m.ebmMaxResidualC.toExponential(2)}°C > 許容 ${g.ebmSolveToleranceC}）`,
+    );
+  }
+  if (m.ebmMeanYearDriftC > g.ebmPeriodicToleranceC) {
+    failures.push(
+      `EBM が周期定常に未到達(年次ドリフト ${m.ebmMeanYearDriftC.toExponential(2)}°C > 許容 ${g.ebmPeriodicToleranceC}）`,
+    );
+  }
+  if (!m.precipCouplingConverged) failures.push('降水の結合反復が未収束');
+  if (!m.soilConverged) failures.push('土壌の空回しが未収束');
+  return { pass: failures.length === 0, failures };
+}
+
+// ---- スコアの参照値(退行の**検知**用。単独では非零終了にしない)----
+// 凍結日: 2026-07-31。根拠: v2 採用モデルの実測値。
+//
+// **2026-08-02 の方針変更(利用者の指示)**:
+//   「意味のある退行と、そうでない退行を区別したい。数値的欠陥の修正、
+//     物理構造の改善、局所解からの脱出に伴う一時的なスコア低下は、
+//     恐れるべき退行ではない。」
+// したがってスコアの低下は**報告するが自動では落とさない**。
+// 落とすのは上の数値的健全性ゲートだけ。
+// 最終的な採否は、数値的健全性・新旧両目的関数・季節指標・地域ゲート・
+// 未見評価を総合して人が判断する(docs/退行防止ゲートの扱い_2026-08-02.md)。
+//
+// なお下の値は**欠陥のあるモデル**を指している(反復 8 回打ち切り・
+// 界面の非保存・緩和 2 年)。再較正後に貼り直す。
 export const REGRESSION_BASELINE = {
   frozenAt: '2026-07-31',
   majorPctMin: 73.4, // 実測 73.93 − 0.5pt

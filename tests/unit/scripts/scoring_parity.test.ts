@@ -4,7 +4,7 @@
 // 合成結果で担保する。パイプラインは実行しない(採点層だけの検査)。
 
 import { describe, expect, it } from 'vitest';
-import { evaluateResult } from '../../../scripts/optimize_lib';
+import { OBJECTIVE_V3, evaluateResult } from '../../../scripts/optimize_lib';
 import {
   fieldScore,
   itczLineRmse,
@@ -30,7 +30,14 @@ describe('採点の一元化(P0-3)', () => {
     expect(s.precipRmse).toBe(f.precipRmseMm);
     expect(s.landMeanMm).toBe(f.landMeanModelMm);
     expect(s.itczRmse).toBe(i);
-    const fitness =
+    // 季節指標も共有採点と一致すること(2026-08-02 に目的関数へ入った量)
+    expect(s.tempRangeRmse).toBe(f.tempRangeRmseC);
+    expect(s.tempPhaseRmseDays).toBe(f.tempPhaseRmseDays);
+    expect(s.precipDriestRmse).toBe(f.precipDriestRmseMm);
+    expect(s.precipWettestRmse).toBe(f.precipWettestRmseMm);
+
+    // v2(旧定義。比較のために計算し続けている)
+    const fitnessV2 =
       k.majorPct +
       1.1 * s.gates +
       0.25 * k.detailPct -
@@ -38,7 +45,23 @@ describe('採点の一元化(P0-3)', () => {
       0.004 * f.precipRmseMm -
       (0.02 * Math.abs(f.landMeanModelMm - f.landMeanObsMm)) / 10 -
       0.3 * i;
-    expect(s.fitness).toBeCloseTo(fitness, 12);
+    expect(s.fitnessV2).toBeCloseTo(fitnessV2, 12);
+
+    // v3(探索が最大化する量)
+    const W = OBJECTIVE_V3;
+    const fitnessV3 =
+      k.majorPct +
+      1.1 * s.gates +
+      0.25 * k.detailPct -
+      W.wTempMean * (f.tempRmseC / f.obsSdTempC) -
+      W.wTempRange * (f.tempRangeRmseC / f.obsSdTempRangeC) -
+      W.wTempPhase * (f.tempPhaseRmseDays / W.phaseScaleDays) -
+      W.wPrecipAnnual * (f.precipRmseMm / f.obsSdPrecipMm) -
+      W.wPrecipDriest * (f.precipDriestRmseMm / f.obsSdPrecipDriestMm) -
+      W.wPrecipWettest * (f.precipWettestRmseMm / f.obsSdPrecipWettestMm) -
+      W.wLandMean * (Math.abs(f.landMeanModelMm - f.landMeanObsMm) / f.landMeanObsMm) -
+      W.wItcz * (i / W.itczScaleDeg);
+    expect(s.fitness).toBeCloseTo(fitnessV3, 12);
   });
 
   it('合成結果の成績が退化していない(比較が意味を持つ)', () => {

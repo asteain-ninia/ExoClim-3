@@ -348,6 +348,61 @@ export interface FieldScore {
   landMeanObsMm: number;
   /** log1p 年降水の相関(面積重み付き) */
   logCorrelation: number;
+
+  // ---- 季節指標(2026-08-02 追加)----
+  // 旧採点は気温も降水も**年平均/年合計しか見ていなかった**。
+  // ケッペンの第 3 文字は最暖月、第 2 文字は最少月/最多月で決まるので、
+  // 季節を測らない物差しで季節に依る分類の一致率を上げようとしていた。
+  // 実際「季節振幅が観測に近づいたのに一致率が下がる」ことが起きた
+  // (docs/提案_目的関数の盲点_2026-08-02.md)。
+  //
+  // 指標は惑星一般の手続きだけで作る(月別系列の最大/最小と調和解析)。
+  // 地球固有の座標補正や地域別の例外規則は使わない。
+
+  /** 年較差(最暖月 − 最寒月)の RMSE °C。季節振幅 = 熱容量と輸送の物差し */
+  tempRangeRmseC: number;
+  /** 季節位相のずれの RMS(日)。熱慣性の物差し */
+  tempPhaseRmseDays: number;
+  /** 最少月降水の RMSE mm/月。乾季の深さ = Af/Am/Aw と s/w を決める */
+  precipDriestRmseMm: number;
+  /** 最多月降水の RMSE mm/月 */
+  precipWettestRmseMm: number;
+
+  // ---- 無次元化のための観測側の空間ばらつき(面積重み標準偏差)----
+  // **モデルの誤差ではなく観測自身のばらつき**で割ることで、
+  // 重みが現状の成績に依存しなくなる(後から都合よく調整する余地を消す)。
+  obsSdTempC: number;
+  obsSdTempRangeC: number;
+  obsSdPrecipMm: number;
+  obsSdPrecipDriestMm: number;
+  obsSdPrecipWettestMm: number;
+}
+
+/**
+ * 観測(暦月、1 月始まり)とモデル(北半球冬至起点)の月の原点の差。
+ * 冬至(12/21 頃)から 1 月 1 日までが約 11 日 = 0.355 か月。
+ * **これは観測データ側の暦の都合**であり、モデルには持ち込まない
+ * (モデルの月は惑星の軌道で定義される)。位相を比べるときだけ補正する。
+ */
+const OBS_MONTH_ORIGIN_OFFSET = 0.355;
+
+/** 季節位相を比べる下限振幅(°C)。これ未満の熱帯は位相が定義しにくい */
+const PHASE_MIN_AMPLITUDE_C = 2;
+
+/** 12 点の周期系列から年 1 周期の振幅と位相(月単位)を取り出す */
+function annualHarmonic(series: number[]): { amp: number; peak: number } {
+  let a = 0;
+  let b = 0;
+  for (let m = 0; m < 12; m++) {
+    const th = (2 * Math.PI * (m + 0.5)) / 12;
+    a += (series[m] ?? 0) * Math.cos(th);
+    b += (series[m] ?? 0) * Math.sin(th);
+  }
+  a = (2 * a) / 12;
+  b = (2 * b) / 12;
+  let phi = Math.atan2(b, a);
+  if (phi < 0) phi += 2 * Math.PI;
+  return { amp: Math.hypot(a, b), peak: (phi / (2 * Math.PI)) * 12 };
 }
 
 export function fieldScore(
@@ -366,6 +421,26 @@ export function fieldScore(
   let pw = 0;
   let pModelSum = 0;
   let pObsSum = 0;
+  // ---- 季節指標の積算 ----
+  let seRange = 0;
+  let wRange = 0;
+  let sePhase = 0;
+  let wPhase = 0;
+  let seDry = 0;
+  let seWet = 0;
+  let wDryWet = 0;
+  // 観測側の空間ばらつき(面積重み平均と 2 乗平均から標準偏差を出す)
+  let oT = 0;
+  let oT2 = 0;
+  let oR = 0;
+  let oR2 = 0;
+  let oP = 0;
+  let oP2 = 0;
+  let oD = 0;
+  let oD2 = 0;
+  let oW = 0;
+  let oW2 = 0;
+  let wObs = 0;
   // 面積重み付き log 相関の積算
   let cw = 0,
     cx = 0,
@@ -394,6 +469,9 @@ export function fieldScore(
       let tJulSum = 0;
       let pSum = 0;
       let n = 0;
+      // 粗セル内の陸セルを平均した月別系列(季節指標はここから作る)
+      const tMon = new Array<number>(12).fill(0);
+      const pMon = new Array<number>(12).fill(0);
       for (let dr = 0; dr < f; dr++) {
         for (let dc = 0; dc < f; dc++) {
           const gr = cr * f + dr;
@@ -406,9 +484,17 @@ export function fieldScore(
           tJanSum += result.temperature.monthlyTemperatureC[0]?.[gi] ?? 0;
           tJulSum += result.temperature.monthlyTemperatureC[6]?.[gi] ?? 0;
           pSum += result.precipitation.annualPrecipMm[gi] ?? 0;
+          for (let m = 0; m < 12; m++) {
+            tMon[m] = (tMon[m] ?? 0) + (result.temperature.monthlyTemperatureC[m]?.[gi] ?? 0);
+            pMon[m] = (pMon[m] ?? 0) + (result.precipitation.monthlyPrecipMm[m]?.[gi] ?? 0);
+          }
         }
       }
       if (n === 0) continue;
+      for (let m = 0; m < 12; m++) {
+        tMon[m] = (tMon[m] ?? 0) / n;
+        pMon[m] = (pMon[m] ?? 0) / n;
+      }
       if (ok) {
         const d = tSum / n - tObsSum / 12;
         se += w * d * d;
@@ -417,6 +503,34 @@ export function fieldScore(
         const dJul = tJulSum / n - (clim.monthlyTemperatureDeciC[6]?.[ci] ?? 0) / 10;
         seJan += w * dJan * dJan;
         seJul += w * dJul * dJul;
+
+        // ---- 季節指標(気温)----
+        const tObsMon: number[] = [];
+        for (let m = 0; m < 12; m++) {
+          tObsMon.push((clim.monthlyTemperatureDeciC[m]?.[ci] ?? 0) / 10);
+        }
+        const obsRange = Math.max(...tObsMon) - Math.min(...tObsMon);
+        const modRange = Math.max(...tMon) - Math.min(...tMon);
+        const dR = modRange - obsRange;
+        seRange += w * dR * dR;
+        wRange += w;
+        oT += w * (tObsSum / 12);
+        oT2 += w * (tObsSum / 12) * (tObsSum / 12);
+        oR += w * obsRange;
+        oR2 += w * obsRange * obsRange;
+        wObs += w;
+
+        // 位相は季節性のあるセルだけ(熱帯は位相が定義しにくい)
+        const ho = annualHarmonic(tObsMon);
+        if (ho.amp >= PHASE_MIN_AMPLITUDE_C) {
+          const hm = annualHarmonic(tMon);
+          let dp = hm.peak - ho.peak - OBS_MONTH_ORIGIN_OFFSET;
+          while (dp > 6) dp -= 12;
+          while (dp < -6) dp += 12;
+          const days = dp * 30.44;
+          sePhase += w * days * days;
+          wPhase += w;
+        }
       }
       let pObs = 0;
       let pOk = true;
@@ -432,6 +546,26 @@ export function fieldScore(
         const dp = pSum / n - pObs;
         pse += w * dp * dp;
         pw += w;
+        // ---- 季節指標(降水)----
+        const pObsMon: number[] = [];
+        for (let m = 0; m < 12; m++) {
+          pObsMon.push(Math.max(0, clim.monthlyPrecipitationMm[m]?.[ci] ?? 0));
+        }
+        const obsDry = Math.min(...pObsMon);
+        const obsWet = Math.max(...pObsMon);
+        const modDry = Math.min(...pMon);
+        const modWet = Math.max(...pMon);
+        const dDry = modDry - obsDry;
+        const dWet = modWet - obsWet;
+        seDry += w * dDry * dDry;
+        seWet += w * dWet * dWet;
+        wDryWet += w;
+        oP += w * pObs;
+        oP2 += w * pObs * pObs;
+        oD += w * obsDry;
+        oD2 += w * obsDry * obsDry;
+        oW += w * obsWet;
+        oW2 += w * obsWet * obsWet;
         pModelSum += (w * pSum) / n;
         pObsSum += w * pObs;
         const lx = Math.log1p(pObs);
@@ -447,6 +581,12 @@ export function fieldScore(
   }
   const logCorrelation =
     (cw * cxy - cx * cy) / Math.sqrt(Math.max(1e-9, (cw * cxx - cx * cx) * (cw * cyy - cy * cy)));
+  /** 面積重みの標準偏差(観測側のばらつき) */
+  const sd = (sum: number, sum2: number, wt: number): number => {
+    if (wt <= 1e-9) return 1;
+    const mean = sum / wt;
+    return Math.max(1e-6, Math.sqrt(Math.max(0, sum2 / wt - mean * mean)));
+  };
   return {
     tempRmseC: Math.sqrt(se / Math.max(1e-9, wsum)),
     tempJanRmseC: Math.sqrt(seJan / Math.max(1e-9, wsum)),
@@ -455,6 +595,15 @@ export function fieldScore(
     landMeanModelMm: pModelSum / Math.max(1e-9, pw),
     landMeanObsMm: pObsSum / Math.max(1e-9, pw),
     logCorrelation,
+    tempRangeRmseC: Math.sqrt(seRange / Math.max(1e-9, wRange)),
+    tempPhaseRmseDays: Math.sqrt(sePhase / Math.max(1e-9, wPhase)),
+    precipDriestRmseMm: Math.sqrt(seDry / Math.max(1e-9, wDryWet)),
+    precipWettestRmseMm: Math.sqrt(seWet / Math.max(1e-9, wDryWet)),
+    obsSdTempC: sd(oT, oT2, wObs),
+    obsSdTempRangeC: sd(oR, oR2, wObs),
+    obsSdPrecipMm: sd(oP, oP2, wDryWet),
+    obsSdPrecipDriestMm: sd(oD, oD2, wDryWet),
+    obsSdPrecipWettestMm: sd(oW, oW2, wDryWet),
   };
 }
 
