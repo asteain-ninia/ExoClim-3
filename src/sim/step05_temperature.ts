@@ -22,7 +22,8 @@ import { resolveTerrain } from '@/domain/terrain';
 import type { TerrainField } from '@/domain/terrain';
 import { MODEL_CONSTANTS as K } from './constants';
 import { chamferDistanceCells } from './context';
-import type { EbmConstants, EbmStaticFields, RunOptions } from './accel';
+import type { AccelControl, EbmConstants, EbmStaticFields, RunOptions } from './accel';
+import { throwIfCancelled, yieldToEventLoop } from './run_control';
 import type {
   AirflowResult,
   ItczResult,
@@ -115,13 +116,41 @@ export const EBM_GPU_ITERATIONS = 512;
 export const EBM_GPU_MAX_ITERATIONS = 8192;
 
 /**
- * 直近に収束した反復回数の記憶(**性能のためだけの手掛かり**)。
+ * 収束予算の手掛かり(**性能のためだけの記憶**)。**上下どちらにも動く**。
  *
- * 較正は同じ惑星を数千回解くので、毎回 512 から倍々に増やすのは無駄。
- * 前回足りた回数から始める。結果には影響しない — 反復後に必ず残差を検査し、
- * 足りなければさらに増やすため、得られる解は手掛かりの初期値に依らない。
+ * 較正は同じ惑星を数千回解くので、毎回既定から倍々に増やすのは無駄 —
+ * 前回足りた値から始めたい。結果には影響しない(倍化のたびに残差と年次
+ * ドリフトを検査するので、得られる解は出発点に依らない)。
+ *
+ * **上げるだけの記憶にしてはいけない**。一度でも重いパラメータ組が予算を
+ * 倍化させると、以後の全評価が必要のない費用を永久に払い続ける
+ * (2026-08-03 実測: 較正の 1 評価が 307s → 1110s と 3.6 倍に膨らんでいた。
+ * 最良パラメータを新しいプロセスで冷間から回すと既定予算 24 年 / 512 反復の
+ * まま 313s で収束したので、増分はすべてこのラチェットだった。
+ * scripts/diag_hint_ratchet.ts)。
+ *
+ * そこで **倍化なしで通った回が DECAY_AFTER 回続いたら半減**して既定へ寄せる。
+ * 下げ過ぎても次の回が倍化して戻るだけで、答えは変わらない。損は回し直し
+ * 1 回ぶんで、払い過ぎを永久に続けるより桁違いに安い。
  */
-let gpuIterationHint = EBM_GPU_ITERATIONS;
+const HINT_DECAY_AFTER = 3;
+const budgetHint = {
+  /** 直近に収束した反復回数 */
+  iterations: EBM_GPU_ITERATIONS,
+  /** 直近に周期定常へ達した全熱容量年数(0 = 記憶なし) */
+  fullYears: 0,
+  /** 倍化せずに済んだ連続回数(半減の判定用) */
+  easyIterations: 0,
+  easyYears: 0,
+};
+
+/** 試験・診断から手掛かりを初期化する(較正ワーカーの再現性の検査用) */
+export function resetEbmBudgetHint(): void {
+  budgetHint.iterations = EBM_GPU_ITERATIONS;
+  budgetHint.fullYears = 0;
+  budgetHint.easyIterations = 0;
+  budgetHint.easyYears = 0;
+}
 
 /**
  * 全熱容量で積分する年数(末尾から数える)。それ以前は熱容量 1/16 で加速する。
@@ -172,9 +201,6 @@ export const EBM_FULL_CAPACITY_START_YEARS = 24;
 /** 全熱容量の年数の再試行上限。ここまで増やしても収束しなければ診断に残す */
 export const EBM_MAX_FULL_CAPACITY_YEARS = 64;
 
-/** 直近に周期定常へ達した年数の記憶(性能のためだけの手掛かり。結果には影響しない) */
-let fullCapacityHint = 0;
-
 /** 直近の実行の診断(報告用。物理結果には含めない) */
 export const EBM_SOLVER_STATS = {
   totalSweeps: 0,
@@ -211,6 +237,28 @@ export async function computeTemperature(
   const CW = cg.widthCells;
   const CH = cg.heightCells;
   const N = cg.cellCount;
+
+  // ---- 収束予算 ----
+  // 省略された項目は**この段が持つ既定の定数**に落ちる(値を複製しない)。
+  // 予算を絞ったときに収束しなければ、EBM_SOLVER_STATS.capHits に記録され、
+  // 呼び出し側は「未収束」として扱える(黙って採用しない)。
+  const budget = opts?.budget;
+  const bFullYearsStart = budget?.ebmFullCapacityYears ?? EBM_FULL_CAPACITY_START_YEARS;
+  const bMaxFullYears = budget?.ebmMaxFullCapacityYears ?? EBM_MAX_FULL_CAPACITY_YEARS;
+  const bIterations = budget?.ebmIterations ?? EBM_GPU_ITERATIONS;
+  const bMaxIterations = budget?.ebmMaxIterations ?? EBM_GPU_MAX_ITERATIONS;
+  const bSpinupAccelYears = budget?.ebmSpinupAccelYears ?? SPINUP_ACCEL_YEARS;
+  /** EBM の予算が既定から動かされているか(手掛かりの読み書きを止める判定) */
+  const ebmBudgetOverridden =
+    budget?.ebmFullCapacityYears !== undefined ||
+    budget?.ebmMaxFullCapacityYears !== undefined ||
+    budget?.ebmIterations !== undefined ||
+    budget?.ebmMaxIterations !== undefined ||
+    budget?.ebmSpinupAccelYears !== undefined;
+  const control: AccelControl = {
+    signal: opts?.signal,
+    progress: opts?.progress,
+  };
 
   // 陸率・標高の集約は常に固定 1° 地形から行う(表示解像度に物理を依存させない。
   // 表示 = EBM 格子だと landFrac が二値になり沿岸の熱容量混合が消える)
@@ -406,7 +454,16 @@ export async function computeTemperature(
   // 海洋混合層の時定数 τ = C/B ≈ 3.2 年に対し、全熱容量での積分が 2 年しか
   // 無いため周期定常へ届いていなかった。パス 2 をパス 1 の最終状態から
   // 始めることで、実効的な緩和年数を倍にする(計算量は増えない)
-  const integrate = (permanentIce: Uint8Array | null, initialT?: Float64Array) => {
+  // CPU 経路。GPU が無い環境(WebGPU 非対応ブラウザ・EXOCLIM_GPU=0)の参照実装。
+  // 非同期なのは**中断と進捗のため**で、物理は同期のときと同一
+  // (yield は計算の途中には入らず、時間ステップの境目にだけ入る)
+  const integrate = async (
+    permanentIce: Uint8Array | null,
+    initialT: Float64Array | undefined,
+    passLabel: string,
+    passFrom: number,
+    passTo: number,
+  ) => {
     const t = new Float64Array(N);
     if (initialT) {
       t.set(initialT);
@@ -437,14 +494,33 @@ export async function computeTemperature(
     // 物理が変わり再現性が壊れる。時間はかかるので、性質だけ見るテストは
     // tests/setup.ts で明示的に短くする。
     const cpuFullYears =
-      EBM_FULL_CAPACITY_YEARS.years > 0
-        ? EBM_FULL_CAPACITY_YEARS.years
-        : EBM_FULL_CAPACITY_START_YEARS;
-    const totalSteps = Math.max(K.ebmYears, cpuFullYears + SPINUP_ACCEL_YEARS) * K.ebmStepsPerYear;
+      EBM_FULL_CAPACITY_YEARS.years > 0 ? EBM_FULL_CAPACITY_YEARS.years : bFullYearsStart;
+    const totalSteps = Math.max(K.ebmYears, cpuFullYears + bSpinupAccelYears) * K.ebmStepsPerYear;
     const totalYears = totalSteps / K.ebmStepsPerYear;
     const spinupSteps = Math.max(0, (totalYears - cpuFullYears) * K.ebmStepsPerYear);
+    // GPU 経路と同じ刻み: **1 か月ぶんの時間ステップ**ごとに制御を返す。
+    // こうするとスナップショットが各月ちょうど 1 回ずつ落ち、
+    // 1 モデル年で表示用の 12 か月が揃う
+    const TICK_STEPS = Math.max(1, Math.round(K.ebmStepsPerYear / MONTHS_PER_YEAR));
+    const snapshot = new Float32Array(N);
+    const live = makeLiveTemperature();
 
     for (let step = 0; step < totalSteps; step++) {
+      if (step > 0 && step % TICK_STEPS === 0) {
+        throwIfCancelled(opts?.signal, 'EBM');
+        if (opts?.progress) {
+          const yf = (step % K.ebmStepsPerYear) / K.ebmStepsPerYear;
+          const mIdx = Math.min(MONTHS_PER_YEAR - 1, Math.floor(yf * MONTHS_PER_YEAR));
+          for (let i = 0; i < N; i++) snapshot[i] = t[i] ?? 0;
+          const temperature = live.absorb(snapshot, mIdx);
+          opts.progress({
+            fraction: passFrom + (passTo - passFrom) * (step / totalSteps),
+            detail: `${passLabel} — EBM 積分 ${Math.floor(step / K.ebmStepsPerYear) + 1}/${totalYears} 年目 (CPU)`,
+            ...(temperature ? { partial: { temperature } } : {}),
+          });
+        }
+        await yieldToEventLoop();
+      }
       const capScale = step < spinupSteps ? 1 / 16 : 1;
       const yearFrac = (step % K.ebmStepsPerYear) / K.ebmStepsPerYear;
       const monthFloat = yearFrac * MONTHS_PER_YEAR;
@@ -656,6 +732,41 @@ export async function computeTemperature(
     return { monthAccum, monthCount, finalT: t };
   };
 
+  /**
+   * 途中の気温場を**表示用に**組み立てる係(2026-08-03)。
+   *
+   * 積分の途中に得られるのは「その瞬間のモデル時刻の粗格子温度」だけで、
+   * 確定結果のような月平均ではない。そこで **1 か月ぶんの時間ステップごとに
+   * 1 枚ずつ**受け取り、12 枚揃った時点で 1 年ぶんの季節サイクルとみなして
+   * 表示格子へ落とす(downscale は確定経路と同じものを使う — 標高減率も
+   * 雪氷マスクも同じ処理になり、表示が確定版と地続きになる)。
+   *
+   * **これは月平均ではなく各月 1 標本のスナップショット**である。確定結果は
+   * 末尾 1 年を毎ステップ積算した本物の月平均なので、両者は一致しない。
+   * だから表示側は必ず「計算中」と明示すること(教訓 §1)。
+   */
+  const makeLiveTemperature = (): {
+    absorb: (coarse: Float32Array, monthIndex: number) => TemperatureResult | null;
+  } => {
+    const months: Array<Float64Array | null> = new Array(MONTHS_PER_YEAR).fill(null);
+    let filled = 0;
+    const counts = new Array<number>(MONTHS_PER_YEAR).fill(1);
+    return {
+      absorb(coarse, monthIndex): TemperatureResult | null {
+        let slot = months[monthIndex];
+        if (!slot) {
+          slot = new Float64Array(N);
+          months[monthIndex] = slot;
+          filled++;
+        }
+        slot.set(coarse);
+        // 12 か月が揃うまでは出さない(穴のある季節サイクルは誤解を招く)
+        if (filled < MONTHS_PER_YEAR) return null;
+        return downscale(ctx, cg, months as Float64Array[], counts, gamma);
+      },
+    };
+  };
+
   // ---- GPU 加速器がある場合の積分 ----
   // 加速器は「渡されたら使う」だけで、無ければ上の CPU 実装に落ちる。
   // 赤黒順序で反復するが、収束させれば線形系の解は一意なので行優先と同じ答えになる
@@ -736,9 +847,13 @@ export async function computeTemperature(
   };
   const integrateAny = async (
     permanentIce: Uint8Array | null,
-    initialT?: Float64Array,
+    initialT: Float64Array | undefined,
+    passLabel: string,
+    /** この段の進捗のうち、このパスが占める区間 [passFrom, passTo] */
+    passFrom: number,
+    passTo: number,
   ): Promise<{ monthAccum: Float64Array[]; monthCount: number[]; finalT: Float64Array }> => {
-    if (!ebmAccel) return integrate(permanentIce, initialT);
+    if (!ebmAccel) return integrate(permanentIce, initialT, passLabel, passFrom, passTo);
     const fields = buildEbmFields(permanentIce, initialT);
     // 反復回数は**惑星ごとに必要量が違う**。地球は 512 で足りるが、全陸惑星は
     // 熱容量が小さく対角優位が弱いため足りない(2026-08-02 実測)。
@@ -749,41 +864,107 @@ export async function computeTemperature(
     // 従来の 2 年は 0.6τ しかなく、周期定常に遠く届いていなかった(2026-08-02)。
     // 年数を固定すると、その実装詳細が答えを決めてしまう(反復回数と同じ構造)。
     const yearAdaptive = adaptive && EBM_FULL_CAPACITY_YEARS.years <= 0;
-    // 自動化しない場合も、年数は既定(検証済みの出発点)を使う
+    // 自動化しない場合も、年数は既定(検証済みの出発点)を使う。
+    // 予算で絞られているときは手掛かり(前回収束した回数・年数)を使わないし
+    // 書きもしない。手掛かりは**確定品質の記憶**なので、プレビューが読むと
+    // 予算を超え、プレビューが書くと確定品質が汚れる
+    const useHint = !ebmBudgetOverridden;
     let fullYears =
       EBM_FULL_CAPACITY_YEARS.years > 0
         ? EBM_FULL_CAPACITY_YEARS.years
-        : Math.max(yearAdaptive ? fullCapacityHint : 0, EBM_FULL_CAPACITY_START_YEARS);
+        : Math.max(yearAdaptive && useHint ? budgetHint.fullYears : 0, bFullYearsStart);
     let iters =
       EBM_SOLVER.sweeps > 0
         ? ebmConstants.iterationsPerStep
-        : adaptive
-          ? gpuIterationHint
-          : EBM_GPU_ITERATIONS;
+        : adaptive && useHint
+          ? Math.max(budgetHint.iterations, bIterations)
+          : bIterations;
+    // 予算を倍化したか(軸ごとに分けて数える。半減の判定に使う)
+    let itersEscalated = false;
+    let yearsEscalated = false;
+    // 予算を増やして回し直したか(進捗の見積もりが伸びたことを UI に伝える)
+    let extended = false;
+    // 直近の進捗(途中の気温場を流すときに添える)
+    let lastFraction = passFrom;
+    let lastDetail = passLabel;
+    const live = makeLiveTemperature();
     const runOnce = async (): Promise<Awaited<ReturnType<typeof ebmAccel.run>>> =>
       ebmAccel.run(
-        { ...fields, years: fullYears + SPINUP_ACCEL_YEARS, fullCapacityYears: fullYears },
+        { ...fields, years: fullYears + bSpinupAccelYears, fullCapacityYears: fullYears },
         { ...ebmConstants, iterationsPerStep: iters },
+        {
+          signal: control.signal,
+          // 段の進捗は「今のパス + 予算が伸びたか」を添えて上へ流す。
+          // **パスの窓に収める**のを忘れないこと: EBM は氷床判定と確定の
+          // 2 パスを回すので、素通しすると 0→1 が 2 回起きて進捗バーが
+          // 巻き戻って見える
+          progress: control.progress
+            ? (p): void => {
+                lastFraction =
+                  p.fraction === null ? lastFraction : passFrom + (passTo - passFrom) * p.fraction;
+                lastDetail = `${passLabel} — ${p.detail}`;
+                control.progress?.({
+                  fraction: lastFraction,
+                  detail: lastDetail,
+                  ...(extended ? { budgetExtended: true } : {}),
+                });
+              }
+            : undefined,
+          // モデル内 1 年ぶんが揃うたびに、表示格子へ落とした気温を流す
+          onCoarseSnapshot: control.progress
+            ? (s): void => {
+                const temperature = live.absorb(s.valuesC, s.monthIndex);
+                if (!temperature) return;
+                control.progress?.({
+                  fraction: lastFraction,
+                  detail: lastDetail,
+                  ...(extended ? { budgetExtended: true } : {}),
+                  partial: { temperature },
+                });
+              }
+            : undefined,
+        },
       );
     let r = await runOnce();
-    while (adaptive && !r.converged && iters < EBM_GPU_MAX_ITERATIONS) {
+    while (adaptive && !r.converged && iters < bMaxIterations) {
       iters *= 2;
+      extended = true;
+      itersEscalated = true;
       r = await runOnce();
     }
     while (
       yearAdaptive &&
       r.meanYearDriftC > EBM_PERIODIC_TOLERANCE_C &&
-      fullYears < EBM_MAX_FULL_CAPACITY_YEARS
+      fullYears < bMaxFullYears
     ) {
       fullYears *= 2;
+      extended = true;
+      yearsEscalated = true;
       r = await runOnce();
-      while (!r.converged && iters < EBM_GPU_MAX_ITERATIONS) {
+      while (!r.converged && iters < bMaxIterations) {
         iters *= 2;
+        itersEscalated = true;
         r = await runOnce();
       }
     }
-    if (adaptive && r.converged) gpuIterationHint = iters;
-    if (yearAdaptive && r.meanYearDriftC <= EBM_PERIODIC_TOLERANCE_C) fullCapacityHint = fullYears;
+    // 手掛かりの更新。**倍化が要らなかった回が続いたら半減して既定へ寄せる**
+    // (上げるだけにすると払い過ぎが永久に残る。宣言部の注記を参照)
+    if (useHint && adaptive && r.converged) {
+      budgetHint.iterations = iters;
+      if (itersEscalated) budgetHint.easyIterations = 0;
+      else if (++budgetHint.easyIterations >= HINT_DECAY_AFTER) {
+        budgetHint.iterations = Math.max(EBM_GPU_ITERATIONS, Math.floor(iters / 2));
+        budgetHint.easyIterations = 0;
+      }
+    }
+    if (useHint && yearAdaptive && r.meanYearDriftC <= EBM_PERIODIC_TOLERANCE_C) {
+      budgetHint.fullYears = fullYears;
+      if (yearsEscalated) budgetHint.easyYears = 0;
+      else if (++budgetHint.easyYears >= HINT_DECAY_AFTER) {
+        budgetHint.fullYears = Math.max(EBM_FULL_CAPACITY_START_YEARS, Math.floor(fullYears / 2));
+        budgetHint.easyYears = 0;
+      }
+    }
     EBM_SOLVER_STATS.maxYearDriftC = Math.max(EBM_SOLVER_STATS.maxYearDriftC, r.maxYearDriftC);
     EBM_SOLVER_STATS.meanYearDriftC = Math.max(EBM_SOLVER_STATS.meanYearDriftC, r.meanYearDriftC);
     EBM_SOLVER_STATS.fullCapacityYears = fullYears;
@@ -808,7 +989,7 @@ export async function computeTemperature(
 
   // パス 1: 恒常氷なしで積分 → 年平均と最暖月の複合条件で氷床を判定
   // (年平均だけではシベリア(夏 +19°C)を誤って氷床にしてしまう)
-  const pass1 = await integrateAny(null);
+  const pass1 = await integrateAny(null, undefined, '氷床判定パス (1/2)', 0, 0.5);
   const permanentIce = new Uint8Array(N);
   for (let i = 0; i < N; i++) {
     let annual = 0;
@@ -861,7 +1042,7 @@ export async function computeTemperature(
     if (!changed) break;
   }
   // パス 2: 氷床アルベドを反映して確定
-  const pass2 = await integrateAny(permanentIce, pass1.finalT);
+  const pass2 = await integrateAny(permanentIce, pass1.finalT, '確定パス (2/2)', 0.5, 1);
 
   return downscale(ctx, cg, pass2.monthAccum, pass2.monthCount, gamma);
 }

@@ -164,9 +164,15 @@ function poolBackend(state: OptState, n: number): Backend {
       const onLine = (line: string) => {
         w.rl.off('line', onLine);
         try {
-          const msg = JSON.parse(line) as { scores?: Scores; sec?: number; error?: string };
+          const msg = JSON.parse(line) as {
+            scores?: Scores;
+            sec?: number;
+            ebmYears?: number;
+            ebmIters?: number;
+            error?: string;
+          };
           if (msg.error || !msg.scores) return reject(new Error(msg.error ?? 'no scores'));
-          logEval(state, tag, msg.scores, msg.sec ?? 0);
+          logEval(state, tag, msg.scores, msg.sec ?? 0, msg.ebmYears, msg.ebmIters);
           resolve(msg.scores);
         } catch (e) {
           reject(e as Error);
@@ -196,7 +202,14 @@ function poolBackend(state: OptState, n: number): Backend {
   };
 }
 
-function logEval(state: OptState, tag: string, s: Scores, sec: number): void {
+function logEval(
+  state: OptState,
+  tag: string,
+  s: Scores,
+  sec: number,
+  ebmYears?: number,
+  ebmIters?: number,
+): void {
   evalCounter++;
   state.evals = evalCounter;
   fs.appendFileSync(
@@ -213,6 +226,9 @@ function logEval(state: OptState, tag: string, s: Scores, sec: number): void {
       pRmse: Math.round(s.precipRmse),
       iRmse: Math.round(s.itczRmse * 100) / 100,
       sec: Math.round(sec * 10) / 10,
+      // 収束予算(費用の内訳を後から読むため。optimize_worker.ts の注記)
+      ...(ebmYears !== undefined ? { ebmYears } : {}),
+      ...(ebmIters !== undefined ? { ebmIters } : {}),
     }) + '\n',
   );
 }

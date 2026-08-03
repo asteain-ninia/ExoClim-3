@@ -45,14 +45,27 @@ rl.on('line', (line) => {
       Object.assign(MODEL_CONSTANTS, msg.vector);
       const accel = await accelReady;
       const t0 = Date.now();
+      // 統計は**評価ごとに**ゼロへ戻す。maxSweeps は最大値の累積なので、
+      // 戻さないと「この評価が使った反復」ではなく「起動以来の最大」になる
       EBM_SOLVER_STATS.capHits = 0;
+      EBM_SOLVER_STATS.maxSweeps = 0;
+      EBM_SOLVER_STATS.fullCapacityYears = 0;
       const result = await runPipeline(EARTH_PARAMS, accel.opts);
       const scores = evaluateResult(result, msg.holdoutFold);
       // 予算内で解けなかった定数ベクトルは**失格**にする(減点ではない)
       if (EBM_SOLVER_STATS.capHits > 0) scores.fitness = UNSOLVED_FITNESS;
       process.stdout.write(
-        JSON.stringify({ id: msg.id, scores, sec: Math.round((Date.now() - t0) / 100) / 10 }) +
-          '\n',
+        JSON.stringify({
+          id: msg.id,
+          scores,
+          sec: Math.round((Date.now() - t0) / 100) / 10,
+          // 収束予算も返す。**費用がパラメータ由来か手掛かり由来かは
+          // 所要時間だけでは分からない**(2026-08-03 に 1 評価 307s → 1110s の
+          // 増加を「重いパラメータのせい」と読み違えかけた。実体は手掛かりの
+          // 払い過ぎだった)。年数と反復を毎回残せば次は log を見るだけで済む
+          ebmYears: EBM_SOLVER_STATS.fullCapacityYears,
+          ebmIters: EBM_SOLVER_STATS.maxSweeps,
+        }) + '\n',
       );
     } catch (e) {
       process.stdout.write(JSON.stringify({ error: String(e) }) + '\n');
