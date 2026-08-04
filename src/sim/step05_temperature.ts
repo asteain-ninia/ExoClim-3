@@ -27,6 +27,7 @@ import { throwIfCancelled, yieldToEventLoop } from './run_control';
 import type {
   AirflowResult,
   ItczResult,
+  LandSurfaceState,
   OceanCurrentResult,
   SimContext,
   TemperatureResult,
@@ -229,7 +230,11 @@ export async function computeTemperature(
   windBelt: WindBeltResult,
   ocean: OceanCurrentResult,
   airflow: AirflowResult,
-  priorPrecip?: { monthlyPrecipMm: Float32Array[] },
+  /**
+   * 前パスの陸面の状態(2 パス目でのみ渡る)。**降水ではなく蒸発散を読む** —
+   * 理由は types.ts の LandSurfaceState を参照
+   */
+  priorSurface?: { land?: LandSurfaceState },
   opts?: RunOptions,
 ): Promise<TemperatureResult> {
   const { params } = ctx;
@@ -280,6 +285,13 @@ export async function computeTemperature(
   }
 
   // ---- セル定数 ----
+  // 陸の熱容量に効く年平均の湿り具合(EBM 格子、0〜1。2 パス目でのみ入る)。
+  // **年平均を使うのは意図的** — 熱容量を月ごとに変えると季節を通した
+  // エネルギーの積算が保存しない(夏に容量を減らして冬に戻すと、その差分だけ
+  // 熱が湧いて消える)。年平均なら時間積分の中で定数のままでいられる。
+  const landWetnessAnnual: Float64Array | null = priorSurface?.land
+    ? buildAnnualWetness(ctx, priorSurface.land.monthlyWetness01, cg)
+    : null;
   const atm = params.atmosphere;
   const aBase =
     K.olrAWm2 - K.greenhouseDeltaAWm2 * Math.log2(Math.max(0.05, atm.greenhouseStrength));
@@ -294,9 +306,21 @@ export async function computeTemperature(
     const c = coarse[i];
     if (!c) continue;
     const row = Math.floor(i / CW);
+    // 陸の実効熱容量は**土壌の湿り具合で変わる**。乾いた土は熱伝導率が落ちて
+    // 熱が浅くしか染み込まず、動く質量が減るので日射に速く応答する
+    // (だから砂漠の夏は暑く冬は冷える)。導出は constants.ts の
+    // landDryCapacityFrac を参照 — 土壌水の熱容量そのものではなく、
+    // 減衰深度 d = √(2k/ρcω) が効く。frac = 1 で従来と厳密に一致する。
+    //
+    // 根拠(2026-08-03、scripts/diag_range_vs_wetness.ts):
+    //   砂漠(<100mm)の最暖月が −5.11°C(夏が寒すぎる)= 熱容量が過大。
+    // 湿り具合はその惑星の土壌水分から出るので、地球固有の量は入らない。
+    const wet = landWetnessAnnual ? (landWetnessAnnual[i] ?? 0) : 1;
+    const dryFrac = Math.min(1, Math.max(0, K.landDryCapacityFrac));
     const landDepth = Math.max(
-      0.3,
-      K.landEffectiveWaterDepthM + 0.5 * (atm.surfacePressureBar - 1),
+      0.05,
+      K.landEffectiveWaterDepthM * (dryFrac + (1 - dryFrac) * wet) +
+        0.5 * (atm.surfacePressureBar - 1),
     );
     let oceanDepth = atm.oceanMixedLayerDepthM + 2.4 * atm.surfacePressureBar;
     if (rowIsChannel[row]) oceanDepth *= K.channelMixedLayerBoost;
@@ -432,13 +456,23 @@ export async function computeTemperature(
   // 冬の大陸冷気の吹き出し・海からの暖気移流を経度別に表現する)
   const windOnCg = aggregateWinds(ctx, airflow, cg);
 
-  // 蒸発冷却フィードバック(2026-08-01): 湿った陸は潜熱で冷え、乾いた陸は
-  // 乾熱で暑い(実在の砂漠の暑さ・雨林の冷涼)。前回パスの降水の
+  // 蒸発冷却フィードバック: 湿った陸は潜熱で冷え、乾いた陸は乾熱で暑い
+  // (実在の砂漠の暑さ・雨林の冷涼)。前パスの**実蒸発散**の
   // 「陸平均に対する偏差」を月別フラックスにする(偏差なので全球中立)。
-  // 降水→気温の初の結線(パイプラインは 温度→降水→温度→降水 の 2 パス)
-  const evapAnomWm2: Float32Array[] | null = priorPrecip
-    ? buildEvapCoolingAnomaly(ctx, priorPrecip.monthlyPrecipMm, cg, coarse)
-    : null;
+  //
+  // 2026-08-03 の診断が繋ぎ替えの根拠(scripts/diag_range_vs_wetness.ts):
+  //   中緯度半乾燥(30〜60°N, 250〜800mm) … 最暖月 +5.00°C(夏が暑すぎる)
+  //   砂漠(<100mm)                       … 最暖月 −5.11°C(夏が寒すぎる)
+  // 夏の誤差が湿り具合で符号を変える = 陸面の水の扱いが欠けている印。
+  // 熱容量だけでは説明できない(熱容量は夏と冬を対称に効かせるため)。
+  //
+  // 2026-07-30 に**降水で代用して**実測破綻した経緯がある(係数 12 で
+  // 気温 RMSE 4.85 → 6.76、「降水誤差が温度誤差へ増幅される正帰還」)。
+  // 物理量が違ったのが原因という読み — 詳細は types.ts の LandSurfaceState。
+  const evapAnomWm2: Float32Array[] | null =
+    priorSurface?.land && K.evapCoolingWm2PerMmDay > 0
+      ? buildEvapCoolingAnomaly(ctx, priorSurface.land.monthlyEtMm, cg, coarse)
+      : null;
   // 夏半球は結合を弱める(ジェット弱化で大陸が海洋の影響から解放される —
   // 旧・帯状移流の seasonFactor を踏襲)
   const meanRidgeN =
@@ -1125,14 +1159,14 @@ function aggregateToCoarse(
  */
 function buildEvapCoolingAnomaly(
   ctx: SimContext,
-  monthlyPrecipMm: Float32Array[],
+  monthlyEtMm: Float32Array[],
   cg: Grid,
   coarse: CoarseCell[],
 ): Float32Array[] {
   const src = ctx.grid;
   const out: Float32Array[] = [];
   for (let m = 0; m < MONTHS_PER_YEAR; m++) {
-    const p = monthlyPrecipMm[m];
+    const p = monthlyEtMm[m];
     const field = new Float32Array(cg.cellCount);
     const n = new Float32Array(cg.cellCount);
     if (p) {
@@ -1153,7 +1187,15 @@ function buildEvapCoolingAnomaly(
         }
       }
     }
-    // 陸面平均(面積重み近似: セル数)を引いて偏差化し、W/m² へ
+    // 陸面平均(面積重み近似: セル数)を引いて偏差化し、W/m² へ。
+    //
+    // **偏差にするのは二重計上を避けるため**。EBM の OLR 切片 A は平均気候を
+    // 再現するよう決めてあるので、平均的な潜熱損失は既にそこへ吸収されている。
+    // 絶対値の λ·ET を足すと同じ冷却を二度引くことになる。
+    // 陸面平均を基準にすれば「平均的に湿った陸」が 0 になり、
+    // 湿った陸は冷やし、乾いた陸は相対的に暖める — 実在の砂漠の暑さがこれ。
+    //
+    // 基準を**その惑星の陸面平均**から取るので、地球固有の座標も定数も要らない。
     let sum = 0;
     let cnt = 0;
     for (let i = 0; i < cg.cellCount; i++) {
@@ -1167,6 +1209,8 @@ function buildEvapCoolingAnomaly(
     for (let i = 0; i < cg.cellCount; i++) {
       const landFrac = coarse[i]?.landFrac ?? 0;
       if ((n[i] ?? 0) > 0 && landFrac > 0.2) {
+        // クランプは残すが、実蒸発散は可能蒸発散で頭を押さえられているので
+        // 降水を代用していた頃のような外れ値は原理的に出ない
         const anomMmDay = Math.max(-3, Math.min(5, (field[i] ?? 0) - meanMmDay));
         field[i] = K.evapCoolingWm2PerMmDay * anomMmDay * landFrac;
       } else {
@@ -1174,6 +1218,48 @@ function buildEvapCoolingAnomaly(
       }
     }
     out.push(field);
+  }
+  return out;
+}
+
+/**
+ * 陸面の月別湿り具合(表示格子)から、EBM 格子の**年平均**湿り具合を組む。
+ *
+ * 海セルは 1(= 従来の熱容量そのまま)。陸が無い粗セルも 1 にして、
+ * 陸率で混ぜている熱容量の海側に影響を出さない。
+ */
+function buildAnnualWetness(
+  ctx: SimContext,
+  monthlyWetness01: Float32Array[],
+  cg: Grid,
+): Float64Array {
+  const src = ctx.grid;
+  const out = new Float64Array(cg.cellCount).fill(1);
+  const sum = new Float64Array(cg.cellCount);
+  const n = new Float64Array(cg.cellCount);
+  for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+    const w = monthlyWetness01[m];
+    if (!w) continue;
+    for (let row = 0; row < src.heightCells; row++) {
+      const cgRow = Math.min(
+        cg.heightCells - 1,
+        Math.floor((row * src.resolutionDeg) / cg.resolutionDeg),
+      );
+      for (let col = 0; col < src.widthCells; col++) {
+        const si = row * src.widthCells + col;
+        if (!ctx.terrain.landMask[si]) continue;
+        const cgCol = Math.min(
+          cg.widthCells - 1,
+          Math.floor((col * src.resolutionDeg) / cg.resolutionDeg),
+        );
+        const ci = cgRow * cg.widthCells + cgCol;
+        sum[ci] = (sum[ci] ?? 0) + (w[si] ?? 0);
+        n[ci] = (n[ci] ?? 0) + 1;
+      }
+    }
+  }
+  for (let i = 0; i < cg.cellCount; i++) {
+    if ((n[i] ?? 0) > 0) out[i] = (sum[i] ?? 0) / (n[i] ?? 1);
   }
   return out;
 }

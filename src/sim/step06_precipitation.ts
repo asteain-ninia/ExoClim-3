@@ -17,12 +17,36 @@ import type {
   AirflowResult,
   ItczResult,
   OceanCurrentResult,
+  PrecipCouplingDiagnostics,
   PrecipitationResult,
   SimContext,
   TemperatureResult,
   WindBeltResult,
 } from './types';
 import type { RunOptions, TraceConstants, TraceStaticFields } from './accel';
+import { throwIfCancelled, yieldToEventLoop } from './run_control';
+
+/**
+ * 月別降水から表示用の PrecipitationResult を組む(**配列は複製する**)。
+ *
+ * 途中経過を流すのに使う。複製が要るのは、結合反復中の precipEst が
+ * 次の反復でも読まれる生の作業配列だから — そのまま渡すとワーカー境界で
+ * 構造化複製の対象になるだけでなく、将来 transfer に切り替えたときに
+ * 計算そのものが壊れる。
+ */
+function buildPrecipitationResult(
+  monthly: Float32Array[],
+  cellCount: number,
+  coupling: PrecipCouplingDiagnostics,
+): PrecipitationResult {
+  const monthlyPrecipMm = monthly.map((a) => a.slice());
+  const annualPrecipMm = new Float32Array(cellCount);
+  for (const month of monthlyPrecipMm) {
+    for (let i = 0; i < cellCount; i++)
+      annualPrecipMm[i] = (annualPrecipMm[i] ?? 0) + (month[i] ?? 0);
+  }
+  return { monthlyPrecipMm, annualPrecipMm, coupling };
+}
 
 /** 飽和水蒸気圧 hPa(Magnus 式)。水蒸気供給のスケールとして使用 */
 export function saturationVaporPressureHpa(tempC: number): number {
@@ -397,16 +421,6 @@ export const COUPLING_MAX_ITERATIONS = 8;
  */
 export const COUPLING_OVERRIDE = { maxIterations: 0 };
 
-export interface PrecipCouplingDiagnostics {
-  /** 実施した結合反復回数 */
-  iterations: number;
-  maxIterations: number;
-  toleranceMmPerMonth: number;
-  /** 最終反復での陸面積重み付き平均 |ΔP|(mm/月) */
-  finalResidualMmPerMonth: number;
-  converged: boolean;
-}
-
 // ---- R2(地域降水 FB §6): 供給場の循環 3 点月ブレンド ----
 // 月平均風の単一方向トレースは風向の月替わりで供給が断絶する
 // (ガンジス 7 月 589mm → 8 月 0mm — レビュー H8)。実際の遷移月はどちらの
@@ -765,6 +779,8 @@ export async function computePrecipitation(
   const soilOn = K.soilWaterCapacityMm > 0;
   const isLand = (i: number): boolean => terrain.landMask[i] === 1;
   const soilAccel = soilOn ? (opts?.accel?.soilWater(grid.cellCount) ?? null) : null;
+  // 収束予算(省略時はこの段の既定定数 = 確定品質)
+  const bSoilSpinupYears = opts?.budget?.soilSpinupYears ?? K.soilSpinupYears;
   const solveSoil = async (
     precip: Float32Array[],
     warmStart?: ArrayLike<number>,
@@ -776,7 +792,7 @@ export async function computePrecipitation(
         tempByMonth: temperature.monthlyTemperatureC,
         capacityMm: K.soilWaterCapacityMm,
         petScaleMmPerMonth: K.soilPetScaleMmPerMonth,
-        maxYears: K.soilSpinupYears,
+        maxYears: bSoilSpinupYears,
         toleranceMm: SOIL_SPINUP_TOLERANCE_MM,
         initialStorage: warmStart,
       });
@@ -787,7 +803,7 @@ export async function computePrecipitation(
       precip,
       temperature.monthlyTemperatureC,
       K.soilWaterCapacityMm,
-      K.soilSpinupYears,
+      bSoilSpinupYears,
       0,
       warmStart,
     );
@@ -797,9 +813,19 @@ export async function computePrecipitation(
   let residual = Number.POSITIVE_INFINITY;
   let converged = false;
   const couplingMax =
-    COUPLING_OVERRIDE.maxIterations > 0 ? COUPLING_OVERRIDE.maxIterations : COUPLING_MAX_ITERATIONS;
+    COUPLING_OVERRIDE.maxIterations > 0
+      ? COUPLING_OVERRIDE.maxIterations
+      : (opts?.budget?.precipCouplingIterations ?? COUPLING_MAX_ITERATIONS);
   for (let it = 1; it <= couplingMax; it++) {
     iterations = it;
+    // 結合反復 1 回は風上追跡 12 か月ぶん(実測で降水の主費用)。
+    // 反復の境目で中断を見て、制御をイベントループへ返す
+    throwIfCancelled(opts?.signal, '降水');
+    opts?.progress?.({
+      fraction: (it - 1) / couplingMax,
+      detail: `降水の結合反復 ${it}/${couplingMax}`,
+    });
+    await yieldToEventLoop();
     if (soilOn) {
       // 結合反復のウォームスタート(前反復の 12 月末貯水)。周期定常への
       // 収束判定は同じなので解は許容差内で同一、空回し年数だけ減る
@@ -832,6 +858,21 @@ export async function computePrecipitation(
     applyPostAdjust(next);
     residual = meanAbsChange(next, precipEst);
     precipEst = next;
+    // 反復ごとの降水場を表示へ流す。**複製して渡す** — precipEst は次の反復で
+    // 読み続ける生の作業配列なので、そのまま渡して転送されると計算が壊れる
+    opts?.progress?.({
+      fraction: it / couplingMax,
+      detail: `降水の結合反復 ${it}/${couplingMax}(残差 ${residual.toFixed(2)} mm/月)`,
+      partial: {
+        precipitation: buildPrecipitationResult(precipEst, grid.cellCount, {
+          iterations: it,
+          maxIterations: couplingMax,
+          toleranceMmPerMonth: COUPLING_TOLERANCE_MM_PER_MONTH,
+          finalResidualMmPerMonth: residual,
+          converged: residual <= COUPLING_TOLERANCE_MM_PER_MONTH,
+        }),
+      },
+    });
     if (residual <= COUPLING_TOLERANCE_MM_PER_MONTH) {
       converged = true;
       break;
@@ -953,7 +994,12 @@ export async function computePrecipitation(
       diag.postAdjustDeltaMm.push(delta);
     }
   }
-  return { monthlyPrecipMm, annualPrecipMm, coupling };
+  // 陸面の水の状態を返す(気温の 2 パス目が潜熱と熱容量に使う)。
+  // 渡す soil は最終降水で解き直した周期解で、以後書き換えられないので複製しない
+  const land = soil
+    ? { monthlyEtMm: soil.actualEtMm, monthlyWetness01: soil.wetness01 }
+    : undefined;
+  return { monthlyPrecipMm, annualPrecipMm, coupling, ...(land ? { land } : {}) };
 }
 
 /**
@@ -1183,7 +1229,7 @@ function convertToPrecip(
   ctx: SimContext,
   itcz: ItczResult,
   month: number,
-  _tField: Float32Array,
+  tField: Float32Array,
   u: Float32Array,
   v: Float32Array,
   supply: Float32Array,
@@ -1211,6 +1257,8 @@ function convertToPrecip(
   const out = new Float32Array(grid.cellCount);
   const elev = terrain.elevationMeters;
   const decl = ctx.insolation.monthlyDeclinationDeg[month] ?? 0;
+  /** 供給の規格化基準(20°C の飽和水蒸気圧)。供給を作った側と同じ基準にする */
+  const q0Local = saturationVaporPressureHpa(20);
   // R4: 水蒸気フラックス収束(供給場と地表風から。診断時は生の場も返す)
   const convergenceOn =
     K.convergenceLiftBoost > 0 || K.convergenceSubsidenceRelief > 0 || diagM !== undefined;
@@ -1379,7 +1427,7 @@ function convertToPrecip(
       // 飽和して豪州が Aw 化した — 較正記録の撤回理由への対処。レビュー H5)
       let warmHumidF = 1;
       if (terrain.landMask[i]) {
-        const warmth = Math.min(1, Math.max(0, ((_tField[i] ?? 0) - 22) / 8));
+        const warmth = Math.min(1, Math.max(0, ((tField[i] ?? 0) - 22) / 8));
         if (warmth > 0) {
           const supplyNorm = Math.min(1, (supply[i] ?? 0) / K.warmHumidSupplyNorm);
           warmHumidF = 1 + K.warmHumidConvectiveBoost * warmth * supplyNorm * supplyNorm;
@@ -1400,8 +1448,8 @@ function convertToPrecip(
           Math.min(1, (stHi - aLat) / 10),
         );
         const coastKm = ctx.landDistToCoastKm[i] ?? 1e9;
-        const oceanT = nearestOceanTempC(ctx, _tField, row, col);
-        const qBaseT = oceanT !== null ? Math.max(oceanT, _tField[i] ?? 0) : (_tField[i] ?? 0);
+        const oceanT = nearestOceanTempC(ctx, tField, row, col);
+        const qBaseT = oceanT !== null ? Math.max(oceanT, tField[i] ?? 0) : (tField[i] ?? 0);
         const qRel = Math.max(
           K.stormMinQRel,
           saturationVaporPressureHpa(qBaseT + 3) / saturationVaporPressureHpa(20),
@@ -1433,16 +1481,66 @@ function convertToPrecip(
           (1 + 0.55 * winterDepth01);
       }
 
+      // ---- 柱相対湿度による指数的な抑制(2026-08-04)----
+      // **「どれだけ水蒸気が届いたか」ではなく「その場の空気が持てる量に対して
+      // どれだけか」で降water が決まる**。暑い砂漠は飽和水蒸気圧が巨大なので、
+      // そこそこ供給があっても相対湿度は低く、雨にならない。
+      //
+      // 観測(Bretherton et al. 2004, J. Climate 17, 1517)では熱帯海上の降水は
+      // 柱相対湿度 CRH に対して P ∝ exp(15.6·CRH) と**指数的**に応答し、
+      // CRH ≈ 0.75 で点火して CRH = 0.5 では 2 桁落ちる。
+      // このモデルの亜熱帯沈降の抑制は 0.86 という**線形の倍率**でしかなく、
+      // 現実が指数のところを線形で扱っていた(2026-08-04 の診断: 観測 100mm/年
+      // 未満の陸で沈降残存 0.864、6 月の降水が観測の 2.7 倍)。
+      //
+      // CRH の代理: supply は風上経路で拾った飽和水蒸気圧の線積分、つまり
+      // **届いた絶対水蒸気量**。これを局所気温の飽和量で割れば相対湿度になる。
+      // どちらもその惑星の気温場から出るので、地球固有の量は入らない。
+      let crhFactor = 1;
+      if (K.crhSuppressionSharpness > 0) {
+        const qSatLocal = saturationVaporPressureHpa(tField[i] ?? 0) / q0Local;
+        const crh = Math.min(
+          1,
+          (supply[i] ?? 0) / Math.max(1e-6, K.crhSupplyNormPerQSat * qSatLocal),
+        );
+        crhFactor = Math.exp(K.crhSuppressionSharpness * (crh - 1));
+      }
+
       // 供給 × 持ち上げ × 遮蔽 → mm/月(気圧が低い惑星は降水効率も下がる)
       const pressureFactor = Math.pow(Math.max(0.1, params.atmosphere.surfacePressureBar), 0.5);
-      out[i] = Math.max(
+      let precipMm = Math.max(
         0,
         ((supply[i] ?? 0) + stormSupply) *
           blockFactor *
           lift *
+          crhFactor *
           K.precipScaleMmPerUnit *
           pressureFactor,
       );
+
+      // ---- 雲底下での再蒸発(virga)----
+      // 乾いた厚い境界層では、上空で凝結しても地面に届く前に蒸発する。
+      // 英国気象庁の GCM で使われている形(Gregory 1995, Mon. Wea. Rev. 123, 2716):
+      //   E = k · (1 − RH) · √P
+      // 失われる**割合**は E/P = k(1−RH)/√P なので、**弱い雨ほど多く失われる**。
+      // これは CRH の指数抑制とは別の軸で効く — 砂漠の降水は弱い雨が主体で、
+      // そこを選択的に削る。中東で RegCM3 に導入した実測では年降水が最大 20%
+      // 減り、湿潤バイアスが観測の 15% 以内へ収束した(Marcella & Eltahir 2008,
+      // J. Climate 21, 2976)。乾燥地では雲底下で降水質量の 20〜50% が蒸発する。
+      if (K.subCloudEvapCoef > 0 && precipMm > 0) {
+        const qSatLocal = saturationVaporPressureHpa(tField[i] ?? 0) / q0Local;
+        const rh = Math.min(
+          1,
+          (supply[i] ?? 0) / Math.max(1e-6, K.crhSupplyNormPerQSat * qSatLocal),
+        );
+        // √P の P は mm/月。係数が単位を吸収する(較正で決める)
+        const lostFrac = Math.min(
+          K.subCloudEvapMaxFrac,
+          (K.subCloudEvapCoef * (1 - rh)) / Math.sqrt(precipMm),
+        );
+        precipMm *= 1 - lostFrac;
+      }
+      out[i] = precipMm;
       if (diagM) {
         diagM.supplyStorm[i] = stormSupply;
         diagM.liftItcz[i] = liftItczF;

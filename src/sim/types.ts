@@ -6,7 +6,22 @@ import type { InsolationField } from '@/domain/insolation';
 import type { PlanetParams } from '@/domain/planetParams';
 import type { TerrainField } from '@/domain/terrain';
 import type { PipelineDiagnostics } from './diagnostics';
-import type { PrecipCouplingDiagnostics } from './step06_precipitation';
+
+/**
+ * 結合反復(土壌水分 ⇄ 再循環)の収束診断。
+ * **定義はここに置く**(実装は step06)。types → step06 → run_control → types の
+ * 型の循環を避けるため — 途中結果の型がこのファイルを参照するようになったので、
+ * ここが依存の末端でないと環になる。
+ */
+export interface PrecipCouplingDiagnostics {
+  /** 実施した結合反復回数 */
+  iterations: number;
+  maxIterations: number;
+  toleranceMmPerMonth: number;
+  /** 最終反復での陸面積重み付き平均 |ΔP|(mm/月) */
+  finalResidualMmPerMonth: number;
+  converged: boolean;
+}
 
 /** 全ステップ共通の文脈(パイプライン先頭で構築、以後不変) */
 export interface SimContext {
@@ -83,6 +98,25 @@ export interface TemperatureResult {
   monthlyIceMask: Uint8Array[];
 }
 
+/**
+ * 陸面の水の状態。**降水の副産物ではなく、気温が読む物理量**。
+ *
+ * 陸の地表エネルギー収支は「どれだけ水が蒸発できるか」で決まる:
+ * 蒸発すれば潜熱で夏が冷え(半乾燥)、蒸発する水が無ければ乾熱で暑くなる(砂漠)。
+ * 熱容量も同じで、湿った土は水の熱容量を借り、乾いた砂は借りられない。
+ *
+ * **降水量で代用してはいけない**(2026-07-30 に代用して実測で破綻した:
+ * 係数 12 で気温 RMSE 4.85 → 6.76)。降水は月 500mm もあり得るが、
+ * 蒸発散は可能蒸発散に頭を押さえられるので振れ幅が桁で違う。
+ * 代用すると降水の誤差がそのまま温度へ増幅される。
+ */
+export interface LandSurfaceState {
+  /** [month][cell] 実蒸発散 mm/月(海セルは 0) */
+  monthlyEtMm: Float32Array[];
+  /** [month][cell] 利用可能水 / 容量 の 0〜1(海セルは 0) */
+  monthlyWetness01: Float32Array[];
+}
+
 export interface PrecipitationResult {
   /** [month][cell] 降水量 mm/月 */
   monthlyPrecipMm: Float32Array[];
@@ -90,6 +124,8 @@ export interface PrecipitationResult {
   annualPrecipMm: Float32Array;
   /** 結合反復(土壌水分 ⇄ 再循環)の収束診断 */
   coupling: PrecipCouplingDiagnostics;
+  /** 陸面の水の状態(土壌水分が有効なときのみ)。気温の 2 パス目が読む */
+  land?: LandSurfaceState;
 }
 
 export interface KoppenResult {
@@ -116,4 +152,34 @@ export interface PipelineResult {
   diagnostics: PipelineDiagnostics;
   // 注(P1-4): ステップ別所要時間は時刻依存のため物理結果に含めない。
   // 必要なら runPipelineTimed の戻り値 stepTimingsMs を使う
+}
+
+/**
+ * **計算途中の結果**。段が終わるたび(および気温・降水は段の内側でも)
+ * 少しずつ埋まっていく。表示はこれを直接描く。
+ *
+ * context だけが必須なのは、格子と地形が無いと何一つ描けないため。
+ * それ以外は「まだ計算されていない」ことがある。
+ *
+ * **確定結果(PipelineResult)と型を分けているのは意図的**。同じ型にすると
+ * 未収束・未計算の場を確定値として扱う経路ができる(教訓 §1)。
+ * 表示側は必ず「この層はまだ無い」を扱わなければならない。
+ */
+export type PartialPipelineResult = { context: SimContext } & Partial<
+  Omit<PipelineResult, 'context'>
+>;
+
+/**
+ * 途中結果の差分。段が自分の出力だけを載せて上へ流す。
+ * 表示側が前の差分に重ねていくことで PartialPipelineResult になる。
+ */
+export interface RunPartial {
+  context?: SimContext;
+  itcz?: ItczResult;
+  windBelt?: WindBeltResult;
+  ocean?: OceanCurrentResult;
+  airflow?: AirflowResult;
+  temperature?: TemperatureResult;
+  precipitation?: PrecipitationResult;
+  koppen?: KoppenResult;
 }

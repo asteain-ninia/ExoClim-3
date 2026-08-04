@@ -18,10 +18,44 @@ import {
   type SoilWaterResult,
 } from './step06_precipitation';
 import { computeKoppen } from './step07_koppen';
-import type { PipelineResult } from './types';
+import type { PipelineResult, RunPartial } from './types';
 import { MODEL_CONSTANTS } from './constants';
 import { assertComputableInputs, buildDiagnostics } from './diagnostics';
 import type { RunOptions } from './accel';
+import {
+  RUN_STAGE_LABELS,
+  throwIfCancelled,
+  type RunStage,
+  type StageProgressSink,
+} from './run_control';
+
+/**
+ * 段ごとの相対費用(全体進捗の重み)。**実測値**であって推測ではない。
+ *
+ * 出典: scripts/prof_stage_cost.ts の GPU 経路の実測(2026-08-02、地球 1°):
+ *
+ *   step5_temperature  97.86%   ← EBM の時間積分がほぼ全部
+ *   step6_precipitation 2.00%   ← 風上追跡と土壌は GPU 化済みで安い
+ *   その他 7 段         0.14%   ← 合計しても 1 秒に満たない
+ *
+ * **この偏りが設計を決めている**。進捗バーは実質 EBM のバーであり、
+ * 段キャッシュで上流を再利用しても節約は 0.2% に届かない
+ * (src/worker/pipelineCache.ts の注記)。
+ *
+ * ここがずれても**壊れるのは進捗バーだけ**で物理は無傷だが、ずれたままだと
+ * 「95% で 3 分止まる」ような嘘の進捗になるので、費用構造を変えたら測り直すこと。
+ */
+const STAGE_COST: Record<RunStage, number> = {
+  context: 1,
+  prepass: 1,
+  itcz: 1,
+  windbelt: 1,
+  ocean: 1,
+  airflow: 1,
+  temperature: 979,
+  precipitation: 20,
+  koppen: 1,
+};
 
 /**
  * 区間計測フック。物理側は時計を読まず、計測側だけがこの中で時刻を扱う。
@@ -76,6 +110,67 @@ export async function runPipelineTimed(
   return { result: await runPipelineCore(params, timer, undefined, opts), stepTimingsMs: timings };
 }
 
+/**
+ * 全体進捗の集計。段の内側は「その段の中で何割か」しか知らず、
+ * 全体比への換算はここが持つ(段が全体の重みを知る必要はない)。
+ *
+ * **進捗は単調ではない**: EBM が収束しなければ予算を倍にして回し直すので、
+ * 同じ段の中で fraction が 1 に近づいてから 0 に戻る。嘘をつかないために、
+ * その場合は budgetExtended を立てて上へ伝える。
+ */
+class ProgressPlanner {
+  private readonly total: number;
+  private doneCost = 0;
+  private currentCost = 0;
+  private currentStage: RunStage = 'context';
+
+  constructor(
+    units: Array<{ stage: RunStage; cost: number }>,
+    private readonly sink: RunOptions['onProgress'],
+  ) {
+    this.total = units.reduce((a, u) => a + u.cost, 0) || 1;
+  }
+
+  /** 段の開始。戻り値をその段の opts.progress に渡す */
+  begin(stage: RunStage): StageProgressSink {
+    this.currentStage = stage;
+    this.currentCost = STAGE_COST[stage];
+    this.emit(0, RUN_STAGE_LABELS[stage]);
+    return (p): void => {
+      this.emit(p.fraction ?? 0, p.detail, p.budgetExtended, p.partial);
+    };
+  }
+
+  /** 段の完了時に、その段の出力を表示へ流す */
+  emitPartial(partial: RunPartial): void {
+    this.emit(1, `${RUN_STAGE_LABELS[this.currentStage]} 完了`, undefined, partial);
+  }
+
+  /** 段の完了 */
+  end(): void {
+    this.doneCost += this.currentCost;
+    this.currentCost = 0;
+  }
+
+  private emit(
+    fraction: number,
+    detail: string,
+    budgetExtended?: boolean,
+    partial?: RunPartial,
+  ): void {
+    if (!this.sink) return;
+    const clamped = Math.max(0, Math.min(1, fraction));
+    this.sink({
+      stage: this.currentStage,
+      stageFraction: fraction,
+      overall: Math.min(1, (this.doneCost + this.currentCost * clamped) / this.total),
+      detail,
+      ...(budgetExtended ? { budgetExtended: true } : {}),
+      ...(partial ? { partial } : {}),
+    });
+  }
+}
+
 async function runPipelineCore(
   params: PlanetParams,
   time: SectionTimer,
@@ -85,13 +180,89 @@ async function runPipelineCore(
   // 事前検査(変更レビュー FB): 計算不能な入力は配列確保・反復の前に明示エラー
   assertComputableInputs(params);
 
-  const context = await time('context', () => buildSimContext(params));
+  // 2 パス目(陸面の水 → 気温の帰還)が走るかは定数で決まるので、進捗の総量は
+  // 事前に確定する。**帰還の口は 2 つあり、どちらか一方でも有効なら 2 パス**:
+  //   蒸発冷却(潜熱)      … evapCoolingWm2PerMmDay > 0
+  //   熱容量の土壌水分依存 … landDryCapacityFrac < 1
+  // どちらも前パスの土壌水分を読むので、必要な 2 パス目は同じ 1 回で足りる
+  const twoPass =
+    MODEL_CONSTANTS.evapCoolingWm2PerMmDay > 0 || MODEL_CONSTANTS.landDryCapacityFrac < 1;
+  const units: Array<{ stage: RunStage; cost: number }> = [
+    { stage: 'context', cost: STAGE_COST.context },
+    { stage: 'prepass', cost: STAGE_COST.prepass },
+    { stage: 'itcz', cost: STAGE_COST.itcz },
+    { stage: 'windbelt', cost: STAGE_COST.windbelt },
+    { stage: 'ocean', cost: STAGE_COST.ocean },
+    { stage: 'airflow', cost: STAGE_COST.airflow },
+    { stage: 'temperature', cost: STAGE_COST.temperature },
+    { stage: 'precipitation', cost: STAGE_COST.precipitation },
+    ...(twoPass
+      ? [
+          { stage: 'temperature' as const, cost: STAGE_COST.temperature },
+          { stage: 'precipitation' as const, cost: STAGE_COST.precipitation },
+        ]
+      : []),
+    { stage: 'koppen', cost: STAGE_COST.koppen },
+  ];
+  const planner = new ProgressPlanner(units, opts?.onProgress);
+
+  /**
+   * 段を 1 つ走らせる。中断の確認・進捗の受け渡し・計測・キャッシュ引きを
+   * ここでまとめる。段に渡す opts は **onProgress と cache を外し、その段用の
+   * progress を差した**もの(段が全体進捗やキャッシュを直接触れないようにする)。
+   *
+   * deps は**その段が読むもの全部**を並べる: 上流の出力への参照 +
+   * その段が読むパラメータ片。並べ漏れは「変えたのに結果が変わらない」という
+   * 最悪の形の不具合になるので、依存は多めに取ること(取りすぎても
+   * 損するのはキャッシュのヒット率だけで、答えは正しいまま)。
+   *
+   * deps に **null** を渡すとその段はキャッシュしない。段が結果以外の副産物
+   * (診断の受け皿など)を書く場合に使う — キャッシュに当たると副産物が
+   * 書かれず、呼び出し側が「診断が生成されなかった」で落ちる。
+   */
+  const stage = async <T>(
+    runStage: RunStage,
+    label: string,
+    deps: readonly unknown[] | null,
+    fn: (stageOpts: RunOptions | undefined) => T | Promise<T>,
+    /** 段の出力を表示用の差分に載せる(載せない段は省略) */
+    toPartial?: (out: T) => RunPartial,
+  ): Promise<T> => {
+    throwIfCancelled(opts?.signal, RUN_STAGE_LABELS[runStage]);
+    const progress = planner.begin(runStage);
+    const stageOpts: RunOptions | undefined = opts
+      ? { accel: opts.accel, signal: opts.signal, budget: opts.budget, progress }
+      : undefined;
+    const compute = (): Promise<T> => time(label, () => fn(stageOpts));
+    const out =
+      opts?.cache && deps !== null
+        ? await opts.cache.getOrCompute<T>(label, deps, compute)
+        : await compute();
+    // 段が終わった時点の出力を表示へ流す。キャッシュに当たった段も流す
+    // (表示は「この実行で何が使えるか」を知りたいのであって、
+    //  計算し直したかどうかは関係ない)
+    if (toPartial) planner.emitPartial(toPartial(out));
+    planner.end();
+    return out;
+  };
+
+  // 各段が読むパラメータは実測で洗い出した(grep で params.* を列挙、2026-08-02)。
+  // params の各部分オブジェクトはストアが変更時に作り直すので、参照の同一性が
+  // そのまま「変わっていない」の判定になる。
+  const P = params;
+  const context = await stage(
+    'context',
+    'context',
+    [P.gridResolutionDeg, P.terrain, P.orbital, P.body],
+    () => buildSimContext(params),
+    (c) => ({ context: c }),
+  );
 
   // ---- プレパス: 半球間 SST 非対称 → ITCZ の北偏オフセット ----
   // 実物の ITCZ は暖かい半球へ寄る(~3°/K)。海流場(周極海峡で切られる
   // 南半球 vs 暖流ドリフトの北半球)が持つ非対称を測り、線に恒常オフセットを
   // 与える。ステップ 1-3 のプレパスは計 ~150ms(ストリームライン含む)
-  const hemisOffsetDeg = await time('step0_hemis', () => {
+  const hemisOffsetDeg = await stage('prepass', 'step0_hemis', [context], () => {
     if (MODEL_CONSTANTS.itczHemisOffsetPerC <= 0) return 0;
     const itcz0 = computeItcz(context);
     const wb0 = computeWindBelt(context, itcz0);
@@ -121,24 +292,54 @@ async function runPipelineCore(
     return Math.max(-6, Math.min(6, MODEL_CONSTANTS.itczHemisOffsetPerC * deltaC));
   });
 
-  const itcz = await time('step1_itcz', () => computeItcz(context, hemisOffsetDeg));
-  const windBelt = await time('step2_windbelt', () => computeWindBelt(context, itcz));
-  const ocean = await time('step3_ocean', () => computeOceanCurrent(context, itcz, windBelt));
-  const airflow = await time('step4_airflow', () => computeAirflow(context, itcz, windBelt));
-  const temperature1 = await time('step5_temperature', () =>
-    computeTemperature(context, itcz, windBelt, ocean, airflow, undefined, opts),
+  const itcz = await stage(
+    'itcz',
+    'step1_itcz',
+    [context, hemisOffsetDeg],
+    () => computeItcz(context, hemisOffsetDeg),
+    (r) => ({ itcz: r }),
   );
-  const precipitation1 = await time('step6_precipitation', () =>
-    computePrecipitation(
-      context,
-      itcz,
-      windBelt,
-      ocean,
-      airflow,
-      temperature1,
-      precipDiagBox,
-      opts,
-    ),
+  const windBelt = await stage(
+    'windbelt',
+    'step2_windbelt',
+    [context, itcz, P.body],
+    () => computeWindBelt(context, itcz),
+    (r) => ({ windBelt: r }),
+  );
+  const ocean = await stage(
+    'ocean',
+    'step3_ocean',
+    [context, itcz, windBelt, P.body],
+    () => computeOceanCurrent(context, itcz, windBelt),
+    (r) => ({ ocean: r }),
+  );
+  const airflow = await stage(
+    'airflow',
+    'step4_airflow',
+    [context, itcz, windBelt, P.body],
+    () => computeAirflow(context, itcz, windBelt),
+    (r) => ({ airflow: r }),
+  );
+  // 気温と降水は**収束予算と加速器の別**も鍵に入れる。プレビュー(未収束)の
+  // 結果を確定計算で使い回したら、確定が確定でなくなる。加速器を入れるのは
+  // GPU と CPU で丸めが違うため(GPU を正とする — src/sim/accel.ts の注記)
+  const solverKey = [opts?.budget, opts?.accel];
+  // 降水診断を採る実行はキャッシュしない(当たると診断が書かれないため)
+  const precipDeps = <T extends readonly unknown[]>(d: T): T | null => (precipDiagBox ? null : d);
+  const temperature1 = await stage(
+    'temperature',
+    'step5_temperature',
+    [context, itcz, windBelt, ocean, airflow, P.atmosphere, ...solverKey],
+    (o) => computeTemperature(context, itcz, windBelt, ocean, airflow, undefined, o),
+    (r) => ({ temperature: r }),
+  );
+  const precipitation1 = await stage(
+    'precipitation',
+    'step6_precipitation',
+    precipDeps([context, itcz, windBelt, ocean, airflow, temperature1, P.atmosphere, ...solverKey]),
+    (o) =>
+      computePrecipitation(context, itcz, windBelt, ocean, airflow, temperature1, precipDiagBox, o),
+    (r) => ({ precipitation: r }),
   );
 
   // ---- 蒸発冷却フィードバック(降水 → 気温 → 降水の 2 パス目)----
@@ -148,27 +349,49 @@ async function runPipelineCore(
   // 係数 0 のときは 2 パス目を丸ごとスキップする
   let temperature = temperature1;
   let precipitation = precipitation1;
-  if (MODEL_CONSTANTS.evapCoolingWm2PerMmDay > 0) {
-    temperature = await time('step5b_temperature', () =>
-      computeTemperature(context, itcz, windBelt, ocean, airflow, precipitation1, opts),
+  if (twoPass) {
+    temperature = await stage(
+      'temperature',
+      'step5b_temperature',
+      [context, itcz, windBelt, ocean, airflow, precipitation1, P.atmosphere, ...solverKey],
+      (o) => computeTemperature(context, itcz, windBelt, ocean, airflow, precipitation1, o),
+      (r) => ({ temperature: r }),
     );
     // 2 パス目が最終場になるため、診断も 2 パス目のもので上書きする
-    precipitation = await time('step6b_precipitation', () =>
-      computePrecipitation(
+    precipitation = await stage(
+      'precipitation',
+      'step6b_precipitation',
+      precipDeps([
         context,
         itcz,
         windBelt,
         ocean,
         airflow,
         temperature,
-        precipDiagBox,
-        opts,
-      ),
+        P.atmosphere,
+        ...solverKey,
+      ]),
+      (o) =>
+        computePrecipitation(
+          context,
+          itcz,
+          windBelt,
+          ocean,
+          airflow,
+          temperature,
+          precipDiagBox,
+          o,
+        ),
+      (r) => ({ precipitation: r }),
     );
   }
 
-  const koppen = await time('step7_koppen', () =>
-    computeKoppen(context, temperature, precipitation),
+  const koppen = await stage(
+    'koppen',
+    'step7_koppen',
+    [context, temperature, precipitation],
+    () => computeKoppen(context, temperature, precipitation),
+    (r) => ({ koppen: r }),
   );
 
   // P1-3: 適用範囲診断。範囲外は値を切り詰めず「判定不能」を宣言する
