@@ -33,7 +33,29 @@ export interface MoistureTransportOptions {
   diffusivityM2PerS?: number;
   /** 収束判定: 平均 W に対する相対変化 */
   tolerance?: number;
+  /**
+   * 反復上限。**既定は実測で決めてある**(2026-08-04、
+   * scripts/exp_transport_convergence.ts): 地球 1° の 12 か月で 1451 反復で
+   * 収束し、そこから上限を 2 倍・4 倍にしてもビット一致した。
+   * 旧既定の 400 は届いておらず、上限が答えを決める状態だった
+   * (EBM で 3 回踏んだ隠しパラメータと同じ型 — 教訓 §9)。
+   * 収束したかは戻り値の converged で必ず確かめること。
+   */
   maxIterations?: number;
+  /**
+   * [cell] 柱の保持容量 mm(**閾値凝結**を使うときに渡す)。
+   *
+   * 渡さない場合の凝結は C = rate·W で、**通過する水を必ず降らせる**。
+   * これは保存則と噛み合わない: 凝結率を下げても水は消えず下流で降るだけなので、
+   * 「抑制」が総量を動かせない(2026-08-04 実測: 砂漠 6 月がむしろ悪化した)。
+   *
+   * 渡した場合は C = rate·max(0, W − capacity) となり、**持てる量を超えたぶん
+   * だけ降る**。暑い乾燥域は capacity が Clausius-Clapeyron で大きいので、
+   * 水が通過しても降らずに下流へ運ばれる — 実在の亜熱帯が乾いているのは
+   * 水を消しているからではなく、貿易風で赤道側へ**輸出**しているからである。
+   * 持ち上げは capacity を下げる形で入る(断熱冷却で凝結しやすくなる物理)。
+   */
+  holdingCapacityMm?: ArrayLike<number>;
 }
 
 export interface MoistureTransportResult {
@@ -67,7 +89,8 @@ export function solveMoistureTransport(
   const N = grid.cellCount;
   const diffusivity = (options.diffusivityM2PerS ?? 0) * SECONDS_PER_MONTH; // m²/月
   const tolerance = options.tolerance ?? 1e-5;
-  const maxIterations = options.maxIterations ?? 400;
+  const maxIterations = options.maxIterations ?? 4000;
+  const capacity = options.holdingCapacityMm ?? null;
 
   const aM = radiusKm * 1000;
   const dPhi = (grid.resolutionDeg * Math.PI) / 180;
@@ -168,10 +191,25 @@ export function solveMoistureTransport(
             : 0);
         const dt = 0.8 / Math.max(1e-9, outRate + 1e-9);
 
-        // 凝結項は陰的(λG が大きくても安定)
+        // 凝結項は陰的(λG が大きくても安定)。
+        // 閾値ありのときは C = rate·max(0, W − cap) を陰的に解く:
+        //   w = explicit − dt·rate·max(0, w − cap)
+        //   w > cap の枝: w = (explicit + dt·rate·cap) / (1 + dt·rate)
+        //     (この枝が有効なのは explicit > cap のときで、判定は explicit だけで済む)
+        //   それ以外: w = explicit(凝結なし = 通過する)
         const rate = Math.max(1e-6, condensationRatePerMonth[i] ?? 0);
         const explicit = wi + dt * ((sourceMmPerMonth[i] ?? 0) - divergence);
-        const w = Math.max(0, explicit / (1 + dt * rate));
+        let w: number;
+        if (capacity) {
+          const cap = Math.max(0, capacity[i] ?? 0);
+          w =
+            explicit > cap
+              ? (explicit + dt * rate * cap) / (1 + dt * rate)
+              : Math.max(0, explicit);
+        } else {
+          w = Math.max(0, explicit / (1 + dt * rate));
+        }
+        w = Math.max(0, w);
         cur[i] = w;
         const change = Math.abs(w - wi);
         if (change > maxChange) maxChange = change;
@@ -188,8 +226,12 @@ export function solveMoistureTransport(
 
   for (let i = 0; i < N; i++) {
     waterMm[i] = cur[i] ?? 0;
-    // 凝結で除いた水は必ず同じセルの降水に計上する(漏れを作らない)
-    condensationMm[i] = Math.max(1e-6, condensationRatePerMonth[i] ?? 0) * (cur[i] ?? 0);
+    // 凝結で除いた水は必ず同じセルの降水に計上する(漏れを作らない)。
+    // 閾値ありのときは「持てる量を超えたぶん」だけが降る
+    const excess = capacity
+      ? Math.max(0, (cur[i] ?? 0) - Math.max(0, capacity[i] ?? 0))
+      : (cur[i] ?? 0);
+    condensationMm[i] = Math.max(1e-6, condensationRatePerMonth[i] ?? 0) * excess;
   }
   return { waterMm, condensationMm, iterations, residual, converged };
 }
