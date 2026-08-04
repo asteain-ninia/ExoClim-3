@@ -359,6 +359,60 @@ async function main(): Promise<void> {
       }
       const [s] = await backend.evalBatch([{ tag: `jitter:sweep${state.sweep}`, vector: jitter }]);
       if (s) accept(jitter, s);
+
+      // ---- 対の探索(2026-08-04 追加)----
+      // **座標降下は谷を渡れない**。2 つの定数が互いに補償し合う関係にあると、
+      // 片方だけ動かすと必ず悪化するので、両方が動かないところで止まる。
+      // 実例: 陸の熱容量と東西移流結合。移流結合が実効減衰を支配しているため
+      // 熱容量は単独ではほぼ効かず(ωτ ≈ 0.009)、較正は熱容量を探索下限に
+      // 張り付かせたまま年較差 RMSE を 9.8 で固着させていた
+      // (docs/実験記録_年較差の季節分解_2026-08-03.md)。
+      //
+      // そこでスイープの区切りごとに、感度上位の定数の**対角方向**を試す。
+      // 逆対角(片方を上げ片方を下げる)を先に見るのは、補償関係の谷が
+      // そこに走るため。同符号の対角は単独の連続移動でも部分的に届く。
+      const pairTop = order.slice(0, 3);
+      const pairItems: Array<{ tag: string; vector: Record<string, number> }> = [];
+      for (let a = 0; a < pairTop.length; a++) {
+        for (let b = a + 1; b < pairTop.length; b++) {
+          const pa = pairTop[a];
+          const pb = pairTop[b];
+          if (!pa || !pb) continue;
+          const [na, loA, hiA] = pa;
+          const [nb, loB, hiB] = pb;
+          const stepA = (hiA - loA) * state.stepFrac;
+          const stepB = (hiB - loB) * state.stepFrac;
+          for (const [da, db] of [
+            [1, -1],
+            [-1, 1],
+          ] as const) {
+            const va = clampTo(na, (state.best[na] ?? 0) + da * stepA);
+            const vb = clampTo(nb, (state.best[nb] ?? 0) + db * stepB);
+            if (va === state.best[na] && vb === state.best[nb]) continue;
+            pairItems.push({
+              tag: `pair:s${state.sweep}:${na}+${nb}`,
+              vector: { ...state.best, [na]: va, [nb]: vb },
+            });
+          }
+        }
+      }
+      if (pairItems.length > 0) {
+        const pairScores = await backend.evalBatch(pairItems);
+        let bi = -1;
+        let bv = state.bestFit;
+        for (let k = 0; k < pairItems.length; k++) {
+          const ps = pairScores[k];
+          if (ps && ps.fitness > bv) {
+            bv = ps.fitness;
+            bi = k;
+          }
+        }
+        if (bi >= 0) {
+          const it = pairItems[bi];
+          const ps = pairScores[bi];
+          if (it && ps) accept(it.vector, ps);
+        }
+      }
       saveState(state);
       continue;
     }

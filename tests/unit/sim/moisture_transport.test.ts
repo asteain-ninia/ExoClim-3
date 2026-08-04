@@ -134,4 +134,79 @@ describe('保存型水蒸気輸送(P2-1)', () => {
     const b = solveMoistureTransport(grid, R_KM, u, v, src, rate, { maxIterations: 300 });
     expect([...a.waterMm]).toEqual([...b.waterMm]);
   });
+  // ---- 閾値凝結(2026-08-04 追加)----
+  it('閾値凝結: 保持容量を下回る柱は降らせず、水を素通しする', () => {
+    const grid = createGrid(4);
+    const { u, v } = uniformFields(grid, 0, 0);
+    const src = new Float32Array(grid.cellCount).fill(90);
+    const rate = new Float32Array(grid.cellCount).fill(6);
+    // 局所平衡は W = 90/6 = 15mm。容量 40mm ならどのセルも閾値に届かない
+    const cap = new Float32Array(grid.cellCount).fill(40);
+    const res = solveMoistureTransport(grid, R_KM, u, v, src, rate, {
+      maxIterations: 500,
+      holdingCapacityMm: cap,
+    });
+    // 降らないので水が溜まり続ける — 無風・源ありでは定常解が存在しない。
+    // ここで確かめたいのは「閾値未満では降水が 0 になる」ことだけ
+    for (let i = 0; i < grid.cellCount; i += 37) {
+      if ((res.waterMm[i] ?? 0) <= 40) expect(res.condensationMm[i] ?? 0).toBeCloseTo(0, 6);
+    }
+  });
+
+  it('閾値凝結: 容量 0 は従来(C = rate·W)と厳密に一致する', () => {
+    const grid = createGrid(4);
+    const { u, v } = uniformFields(grid, 4, 1);
+    const src = new Float32Array(grid.cellCount).fill(70);
+    const rate = new Float32Array(grid.cellCount).fill(4);
+    const zero = new Float32Array(grid.cellCount); // すべて 0
+    const a = solveMoistureTransport(grid, R_KM, u, v, src, rate, { maxIterations: 400 });
+    const b = solveMoistureTransport(grid, R_KM, u, v, src, rate, {
+      maxIterations: 400,
+      holdingCapacityMm: zero,
+    });
+    expect([...b.condensationMm]).toEqual([...a.condensationMm]);
+  });
+
+  // ---- 鉛直輸出(2026-08-04 追加)----
+  // **水を漏らさないことを固定する**。輸出は水の破壊ではなく、単層モデルが
+  // 解けない鉛直輸送のパラメタリゼーションなので、抜けた量は必ず
+  // exportedMm に現れ、呼び出し側が上昇域へ返して閉じられなければならない。
+  it('鉛直輸出: 源 = 降水 + 輸出 が全球で閉じる(漏れを作らない)', () => {
+    const grid = createGrid(4);
+    const { u, v } = uniformFields(grid, 5, -1);
+    const src = new Float32Array(grid.cellCount).fill(80);
+    const rate = new Float32Array(grid.cellCount).fill(5);
+    const xr = new Float32Array(grid.cellCount);
+    for (let i = 0; i < grid.cellCount; i++) xr[i] = i % 3 === 0 ? 3 : 0;
+    const res = solveMoistureTransport(grid, R_KM, u, v, src, rate, {
+      maxIterations: 4000,
+      verticalExportRatePerMonth: xr,
+    });
+    let s = 0;
+    let pe = 0;
+    for (let row = 0; row < grid.heightCells; row++) {
+      const w = Math.cos((latDegOfRow(grid, row) * Math.PI) / 180);
+      for (let col = 0; col < grid.widthCells; col++) {
+        const i = row * grid.widthCells + col;
+        s += w * (src[i] ?? 0);
+        pe += w * ((res.condensationMm[i] ?? 0) + (res.exportedMm[i] ?? 0));
+      }
+    }
+    expect(Math.abs(s - pe) / s).toBeLessThan(1e-4);
+  });
+
+  it('鉛直輸出: 輸出率 0 なら従来と厳密に一致し、輸出量も 0', () => {
+    const grid = createGrid(4);
+    const { u, v } = uniformFields(grid, 3, 2);
+    const src = new Float32Array(grid.cellCount).fill(60);
+    const rate = new Float32Array(grid.cellCount).fill(4);
+    const zero = new Float32Array(grid.cellCount);
+    const a = solveMoistureTransport(grid, R_KM, u, v, src, rate, { maxIterations: 400 });
+    const b = solveMoistureTransport(grid, R_KM, u, v, src, rate, {
+      maxIterations: 400,
+      verticalExportRatePerMonth: zero,
+    });
+    expect([...b.condensationMm]).toEqual([...a.condensationMm]);
+    expect(b.exportedMm.every((x) => x === 0)).toBe(true);
+  });
 });

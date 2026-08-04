@@ -56,6 +56,20 @@ export interface MoistureTransportOptions {
    * 持ち上げは capacity を下げる形で入る(断熱冷却で凝結しやすくなる物理)。
    */
   holdingCapacityMm?: ArrayLike<number>;
+  /**
+   * [cell] 鉛直輸出率 1/月(**沈降域で柱から抜ける水蒸気**)。
+   *
+   * なぜ要るか(2026-08-04 実測、docs/実験記録_保存型水蒸気輸送_2026-08-04.md):
+   *   2 次元の柱収支は「乾いた収束」を表せない。サハラの熱的低気圧は地表で
+   *   収束流を作るので、柱収支しか無ければ収束した水蒸気を必ずどこかで
+   *   降らせるしかない。実物が降らないのは、水蒸気が逆転層の下に閉じ込められ
+   *   中層が乾いて沈降しているからで、**鉛直積分した W には入らない情報**である。
+   *
+   * これは水の破壊ではなく、単層モデルが解けない**鉛直方向の輸送**の
+   * パラメタリゼーション。抜けた水は exportedMm に計上されるので、
+   * 呼び出し側が上昇域へ返して全球で閉じること(ハドレー循環の閉包)。
+   */
+  verticalExportRatePerMonth?: ArrayLike<number>;
 }
 
 export interface MoistureTransportResult {
@@ -63,6 +77,12 @@ export interface MoistureTransportResult {
   waterMm: Float32Array;
   /** [cell] 凝結量 = 降水 mm/月 */
   condensationMm: Float32Array;
+  /**
+   * [cell] 鉛直輸出量 mm/月(柱から抜けたが降水にならなかった水蒸気)。
+   * **呼び出し側がこれを上昇域へ返して全球で閉じること**(ハドレー循環の閉包)。
+   * 返さなければ水が消え、全球水収支が合わなくなる。
+   */
+  exportedMm: Float32Array;
   iterations: number;
   /** 最終反復の相対変化 */
   residual: number;
@@ -91,6 +111,7 @@ export function solveMoistureTransport(
   const tolerance = options.tolerance ?? 1e-5;
   const maxIterations = options.maxIterations ?? 4000;
   const capacity = options.holdingCapacityMm ?? null;
+  const vExport = options.verticalExportRatePerMonth ?? null;
 
   const aM = radiusKm * 1000;
   const dPhi = (grid.resolutionDeg * Math.PI) / 180;
@@ -121,6 +142,7 @@ export function solveMoistureTransport(
 
   const waterMm = new Float32Array(N);
   const condensationMm = new Float32Array(N);
+  const exportedMm = new Float32Array(N);
   const cur = new Float64Array(N);
   // 初期値: 源 / 凝結率(局所平衡)。負にならず、定常解へ近い
   for (let i = 0; i < N; i++) {
@@ -198,16 +220,18 @@ export function solveMoistureTransport(
         //     (この枝が有効なのは explicit > cap のときで、判定は explicit だけで済む)
         //   それ以外: w = explicit(凝結なし = 通過する)
         const rate = Math.max(1e-6, condensationRatePerMonth[i] ?? 0);
+        // 鉛直輸出も陰的に扱う(W に比例して柱から抜ける。降水にはならない)
+        const ex = vExport ? Math.max(0, vExport[i] ?? 0) : 0;
         const explicit = wi + dt * ((sourceMmPerMonth[i] ?? 0) - divergence);
         let w: number;
         if (capacity) {
           const cap = Math.max(0, capacity[i] ?? 0);
-          w =
-            explicit > cap
-              ? (explicit + dt * rate * cap) / (1 + dt * rate)
-              : Math.max(0, explicit);
+          // 閾値ありのとき、凝結は超過分にだけ効き、鉛直輸出は柱全体に効く:
+          //   w = explicit − dt·rate·max(0, w − cap) − dt·ex·w
+          const withCond = (explicit + dt * rate * cap) / (1 + dt * (rate + ex));
+          w = withCond > cap ? withCond : Math.max(0, explicit / (1 + dt * ex));
         } else {
-          w = Math.max(0, explicit / (1 + dt * rate));
+          w = Math.max(0, explicit / (1 + dt * (rate + ex)));
         }
         w = Math.max(0, w);
         cur[i] = w;
@@ -232,8 +256,9 @@ export function solveMoistureTransport(
       ? Math.max(0, (cur[i] ?? 0) - Math.max(0, capacity[i] ?? 0))
       : (cur[i] ?? 0);
     condensationMm[i] = Math.max(1e-6, condensationRatePerMonth[i] ?? 0) * excess;
+    exportedMm[i] = vExport ? Math.max(0, vExport[i] ?? 0) * (cur[i] ?? 0) : 0;
   }
-  return { waterMm, condensationMm, iterations, residual, converged };
+  return { waterMm, condensationMm, exportedMm, iterations, residual, converged };
 }
 
 /** 全球の水収支残差 |Σ A(S − P)| / Σ A·S(面積重み) */

@@ -46,8 +46,10 @@ async function main(): Promise<void> {
   const et = result.precipitation.land?.monthlyEtMm;
   if (!et) throw new Error('陸面 ET が取れていない');
 
-  // 月ごとに 5 面: 風 u / 風 v / 気温 / 実蒸発散 / 持上げ倍率の積
-  const FIELDS = 5;
+  // 月ごとに 6 面: 風 u / 風 v / 気温 / 実蒸発散 / 持上げ倍率の積 / 沈降残存。
+  // **沈降残存を分けて持つ**のは鉛直輸出項の実験に要るため — 倍率の積には
+  // 風上遮蔽(地形の影)も混ざっており、沈降とは別の物理である
+  const FIELDS = 6;
   const blob = new Float32Array(MONTHS * FIELDS * N);
   for (let m = 0; m < MONTHS; m++) {
     const base = m * FIELDS * N;
@@ -67,6 +69,9 @@ async function main(): Promise<void> {
         (d.liftOther[m]?.[i] ?? 1);
     }
     blob.set(g, base + 4 * N);
+    const sub = new Float32Array(N);
+    for (let i = 0; i < N; i++) sub[i] = d.subsidenceResidual[m]?.[i] ?? 1;
+    blob.set(sub, base + 5 * N);
   }
   // 月に依らない面: 陸マスク / 現行の月別降水(比較の基準)
   const landF = new Float32Array(N);
@@ -95,7 +100,7 @@ async function main(): Promise<void> {
         radiusKm: result.context.params.body.radiusKm,
         months: MONTHS,
         // 面の並び(月ごとに 5 面 → 陸マスク → 現行降水 12 面 → 気温 12 面)
-        layout: ['windU', 'windV', 'tempC', 'etMm', 'liftProduct'],
+        layout: ['windU', 'windV', 'tempC', 'etMm', 'liftProduct', 'subsidenceResidual'],
         offsets: {
           monthly: 0,
           landMask: blob.length,
