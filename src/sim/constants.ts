@@ -143,7 +143,7 @@ export const MODEL_CONSTANTS = {
    * 結線そのものではなく代用した物理量だったという読みに至り、
    * 実蒸発散へ繋ぎ替えた(types.ts の LandSurfaceState を参照)。
    */
-  evapCoolingWm2PerMmDay: 0,
+  evapCoolingWm2PerMmDay: 4,
   /**
    * 帯状移流の地表結合(W/m²/K、基準風速 4 m/s 時)。大気が上流の温度を運び、
    * 地表と有限の強さで熱交換する表現。セル熱容量に移流を掛けると海面が風速で
