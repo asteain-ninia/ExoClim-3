@@ -5,7 +5,7 @@
 //
 // 数値は GPU を正とする(2026-08-01 のユーザー判断、src/sim/accel.ts の注記)。
 
-import { createGpuAccelerator } from '../src/sim/gpu/accelerator';
+import { createGpuAccelerator } from '../src/sim/gpu/accelerator_node';
 import type { RunOptions, SimAccelerator } from '../src/sim/accel';
 
 export interface OpenedAccel {

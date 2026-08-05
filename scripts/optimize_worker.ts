@@ -34,6 +34,10 @@ const accelReady = openAccel(true).then((a) => {
 const rl = readline.createInterface({ input: process.stdin });
 let chain: Promise<void> = Promise.resolve();
 
+// ウォームスタートは **2026-08-06 に実測で棄却**した(54% 遅くなった)。
+// 配管は残してあるが較正では渡さない。理由は
+// docs/実験記録_ウォームスタート_2026-08-06.md を参照。
+
 rl.on('line', (line) => {
   chain = chain.then(async () => {
     try {

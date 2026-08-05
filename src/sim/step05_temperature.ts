@@ -138,19 +138,29 @@ const HINT_DECAY_AFTER = 3;
 const budgetHint = {
   /** 直近に収束した反復回数 */
   iterations: EBM_GPU_ITERATIONS,
-  /** 直近に周期定常へ達した全熱容量年数(0 = 記憶なし) */
+  /**
+   * 直近に周期定常へ達した全熱容量年数(0 = 記憶なし)。
+   * **冷間と温間で別々に持つ**。ウォームスタートは前回の収束場から始めるので
+   * 必要な年数が桁で違う。1 本にすると冷間の記憶(24 年)が温間の出発点(4 年)を
+   * max で上書きしてしまい、**ウォームスタートが一切効かなくなる**
+   * (2026-08-05 に実測。v3 は完全一致したのに所要時間が縮まなかった)。
+   */
   fullYears: 0,
+  fullYearsWarm: 0,
   /** 倍化せずに済んだ連続回数(半減の判定用) */
   easyIterations: 0,
   easyYears: 0,
+  easyYearsWarm: 0,
 };
 
 /** 試験・診断から手掛かりを初期化する(較正ワーカーの再現性の検査用) */
 export function resetEbmBudgetHint(): void {
   budgetHint.iterations = EBM_GPU_ITERATIONS;
   budgetHint.fullYears = 0;
+  budgetHint.fullYearsWarm = 0;
   budgetHint.easyIterations = 0;
   budgetHint.easyYears = 0;
+  budgetHint.easyYearsWarm = 0;
 }
 
 /**
@@ -198,6 +208,19 @@ export const EBM_PERIODIC_TOLERANCE_C = 0.05;
  *   従来の **2 年は 0.6τ** しかなく、周期定常に遠く届いていなかった。
  */
 export const EBM_FULL_CAPACITY_START_YEARS = 24;
+
+/**
+ * **ウォームスタート時**の全熱容量年数の出発点。
+ *
+ * 前の評価の収束温度場から始める場合、24 年ぶん空回しする必要はない。
+ * 短いところから試し、年次ドリフトが許容差を満たさなければ従来どおり
+ * 倍々に増やす — **判定は同じなので答えは変わらず、無駄な年数だけ減る**。
+ *
+ * 4 の根拠: 海洋混合層の時定数 τ ≈ 3.2 年に対し 1.25τ。近い初期値からなら
+ * 残差はこの程度で落ちるという見積もりで、足りなければ 8 → 16 → 24 と自動で
+ * 伸びる(損は回し直し 1 回ぶん)。**実測で詰める**。
+ */
+export const EBM_WARM_START_FULL_YEARS = 4;
 
 /** 全熱容量の年数の再試行上限。ここまで増やしても収束しなければ診断に残す */
 export const EBM_MAX_FULL_CAPACITY_YEARS = 64;
@@ -260,6 +283,18 @@ export async function computeTemperature(
     budget?.ebmIterations !== undefined ||
     budget?.ebmMaxIterations !== undefined ||
     budget?.ebmSpinupAccelYears !== undefined;
+  // ---- ウォームスタート(較正の高速化。答えは変えない)----
+  // セル数が合わないときは使わない(解像度を変えたときに前の場を使い回さない)
+  const warmBox = opts?.ebmWarmStart;
+  const warmField =
+    warmBox?.field && warmBox.field.length === N ? warmBox.field : null;
+  const warmT: Float64Array | undefined = warmField
+    ? (() => {
+        const a = new Float64Array(N);
+        a.set(warmField);
+        return a;
+      })()
+    : undefined;
   const control: AccelControl = {
     signal: opts?.signal,
     progress: opts?.progress,
@@ -497,6 +532,12 @@ export async function computeTemperature(
     passLabel: string,
     passFrom: number,
     passTo: number,
+    /**
+     * 前パスの氷厚。**気温と同じく引き継ぐ**(2026-08-04)。
+     * 0 層模型は氷厚を状態に持つので、パス 2 をゼロから始めると
+     * 実効の緩和年数が半分になり、周期定常に届かない
+     */
+    initialIce?: Float64Array,
   ) => {
     const t = new Float64Array(N);
     if (initialT) {
@@ -513,6 +554,15 @@ export async function computeTemperature(
     // 断熱×融解固定の正帰還で南極海リングが夏に融け残り −60S が −14°C へ
     // 暴走(双安定)。温度ランプ近似を維持する(較正記録参照)
     const capEff = new Float64Array(N);
+    /**
+     * 海氷の厚さ(水等価 mm)。**0 層模型のときだけ使う状態**。
+     * 時間ステップをまたいで持ち越すので、周期定常の判定にも効く。
+     */
+    const iceMm = new Float64Array(N);
+    if (initialIce) iceMm.set(initialIce);
+    /** 伝導コンダクタンス k/h(W/m²/K)。0 層模型のときだけ非零 */
+    const iceCond = new Float64Array(N);
+    const slabIce = K.seaIceModel > 0;
     /** 直近の論理スイープでの最大 |Δt|(°C)。残差基準の打ち切りに使う */
     let maxDelta = 0;
     const monthAccum: Float64Array[] = Array.from(
@@ -571,7 +621,14 @@ export async function computeTemperature(
         for (let col = 0; col < CW; col++) {
           const i = row * CW + col;
           const tSurf = (t[i] ?? 0) - gamma * (elevM[i] ?? 0);
-          const iceW = Math.min(1, Math.max(0, ((iceOnset[i] ?? 0) - tSurf) / K.iceRampWidthC));
+          // 0 層模型では氷の有無は**厚さ**で決まる(気温では決まらない)。
+          // 温度で決めると「冷たいほど断熱が強く、断熱が強いほど冷える」
+          // 正帰還になり両極が固着する(2026-08-04 実測)
+          const iceW = slabIce
+            ? (iceMm[i] ?? 0) > 0
+              ? 1
+              : 0
+            : Math.min(1, Math.max(0, ((iceOnset[i] ?? 0) - tSurf) / K.iceRampWidthC));
           let aSurf =
             (surfAlbedoBase[i] ?? 0.15) + (K.albedoIce - (surfAlbedoBase[i] ?? 0.15)) * iceW;
           if (permanentIce?.[i]) aSurf = Math.max(aSurf, K.permanentIceAlbedo);
@@ -582,8 +639,17 @@ export async function computeTemperature(
           const oceanFrac = 1 - (coarse[i]?.landFrac ?? 0);
           capEff[i] =
             (heatCap[i] ?? 1) * (1 - K.seaIceInsulationFactor * iceW * oceanFrac) * capScale;
+          // 氷を通じた海からの伝導 F = k(T_freeze − T)/h。**T の関数なので陰的に**
+          // 扱う(対角へ k/h、右辺へ k/h × T_freeze)。h の下限は数値のための
+          // ものであって較正つまみではない
+          iceCond[i] =
+            slabIce && (iceMm[i] ?? 0) > 0
+              ? (K.seaIceConductivityWmK * oceanFrac * 1000) /
+                Math.max(K.seaIceMinThicknessMm, iceMm[i] ?? 0)
+              : 0;
           rhs[i] =
             ((capEff[i] ?? 1) / dt) * (t[i] ?? 0) +
+            (iceCond[i] ?? 0) * K.seaFreezeC +
             s * (1 - albedo) -
             (aEff[i] ?? K.olrAWm2) +
             (qFlux[i] ?? 0) -
@@ -722,7 +788,16 @@ export async function computeTemperature(
             const gzW = gz * 0.5 * ((dfEff[i] ?? 1) + (dfEff[west] ?? 1));
             const gNEff = gN * 0.5 * ((dfEff[i] ?? 1) + (dfEff[north] ?? 1));
             const gSEff = gS * 0.5 * ((dfEff[i] ?? 1) + (dfEff[south] ?? 1));
-            const diag = cOverDt + K.olrBWm2PerC + gzE + gzW + gNEff + gSEff + advCu + advCv;
+            const diag =
+              cOverDt +
+              K.olrBWm2PerC +
+              (iceCond[i] ?? 0) +
+              gzE +
+              gzW +
+              gNEff +
+              gSEff +
+              advCu +
+              advCv;
             const off =
               gzE * (t[east] ?? 0) +
               gzW * (t[west] ?? 0) +
@@ -749,6 +824,42 @@ export async function computeTemperature(
           }
         }
       }
+      // ---- 海氷の厚さを更新する(0 層模型)----
+      // **潜熱がこの模型の要**。氷を作るには熱を捨て、融かすには吸う必要があり、
+      // その間だけ海が凍結点に留まる。ここが無いと温度が自由に落ちて断熱が
+      // 固定され、両極が逆方向に固着する(2026-08-04 実測)。
+      if (slabIce) {
+        for (let i = 0; i < N; i++) {
+          const oceanFrac = 1 - (coarse[i]?.landFrac ?? 0);
+          if (oceanFrac <= 0) continue;
+          const tNew = t[i] ?? 0;
+          if ((iceMm[i] ?? 0) > 0) {
+            // 氷あり: 海 → 表面の伝導ぶんだけ海が凍り、氷が厚くなる。
+            // 表面が凍結点より暖かければ、その熱でまず氷を融かす
+            const cond = (iceCond[i] ?? 0) * (K.seaFreezeC - tNew); // W/m²(正 = 海が熱を失う)
+            // **潜熱も加速期には同じ比率で縮める**。熱容量だけ 1/16 にして
+            // 潜熱を実寸のまま残すと、気温は速く落ち着くのに氷厚だけが実時間
+            // ぶんしか進まず、周期定常への到達が氷に律速される
+            // (2026-08-04 実測: 8 年と 16 年で判定量が 0.7〜0.8°C 動いた)
+            const dIce = (cond * dt) / (K.seaIceLatentJPerMm * capScale);
+            let h = (iceMm[i] ?? 0) + dIce;
+            if (h < 0) {
+              // 融け切った。余った熱は海の温度上昇へ回る(潜熱を使い切ってから)
+              const leftoverJ = -h * K.seaIceLatentJPerMm * capScale;
+              h = 0;
+              const cFull = (heatCap[i] ?? 1) * capScale;
+              if (cFull > 0) t[i] = K.seaFreezeC + leftoverJ / cFull;
+            }
+            iceMm[i] = h;
+          } else if (tNew < K.seaFreezeC) {
+            // 氷なしで凍結点を下回った: 超過分の熱を氷に変え、温度を凍結点へ戻す
+            const cFull = (capEff[i] ?? 1);
+            const deficitJ = cFull * (K.seaFreezeC - tNew);
+            iceMm[i] = (iceMm[i] ?? 0) + deficitJ / (K.seaIceLatentJPerMm * capScale);
+            t[i] = K.seaFreezeC;
+          }
+        }
+      }
       EBM_SOLVER_STATS.totalSweeps += sweepsUsed;
       EBM_SOLVER_STATS.steps++;
       if (sweepsUsed > EBM_SOLVER_STATS.maxSweeps) EBM_SOLVER_STATS.maxSweeps = sweepsUsed;
@@ -763,7 +874,7 @@ export async function computeTemperature(
         }
       }
     }
-    return { monthAccum, monthCount, finalT: t };
+    return { monthAccum, monthCount, finalT: t, finalIce: iceMm };
   };
 
   /**
@@ -886,8 +997,21 @@ export async function computeTemperature(
     /** この段の進捗のうち、このパスが占める区間 [passFrom, passTo] */
     passFrom: number,
     passTo: number,
-  ): Promise<{ monthAccum: Float64Array[]; monthCount: number[]; finalT: Float64Array }> => {
-    if (!ebmAccel) return integrate(permanentIce, initialT, passLabel, passFrom, passTo);
+    /** 前パスの氷厚(0 層模型のときだけ意味を持つ) */
+    initialIce?: Float64Array,
+  ): Promise<{
+    monthAccum: Float64Array[];
+    monthCount: number[];
+    finalT: Float64Array;
+    /**
+     * 氷厚(0 層模型のときだけ意味を持つ)。GPU 経路はまだ 0 層模型を
+     * 実装していないので undefined を返す。**CPU 経路と GPU 経路で
+     * 物理が食い違わないよう、0 層模型を有効にするのは両方に入ってから**
+     */
+    finalIce?: Float64Array;
+  }> => {
+    if (!ebmAccel)
+      return integrate(permanentIce, initialT, passLabel, passFrom, passTo, initialIce);
     const fields = buildEbmFields(permanentIce, initialT);
     // 反復回数は**惑星ごとに必要量が違う**。地球は 512 で足りるが、全陸惑星は
     // 熱容量が小さく対角優位が弱いため足りない(2026-08-02 実測)。
@@ -906,7 +1030,17 @@ export async function computeTemperature(
     let fullYears =
       EBM_FULL_CAPACITY_YEARS.years > 0
         ? EBM_FULL_CAPACITY_YEARS.years
-        : Math.max(yearAdaptive && useHint ? budgetHint.fullYears : 0, bFullYearsStart);
+        : Math.max(
+            // 手掛かりは**冷間・温間で別のものを引く**(宣言部の注記を参照)
+            yearAdaptive && useHint
+              ? warmT
+                ? budgetHint.fullYearsWarm
+                : budgetHint.fullYears
+              : 0,
+            // ウォームスタート時は短い出発点から試す。足りなければ従来どおり
+            // 倍々に増える(判定は同じなので答えは変わらない)
+            warmT ? EBM_WARM_START_FULL_YEARS : bFullYearsStart,
+          );
     let iters =
       EBM_SOLVER.sweeps > 0
         ? ebmConstants.iterationsPerStep
@@ -966,10 +1100,19 @@ export async function computeTemperature(
       itersEscalated = true;
       r = await runOnce();
     }
+    /**
+     * 加速器が回せる年数の上限。**掲げた上限が下流の上限に収まるか**(教訓 §9)。
+     * ここを見ずに倍増すると、上限を超えた時点で例外で死ぬ — 収束しにくい
+     * 惑星でだけ起き、しかも「未収束」と診断される前に落ちるので最悪である
+     * (2026-08-02 に前セッションが発見し、未修正のまま申し送られていた)。
+     * 上限は**診断へ落とす**べきもので、例外にすべきものではない。
+     */
+    const yearCap = ebmAccel.maxSteps / K.ebmStepsPerYear - bSpinupAccelYears;
     while (
       yearAdaptive &&
       r.meanYearDriftC > EBM_PERIODIC_TOLERANCE_C &&
-      fullYears < bMaxFullYears
+      fullYears < bMaxFullYears &&
+      fullYears * 2 <= yearCap
     ) {
       fullYears *= 2;
       extended = true;
@@ -992,11 +1135,15 @@ export async function computeTemperature(
       }
     }
     if (useHint && yearAdaptive && r.meanYearDriftC <= EBM_PERIODIC_TOLERANCE_C) {
-      budgetHint.fullYears = fullYears;
-      if (yearsEscalated) budgetHint.easyYears = 0;
-      else if (++budgetHint.easyYears >= HINT_DECAY_AFTER) {
-        budgetHint.fullYears = Math.max(EBM_FULL_CAPACITY_START_YEARS, Math.floor(fullYears / 2));
-        budgetHint.easyYears = 0;
+      // 半減の下限も冷間・温間で別(温間は 4 年まで下げられる)
+      const floorYears = warmT ? EBM_WARM_START_FULL_YEARS : EBM_FULL_CAPACITY_START_YEARS;
+      const easyKey = warmT ? 'easyYearsWarm' : 'easyYears';
+      const hintKey = warmT ? 'fullYearsWarm' : 'fullYears';
+      budgetHint[hintKey] = fullYears;
+      if (yearsEscalated) budgetHint[easyKey] = 0;
+      else if (++budgetHint[easyKey] >= HINT_DECAY_AFTER) {
+        budgetHint[hintKey] = Math.max(floorYears, Math.floor(fullYears / 2));
+        budgetHint[easyKey] = 0;
       }
     }
     EBM_SOLVER_STATS.maxYearDriftC = Math.max(EBM_SOLVER_STATS.maxYearDriftC, r.maxYearDriftC);
@@ -1023,7 +1170,7 @@ export async function computeTemperature(
 
   // パス 1: 恒常氷なしで積分 → 年平均と最暖月の複合条件で氷床を判定
   // (年平均だけではシベリア(夏 +19°C)を誤って氷床にしてしまう)
-  const pass1 = await integrateAny(null, undefined, '氷床判定パス (1/2)', 0, 0.5);
+  const pass1 = await integrateAny(null, warmT, '氷床判定パス (1/2)', 0, 0.5);
   const permanentIce = new Uint8Array(N);
   for (let i = 0; i < N; i++) {
     let annual = 0;
@@ -1076,7 +1223,23 @@ export async function computeTemperature(
     if (!changed) break;
   }
   // パス 2: 氷床アルベドを反映して確定
-  const pass2 = await integrateAny(permanentIce, pass1.finalT, '確定パス (2/2)', 0.5, 1);
+  const pass2 = await integrateAny(
+    permanentIce,
+    pass1.finalT,
+    '確定パス (2/2)',
+    0.5,
+    1,
+    pass1.finalIce,
+  );
+
+  // ウォームスタートの箱へ**この実行の収束温度場**を書き戻す。
+  // 次の評価はここから始まり、空回しの年数が減る(答えは変わらない —
+  // 年次ドリフトの検査は同じなので)
+  if (warmBox) {
+    const out = new Float32Array(N);
+    for (let i = 0; i < N; i++) out[i] = pass2.finalT[i] ?? 0;
+    warmBox.field = out;
+  }
 
   return downscale(ctx, cg, pass2.monthAccum, pass2.monthCount, gamma);
 }

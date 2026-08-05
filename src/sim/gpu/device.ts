@@ -1,4 +1,12 @@
-// WebGPU デバイスの取得と後始末。
+// WebGPU の**プラットフォーム非依存**な足回り(バッファ・読み戻し・限界値)。
+//
+// **このファイルは Node の `webgpu` パッケージも `navigator` も参照しない**。
+// デバイスの取得口は実行環境ごとに分かれている:
+//   - Node(較正・検証スクリプト): device_node.ts の acquireGpu()
+//   - ブラウザ(Worker):          device_browser.ts の acquireGpuInBrowser()
+// 分けた理由は単純で、`webgpu` パッケージを静的 import するとブラウザの
+// バンドルが壊れるため。カーネル 3 本(ebm/moisture_trace/soil_water)は
+// このファイルの型と補助関数しか使わないので、両環境で**同じシェーダが動く**。
 //
 // 対応 spec: なし(実行基盤)。設計判断の根拠は実機計測 2026-08-01:
 //  - 往復 1 回の固定費は約 0.3ms。64,800 セル 1 ステップの計算は 0.07〜0.17ms
@@ -18,11 +26,6 @@
 // 渡されなければ CPU 実装へ落ちる(GPU 無しでも同じ結果が得られる —
 // ただし浮動小数の丸めは一致しない。GPU 側を正とする)。
 
-// 静的 import で読む。動的 import にすると 3 回目の readback で
-// アクセス違反(0xC0000005)が起きた(2026-08-01 実測、原因は未特定だが
-// 静的 import では 100 回以上安定する)
-import { create as createWebgpu, globals as webgpuGlobals } from 'webgpu';
-
 export const GPU_WORKGROUP_SIZE = 256;
 
 export interface GpuContext {
@@ -32,93 +35,29 @@ export interface GpuContext {
   destroy(): void;
 }
 
-let cached: GpuContext | null = null;
-let unavailableReason: string | null = null;
-/**
- * GPU インスタンスとアダプタへの参照を保持する。
- *
- * これが無いと、acquireGpu を抜けた時点で adapter がガベージコレクトされ、
- * その後の GPU 操作がアクセス違反(0xC0000005)で落ちる(2026-08-01 実測)。
- * 同じコードでも adapter をモジュール直下の const に置くと安定するため、
- * ネイティブ側がアダプタへの参照を保持していると考えられる。
- * 症状は「数回の readback のあと突然プロセスが死ぬ」で、
- * 一見すると mapAsync の不具合に見える — 切り分けに長時間を要した。
- */
-const keepAlive: { gpu: unknown; adapter: unknown }[] = [];
-
 /** 型定義が Float32Array<ArrayBuffer> を要求するため、転送時に絞り込む */
 export function asBufferSource(a: Float32Array): GPUAllowSharedBufferSource {
   return a as unknown as GPUAllowSharedBufferSource;
 }
 
 /**
- * GPU を取得する。使えなければ null(呼び出し側は CPU 実装へ落ちる)。
- * 一度取得したデバイスは使い回す — デバイス生成は数百 ms かかるため。
+ * アダプタから device を要求する。**Node とブラウザで共通**にしてあるのは、
+ * 既定の device が adapter より制限が厳しく、そこで踏んだ罠が両環境に効くため:
+ *  - workgroup サイズ既定 256(adapter は 1024)。256 が最良なので実害は
+ *    無いが、明示的に上げておく
+ *  - **ストレージバッファ既定 8 本**(adapter は 16)。風上追跡は 9 本
+ *    要るため、上げないとパイプライン生成が失敗する。しかもエラーは
+ *    既定では黙って捨てられ「結果が全部ゼロ」としてしか現れない
  */
-export async function acquireGpu(): Promise<GpuContext | null> {
-  if (cached) return cached;
-  if (unavailableReason) return null;
-  try {
-    Object.assign(globalThis, webgpuGlobals);
-    const gpu = createWebgpu([]);
-    const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' });
-    if (!adapter) {
-      unavailableReason = 'アダプタを取得できない';
-      return null;
-    }
-    const device = await adapter.requestDevice({
-      // 既定の device は adapter より制限が厳しい。実測で踏んだもの:
-      //  - workgroup サイズ既定 256(adapter は 1024)。256 が最良なので実害は
-      //    無いが、明示的に上げておく
-      //  - **ストレージバッファ既定 8 本**(adapter は 16)。風上追跡は 9 本
-      //    要るため、上げないとパイプライン生成が失敗する。しかもエラーは
-      //    既定では黙って捨てられ「結果が全部ゼロ」としてしか現れない
-      requiredLimits: {
-        maxComputeWorkgroupSizeX: adapter.limits.maxComputeWorkgroupSizeX,
-        maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
-        maxBufferSize: adapter.limits.maxBufferSize,
-        maxStorageBuffersPerShaderStage: adapter.limits.maxStorageBuffersPerShaderStage,
-      },
-    });
-    // 検証エラーは既定では黙って捨てられ、「結果が全部ゼロ」という形でしか
-    // 現れない(2026-08-01 に実際に踏んだ)。必ず表に出す
-    if (process.env['EXOCLIM_GPU_EVENTS'] === '1') {
-      device.addEventListener?.('uncapturederror', (ev: Event) => {
-        const err = (ev as unknown as { error?: { message?: string } }).error;
-        console.error('[WebGPU エラー]', err?.message ?? String(ev));
-      });
-      void device.lost.then((info: { reason?: string; message?: string }) => {
-        console.error(`[WebGPU デバイス消失] ${info.reason ?? '?'}: ${info.message ?? ''}`);
-      });
-    }
-    keepAlive.push({ gpu, adapter });
-    cached = {
-      device,
-      adapterInfo: 'WebGPU device',
-      destroy(): void {
-        device.destroy();
-        cached = null;
-        // **keepAlive は空にしない**。ここで参照を落とすと gpu/adapter が GC 対象に
-        // なり、プロセス終了時にアクセス違反で落ちる(2026-08-01 実測: destroy 後も
-        // 処理を続けるスクリプトが終了時に segfault した)。保持量は数十バイトで、
-        // 解放しても得るものは無い
-      },
-    };
-    return cached;
-  } catch (e) {
-    unavailableReason = e instanceof Error ? e.message : String(e);
-    return null;
-  }
-}
-
-/** 取得済みなら破棄する。プロセス終了前に必ず呼ぶ(でないと exit 139) */
-export function releaseGpu(): void {
-  cached?.destroy();
-}
-
-/** GPU が使えない理由(使える場合は null) */
-export function gpuUnavailableReason(): string | null {
-  return unavailableReason;
+export function requestDeviceWithLimits(adapter: GPUAdapter): Promise<GPUDevice> {
+  return adapter.requestDevice({
+    requiredLimits: {
+      maxComputeWorkgroupSizeX: adapter.limits.maxComputeWorkgroupSizeX,
+      maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+      maxBufferSize: adapter.limits.maxBufferSize,
+      maxStorageBuffersPerShaderStage: adapter.limits.maxStorageBuffersPerShaderStage,
+    },
+  });
 }
 
 // ---- バッファ補助 ----

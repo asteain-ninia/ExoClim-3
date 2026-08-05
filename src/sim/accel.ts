@@ -13,6 +13,14 @@
 //   一致しないが、同じ入力に対する GPU 同士はビット一致する(atomics と
 //   順序不定のリダクションを避けているため)。
 
+import type {
+  CancelToken,
+  ConvergenceBudget,
+  ProgressSink,
+  StageCache,
+  StageProgressSink,
+} from './run_control';
+
 /** 風上追跡の静的な場(月に依らないもの) */
 export interface TraceStaticFields {
   widthCells: number;
@@ -208,7 +216,21 @@ export interface EbmAccelResult {
 }
 
 export interface EbmAccel {
-  run(fields: EbmStaticFields, constants: EbmConstants): Promise<EbmAccelResult>;
+  run(
+    fields: EbmStaticFields,
+    constants: EbmConstants,
+    control?: AccelControl,
+  ): Promise<EbmAccelResult>;
+  /**
+   * 回せる時間ステップ数の上限。**呼び出し側はこれを見て年数を伸ばすのを止める**。
+   *
+   * 2026-08-02 に前セッションが見つけた不整合(未修正のまま申し送られていた):
+   * 上限を超えると例外で死ぬため、step05 が「周期定常に達しないので年数を
+   * 倍増する」適応をすると、収束しにくい惑星で**未収束と診断される前に落ちる**。
+   * 地球では起きず他の惑星でだけ起きる — 惑星デザイナとして最悪の壊れ方。
+   * 上限は診断へ落とすべきものであって、例外にすべきものではない。
+   */
+  readonly maxSteps: number;
   destroy(): void;
 }
 
@@ -229,7 +251,64 @@ export interface SimAccelerator {
   destroy(): void;
 }
 
-/** 実行オプション。加速器を渡さなければ全て CPU 実装で動く */
+/**
+ * 実行オプション。**何も渡さなければ従来どおり**、加速も中断も進捗も無い
+ * 素の純粋関数として走る(確定品質・全段計算)。
+ */
 export interface RunOptions {
   accel?: SimAccelerator | undefined;
+  /** 中断要求の受け口。中断は例外(ComputeCancelledError)で抜ける */
+  signal?: CancelToken | undefined;
+  /** 収束予算。省略した項目は各段の既定定数(= 確定品質)に落ちる */
+  budget?: ConvergenceBudget | undefined;
+  /** 実行全体の進捗。**パイプラインだけが呼ぶ**(段の内側からは使わない) */
+  onProgress?: ProgressSink | undefined;
+  /** 段キャッシュ。渡さなければ毎回全段を計算する(従来どおり) */
+  cache?: StageCache | undefined;
+  /**
+   * 段の内側からの進捗通知。パイプラインが段ごとに差し替えて渡すので、
+   * 呼び出し側(scripts/・テスト)が直接埋めることは無い。
+   */
+  progress?: StageProgressSink | undefined;
+  /**
+   * EBM のウォームスタート用の受け渡し箱(**較正のためだけの高速化**)。
+   *
+   * 較正は近いパラメータを次々に評価するので、**直前の収束温度場は非常に良い
+   * 初期推定**である。渡すと EBM はそこから始め、全熱容量で回す年数を
+   * 短い出発点から試す(足りなければ従来どおり倍々に増やす)。
+   * 実行後、この箱には**その実行の収束温度場**(EBM 粗格子)が書き戻される。
+   *
+   * **答えは変わらない**。倍化のたびに残差と年次ドリフトを検査するので、
+   * 得られる解は出発点に依らない — これは実測で確かめてある(2026-08-04:
+   * 同じパラメータを別プロセス・別予算で回して v3=85.666 が完全一致した。
+   * scripts/diag_hint_ratchet.ts)。
+   *
+   * **セル数が違えば無視する**(解像度を変えたときに前の場を使い回さない)。
+   */
+  ebmWarmStart?: { field: Float32Array | null } | undefined;
+}
+
+/** 加速器の run() に渡す制御(物理入力とは分けて渡す — 混ぜると結果の同一性が曖昧になる) */
+export interface AccelControl {
+  signal?: CancelToken | undefined;
+  progress?: StageProgressSink | undefined;
+  /**
+   * 積分の途中の温度場(**EBM 粗格子・その瞬間のモデル時刻**)を渡す。
+   *
+   * 加速器は「素のスナップショット + それがどの月・何年目か」だけを渡し、
+   * 表示用の組み立て(12 か月ぶんを溜めて表示格子へ落とす)は呼び出し側が行う。
+   * 加速器が表示の都合を知らずに済むようにするための分担。
+   *
+   * 呼ばれる間隔は 1 か月ぶんの時間ステップごと(= stepsPerYear / 12)。
+   * valuesC は呼び出しの直後に上書きされうるので、保持するなら複製すること。
+   */
+  onCoarseSnapshot?:
+    | ((s: {
+        valuesC: Float32Array;
+        /** 0〜11。この間隔で呼ぶので各月ちょうど 1 回ずつ埋まる */
+        monthIndex: number;
+        /** 何年目か(1 始まり) */
+        year: number;
+      }) => void)
+    | undefined;
 }

@@ -66,7 +66,19 @@ function currentVector(): Record<string, number> {
 
 function loadState(): OptState {
   const existing = loadStateStrict<OptState>(STATE_PATH);
-  if (existing) return existing;
+  if (existing) {
+    // **JSON は -Infinity を表せない**(JSON.stringify が null にする)。
+    // 状態ファイルを外から作った場合、bestFit が null で読み込まれ、
+    // 「基準線をまだ測っていない」判定(=== -Infinity)をすり抜けて
+    // 降下へ直行してしまう(2026-08-04 に実際に踏んだ。実害は無かったが、
+    // 「基準線を測ってから降下に入る」という設計が一度抜けていた)。
+    // 読み込み時にここで戻す。
+    if (existing.bestFit === null || existing.bestFit === undefined) {
+      existing.bestFit = -Infinity;
+      existing.bestScores = null;
+    }
+    return existing;
+  }
   return {
     best: currentVector(),
     bestFit: -Infinity,
@@ -303,6 +315,21 @@ async function main(): Promise<void> {
   };
 
   while (Date.now() < deadline) {
+    // 停止ファイルによる**行儀のよい停止**(2026-08-04 追加)。
+    // out/optimize/stop_<run> を置くと、次のバッチへ入らずに抜ける。
+    // プロセスを殺すと実行中のバッチ(評価 2 件、実時間 10 分ぶん)が失われるので、
+    // 待てるときはこちらを使う。**この判定はバッチの切れ目にしか無い**ので、
+    // 置いてから実際に止まるまで最大 1 バッチぶんかかる
+    if (RUN_NAME && fs.existsSync(path.join(OUT_DIR, `stop_${RUN_NAME}`))) {
+      console.log(`停止ファイルを検知したので、バッチの切れ目で終了します`);
+      try {
+        fs.unlinkSync(path.join(OUT_DIR, `stop_${RUN_NAME}`));
+      } catch {
+        /* 消せなくても止まることを優先する */
+      }
+      break;
+    }
+
     if (state.phase === 'screen') {
       if (state.screenCursor >= SPACE.length) {
         state.phase = 'descent';

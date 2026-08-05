@@ -231,7 +231,14 @@ async function runPipelineCore(
     throwIfCancelled(opts?.signal, RUN_STAGE_LABELS[runStage]);
     const progress = planner.begin(runStage);
     const stageOpts: RunOptions | undefined = opts
-      ? { accel: opts.accel, signal: opts.signal, budget: opts.budget, progress }
+      ? {
+          accel: opts.accel,
+          signal: opts.signal,
+          budget: opts.budget,
+          progress,
+          // ウォームスタートの箱は**参照のまま**渡す(段が書き戻すため)
+          ebmWarmStart: opts.ebmWarmStart,
+        }
       : undefined;
     const compute = (): Promise<T> => time(label, () => fn(stageOpts));
     const out =

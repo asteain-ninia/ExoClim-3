@@ -26,14 +26,31 @@
 
 import { GPU_WORKGROUP_SIZE, ReadbackStage, asBufferSource, type GpuContext } from './device';
 import { MONTHS_PER_YEAR } from '@/domain/insolation';
-import type { EbmAccel, EbmAccelResult, EbmConstants, EbmStaticFields } from '../accel';
+import type {
+  AccelControl,
+  EbmAccel,
+  EbmAccelResult,
+  EbmConstants,
+  EbmStaticFields,
+} from '../accel';
+import { throwIfCancelled, yieldToEventLoop } from '../run_control';
 
 /** セル別静的場の本数(WGSL 側の添字と一致させる) */
 const CELL_FIELDS = 10;
 /** 作業領域の本数 */
 const WORK_FIELDS = 12;
-/** 残差バッファに収まる時間ステップ数の上限 */
-const MAX_STEPS = 8192;
+/**
+ * 残差バッファに収まる時間ステップ数の上限。
+ *
+ * **掲げた上限が下流の上限に収まっているか**(教訓 §9)。step05 は周期定常に
+ * 達しないと全熱容量の年数を 24 → 48 → …(上限 EBM_MAX_FULL_CAPACITY_YEARS
+ * = 64)と倍増させる。240 刻みなので **64 年 + 加速期 2 年 = 15,840 ステップ**
+ * が要る。旧値 8192 では 34 年ぶんしか無く、掲げた 64 年に原理的に到達できず、
+ * しかも未収束と診断される前に例外で死んでいた(2026-08-02 に前セッションが
+ * 発見、未修正のまま申し送り)。
+ * 増やす費用は残差バッファ 64KB とステージング 32KB だけで、実質ゼロ。
+ */
+const MAX_STEPS = 16384;
 
 const WGSL = /* wgsl */ `
 struct Params {
@@ -378,6 +395,7 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
   const pf = new Float32Array(paramBuf);
 
   return {
+    maxSteps: MAX_STEPS,
     destroy(): void {
       for (const b of [
         bufCells,
@@ -396,7 +414,11 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
       stage.destroy();
     },
 
-    async run(fields: EbmStaticFields, k: EbmConstants): Promise<EbmAccelResult> {
+    async run(
+      fields: EbmStaticFields,
+      k: EbmConstants,
+      control?: AccelControl,
+    ): Promise<EbmAccelResult> {
       const CW = fields.widthCells;
       const CH = fields.heightCells;
       if (CW * CH !== N) throw new Error(`EBM のセル数が違う(確保 ${N} / 要求 ${CW * CH})`);
@@ -465,7 +487,14 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
       device.queue.writeBuffer(bufResidual, 0, asBufferSource(scratchResidual));
 
       const totalSteps = fields.years * fields.stepsPerYear;
-      if (totalSteps > MAX_STEPS) throw new Error(`時間ステップ数が上限を超えた(${totalSteps})`);
+      // ここに来る時点で呼び出し側が maxSteps を見て抑えているはず。
+      // それでも超えたら実装の不整合なので、黙って切り詰めず明示的に落とす
+      if (totalSteps > MAX_STEPS) {
+        throw new Error(
+          `時間ステップ数が上限を超えた(${totalSteps} > ${MAX_STEPS})。` +
+            `呼び出し側が EbmAccel.maxSteps を見て年数を抑えていない`,
+        );
+      }
       // 全熱容量の年数は**呼び出し側から受け取る**。ここにベタ書きすると
       // CPU 側の定数を振っても GPU に届かず、実験が無効になる(2026-08-02 実害)
       const spinupSteps = Math.max(
@@ -478,7 +507,23 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
       const monthCount = new Array<number>(M).fill(0);
       const polarGroups = Math.ceil(CH / GPU_WORKGROUP_SIZE);
 
+      // ---- 中断と進捗の刻み ----
+      // 1 submit は 1 時間ステップぶん(反復 512 で実測 40ms 前後)。ここで
+      // イベントループへ返さないと Worker が「キャンセル」を受け取れず、
+      // 数分間まったく反応しない。刻みは実測に合わせて選ぶ:
+      //   刻みすぎ → yield と読み戻しの固定費が乗る
+      //   粗すぎ   → 中断の反応が鈍り、途中経過が飛び飛びになる
+      // 刻みは **1 か月ぶんの時間ステップ**(既定 240/12 = 20)にする。
+      // こうするとスナップショットが各月ちょうど 1 回ずつ落ちるので、
+      // 呼び出し側は 1 モデル年で 12 か月ぶんの表示用の場を組める。
+      // 20 ステップ ≈ 1 秒間隔。yield は数十 µs、読み戻しは 0.3ms。
+      const TICK_STEPS = Math.max(1, Math.round(fields.stepsPerYear / M));
+      const wantsSnapshot = control?.onCoarseSnapshot !== undefined;
+
       for (let step = 0; step < totalSteps; step++) {
+        // 中断は**次の submit を積む前**に見る。積んでしまった仕事は
+        // GPU 側で走り切るので、細かく見ても反応は速くならない
+        if (step % TICK_STEPS === 0) throwIfCancelled(control?.signal, 'EBM');
         const capScale = step < spinupSteps ? 1 / 16 : 1;
         const yearFrac = (step % fields.stepsPerYear) / fields.stepsPerYear;
         const monthFloat = yearFrac * M;
@@ -547,7 +592,32 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
           run(pipePolar, polarGroups);
         }
         run(pipeFinish, 1);
+        // 途中経過の読み戻しは**計算と同じ submit** に積む。別々に submit すると
+        // 3 回目の読み戻しでアクセス違反が起きた(device.ts の実測注記)。
+        const tickEnd = step % TICK_STEPS === TICK_STEPS - 1 || step === totalSteps - 1;
+        const emit = wantsSnapshot && tickEnd;
+        if (emit) stage.enqueueCopyAt(enc, bufTemp, 0, N);
         device.queue.submit([enc.finish()]);
+        const yearNow = Math.floor(step / fields.stepsPerYear) + 1;
+        if (emit) {
+          // mapAsync は GPU の完了を待つので、ここでイベントループへ返る
+          // (= キャンセル要求を受け取れる)。別途 yield する必要は無い
+          const view = await stage.map(N);
+          control?.onCoarseSnapshot?.({
+            valuesC: view.subarray(0, N),
+            monthIndex,
+            year: yearNow,
+          });
+        } else if (tickEnd) {
+          // 進捗の受け手がいなくても、中断を受け取るために制御は返す
+          await yieldToEventLoop();
+        }
+        if (tickEnd) {
+          control?.progress?.({
+            fraction: (step + 1) / totalSteps,
+            detail: `EBM 積分 ${yearNow}/${fields.years} 年目・反復 ${iters}`,
+          });
+        }
       }
 
       // 読み戻しは 1 回だけ(積算 + 最終温度 + 残差)

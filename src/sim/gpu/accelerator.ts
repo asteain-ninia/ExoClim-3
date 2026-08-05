@@ -1,27 +1,21 @@
-// SimAccelerator の WebGPU 実装。**Node 専用**(webgpu パッケージに依存)。
+// SimAccelerator の WebGPU 実装。**プラットフォーム非依存**。
 //
 // 対応 spec: なし(実行基盤)。src/sim/accel.ts の受け口をここで埋める。
-// ブラウザ用バンドルはこのファイルを import しない — 計算層は型しか知らず、
-// 加速器は呼び出し側(scripts/)が明示的に渡す。
+// デバイスは呼び出し側が渡す(Node は accelerator_node.ts、ブラウザは
+// src/worker/gpu.ts)。計算層は型しか知らず、加速器は明示的に渡される。
 
-import { acquireGpu, releaseGpu, type GpuContext } from './device';
+import type { GpuContext } from './device';
 import { createMoistureTraceGpu } from './moisture_trace_gpu';
 import { createSoilWaterGpu } from './soil_water_gpu';
 import { createEbmGpu } from './ebm_gpu';
 import type { EbmAccel, MoistureTraceAccel, SimAccelerator, SoilWaterAccel } from '../accel';
 
 /**
- * GPU 加速器を取得する。GPU が使えなければ null(呼び出し側は素で走らせる)。
+ * 渡されたデバイスの上に加速器を組む。
  *
  * 資源はセル数ごとに常駐する。**解像度を変えても作り直さない**のは、
  * 較正が同じ解像度で数千回パイプラインを回すため。
  */
-export async function createGpuAccelerator(): Promise<SimAccelerator | null> {
-  const gpu = await acquireGpu();
-  if (!gpu) return null;
-  return makeAccelerator(gpu);
-}
-
 export function makeAccelerator(gpu: GpuContext): SimAccelerator {
   const traces = new Map<number, MoistureTraceAccel>();
   const soils = new Map<number, SoilWaterAccel>();
@@ -58,7 +52,7 @@ export function makeAccelerator(gpu: GpuContext): SimAccelerator {
       traces.clear();
       soils.clear();
       ebms.clear();
-      releaseGpu();
+      gpu.destroy();
     },
   };
 }

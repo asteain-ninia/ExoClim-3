@@ -20,7 +20,7 @@ import { EARTH_PARAMS } from '../src/domain/planetParams';
 import { buildCrestElev, buildSmallWaterMask } from '../src/sim/step06_precipitation';
 import { MODEL_CONSTANTS as K } from '../src/sim/constants';
 import { cellHeightKm } from '../src/domain/grid';
-import { acquireGpu, releaseGpu } from '../src/sim/gpu/device';
+import { acquireGpu, releaseGpu } from '../src/sim/gpu/device_node';
 import { createMoistureTraceGpu } from '../src/sim/gpu/moisture_trace_gpu';
 
 const REPEATS = Number(process.argv[2] ?? 2000);

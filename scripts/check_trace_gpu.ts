@@ -17,7 +17,7 @@ import {
 } from '../src/sim/step06_precipitation';
 import { MODEL_CONSTANTS as K } from '../src/sim/constants';
 import { cellHeightKm } from '../src/domain/grid';
-import { acquireGpu, releaseGpu } from '../src/sim/gpu/device';
+import { acquireGpu, releaseGpu } from '../src/sim/gpu/device_node';
 import { createMoistureTraceGpu } from '../src/sim/gpu/moisture_trace_gpu';
 
 async function main(): Promise<void> {
