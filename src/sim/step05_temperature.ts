@@ -257,7 +257,15 @@ export async function computeTemperature(
    * 前パスの陸面の状態(2 パス目でのみ渡る)。**降水ではなく蒸発散を読む** —
    * 理由は types.ts の LandSurfaceState を参照
    */
-  priorSurface?: { land?: LandSurfaceState },
+  priorSurface?: {
+    land?: LandSurfaceState;
+    /**
+     * 前パスの月別気温(1° 格子)。蒸発帰還を線形化する基準点 T_ref。
+     * **蒸発散を計算したときの気温**でなければ展開の意味が無いので、
+     * land と同じパスのものを渡すこと
+     */
+    priorTemperatureC?: Float32Array[];
+  },
   opts?: RunOptions,
 ): Promise<TemperatureResult> {
   const { params } = ctx;
@@ -508,6 +516,17 @@ export async function computeTemperature(
     priorSurface?.land && K.evapCoolingWm2PerMmDay > 0
       ? buildEvapCoolingAnomaly(ctx, priorSurface.land.monthlyEtMm, cg, coarse)
       : null;
+  // 蒸発帰還(∂LE/∂T)。陽的な冷却と独立に効かせられるよう、条件も独立に持つ
+  const evapFb =
+    priorSurface?.land && priorSurface.priorTemperatureC && K.evapFeedbackFrac > 0
+      ? buildEvapFeedback(
+          ctx,
+          priorSurface.land.monthlyEtMm,
+          priorSurface.priorTemperatureC,
+          cg,
+          coarse,
+        )
+      : null;
   // 夏半球は結合を弱める(ジェット弱化で大陸が海洋の影響から解放される —
   // 旧・帯状移流の seasonFactor を踏襲)
   const meanRidgeN =
@@ -562,6 +581,8 @@ export async function computeTemperature(
     if (initialIce) iceMm.set(initialIce);
     /** 伝導コンダクタンス k/h(W/m²/K)。0 層模型のときだけ非零 */
     const iceCond = new Float64Array(N);
+    /** 蒸発帰還 ∂LE/∂T(W/m²/K)。月の按分込み。無効なら全 0 のまま */
+    const evapK = new Float64Array(N);
     const slabIce = K.seaIceModel > 0;
     /** 直近の論理スイープでの最大 |Δt|(°C)。残差基準の打ち切りに使う */
     let maxDelta = 0;
@@ -647,9 +668,21 @@ export async function computeTemperature(
               ? (K.seaIceConductivityWmK * oceanFrac * 1000) /
                 Math.max(K.seaIceMinThicknessMm, iceMm[i] ?? 0)
               : 0;
+          // 蒸発帰還: LE(T) ≈ LE(T_ref) + k·(T − T_ref) の第 2 項を陰的に扱う。
+          // 対角へ k、右辺へ k·T_ref。**k と T_ref は同じ月按分で読む**
+          // (別々に按分すると展開の基準点がずれる)
+          if (evapFb) {
+            const k0 = evapFb.kWm2PerK[m0]?.[i] ?? 0;
+            const k1 = evapFb.kWm2PerK[m1]?.[i] ?? 0;
+            evapK[i] = k0 * (1 - frac) + k1 * frac;
+          }
+          const tRef = evapFb
+            ? (evapFb.refTempC[m0]?.[i] ?? 0) * (1 - frac) + (evapFb.refTempC[m1]?.[i] ?? 0) * frac
+            : 0;
           rhs[i] =
             ((capEff[i] ?? 1) / dt) * (t[i] ?? 0) +
             (iceCond[i] ?? 0) * K.seaFreezeC +
+            (evapK[i] ?? 0) * tRef +
             s * (1 - albedo) -
             (aEff[i] ?? K.olrAWm2) +
             (qFlux[i] ?? 0) -
@@ -792,6 +825,7 @@ export async function computeTemperature(
               cOverDt +
               K.olrBWm2PerC +
               (iceCond[i] ?? 0) +
+              (evapK[i] ?? 0) +
               gzE +
               gzW +
               gNEff +
@@ -965,6 +999,7 @@ export async function computeTemperature(
       windU: windOnCg.u,
       windV: windOnCg.v,
       evapAnom: evapAnomWm2,
+      evapFeedback: evapFb ? { k: evapFb.kWm2PerK, refTempC: evapFb.refTempC } : null,
       ridgeLatN: f32(windBelt.monthlyRidgeLatNDeg),
       ridgeLatS: f32(windBelt.monthlyRidgeLatSDeg),
       meanRidgeN,
@@ -1313,6 +1348,96 @@ function aggregateToCoarse(
     }
   }
   return out;
+}
+
+/**
+ * 蒸発帰還 ∂LE/∂T(W/m²/K、月別・EBM 格子)と、その線形化の基準温度 T_ref(°C)。
+ *
+ * 対応: docs/事前登録_蒸発帰還_2026-08-07.md
+ *
+ * 気温が上がれば飽和水蒸気圧が上がって蒸発散が増え、潜熱の持ち出しが強まる。
+ * これは**負帰還**なので行列の対角へ入る。前パスの気温 T_ref のまわりで
+ * 線形化する(ニュートン法と同じ形):
+ *
+ *   LE(T) ≈ LE(T_ref) + k·(T − T_ref)
+ *   k = frac · λ · α(T_ref) · (E − Ē)
+ *   α(T) = L_v / (R_v·T²)   … クラウジウス・クラペイロン(288K で 0.064/K)
+ *
+ * **偏差 (E − Ē) を使う**のは陽的項と基準を揃えるため(平均は OLR に吸収済み)。
+ * 乾いた陸では k が負になり減衰が弱まる — 砂漠の乾熱で、狙い通りの符号。
+ * ただし対角優位を壊さないよう、負側は olrB の半分までに留める。
+ */
+function buildEvapFeedback(
+  ctx: SimContext,
+  monthlyEtMm: Float32Array[],
+  priorTemperatureC: Float32Array[],
+  cg: Grid,
+  coarse: CoarseCell[],
+): { kWm2PerK: Float32Array[]; refTempC: Float32Array[] } {
+  const src = ctx.grid;
+  const LV = 2.45e6; // 蒸発潜熱 J/kg
+  const RV = 461.5; // 水蒸気の気体定数 J/(kg·K)
+  const kOut: Float32Array[] = [];
+  const tOut: Float32Array[] = [];
+  for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+    const et = monthlyEtMm[m];
+    const tp = priorTemperatureC[m];
+    const kField = new Float32Array(cg.cellCount);
+    const tField = new Float32Array(cg.cellCount);
+    const etAcc = new Float32Array(cg.cellCount);
+    const n = new Float32Array(cg.cellCount);
+    // T_ref は全セル(海も)必要。E は陸だけ
+    const tAcc = new Float32Array(cg.cellCount);
+    const tN = new Float32Array(cg.cellCount);
+    for (let row = 0; row < src.heightCells; row++) {
+      const cgRow = Math.min(
+        cg.heightCells - 1,
+        Math.floor((row * src.resolutionDeg) / cg.resolutionDeg),
+      );
+      for (let col = 0; col < src.widthCells; col++) {
+        const si = row * src.widthCells + col;
+        const cgCol = Math.min(
+          cg.widthCells - 1,
+          Math.floor((col * src.resolutionDeg) / cg.resolutionDeg),
+        );
+        const ci = cgRow * cg.widthCells + cgCol;
+        tAcc[ci] = (tAcc[ci] ?? 0) + (tp?.[si] ?? 0);
+        tN[ci] = (tN[ci] ?? 0) + 1;
+        if (!ctx.terrain.landMask[si]) continue;
+        etAcc[ci] = (etAcc[ci] ?? 0) + (et?.[si] ?? 0);
+        n[ci] = (n[ci] ?? 0) + 1;
+      }
+    }
+    // 陸面平均(セル数重みの近似 — 陽的項 buildEvapCoolingAnomaly と同じ基準)
+    let sum = 0;
+    let cnt = 0;
+    for (let i = 0; i < cg.cellCount; i++) {
+      if ((n[i] ?? 0) > 0) {
+        etAcc[i] = (etAcc[i] ?? 0) / (n[i] ?? 1) / 30; // mm/月 → mm/日
+        sum += etAcc[i] ?? 0;
+        cnt++;
+      }
+      tField[i] = (tAcc[i] ?? 0) / Math.max(1, tN[i] ?? 1);
+    }
+    const meanMmDay = cnt > 0 ? sum / cnt : 0;
+    const kFloor = -0.5 * K.olrBWm2PerC;
+    for (let i = 0; i < cg.cellCount; i++) {
+      const landFrac = coarse[i]?.landFrac ?? 0;
+      if ((n[i] ?? 0) > 0 && landFrac > 0.2) {
+        const anomMmDay = Math.max(-3, Math.min(5, (etAcc[i] ?? 0) - meanMmDay));
+        const tK = Math.max(200, (tField[i] ?? 0) + 273.15);
+        const alpha = LV / (RV * tK * tK);
+        const k =
+          K.evapFeedbackFrac * K.evapLatentWm2PerMmDay * alpha * anomMmDay * landFrac;
+        kField[i] = Math.max(kFloor, k);
+      } else {
+        kField[i] = 0;
+      }
+    }
+    kOut.push(kField);
+    tOut.push(tField);
+  }
+  return { kWm2PerK: kOut, refTempC: tOut };
 }
 
 /**

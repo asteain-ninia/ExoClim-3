@@ -163,6 +163,12 @@ export interface EbmStaticFields {
   windV: Float32Array[];
   /** [month][cell] 蒸発冷却の異常フラックス W/m²(無ければ null) */
   evapAnom: Float32Array[] | null;
+  /**
+   * [month][cell] 蒸発帰還 ∂LE/∂T(W/m²/K)と、その線形化の基準温度 °C。
+   * 対角へ k、右辺へ k·T_ref を足す。無ければ null(帰還なし)。
+   * **両方揃って初めて意味を持つ**ので 1 つの組で渡す
+   */
+  evapFeedback: { k: Float32Array[]; refTempC: Float32Array[] } | null;
   /** [month] リッジ緯度(北/南)と、その年平均(夏判定用) */
   ridgeLatN: Float32Array;
   ridgeLatS: Float32Array;

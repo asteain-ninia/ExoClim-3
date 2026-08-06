@@ -37,8 +37,10 @@ import { throwIfCancelled, yieldToEventLoop } from '../run_control';
 
 /** セル別静的場の本数(WGSL 側の添字と一致させる) */
 const CELL_FIELDS = 10;
+/** 月別セル別の場の数: 0 cloud, 1 windU, 2 windV, 3 evap, 4 evapFbK, 5 evapRefT */
+const MONTHLY_FIELDS = 6;
 /** 作業領域の本数 */
-const WORK_FIELDS = 12;
+const WORK_FIELDS = 13;
 /**
  * 残差バッファに収まる時間ステップ数の上限。
  *
@@ -62,7 +64,7 @@ struct Params {
   chanFactor : f32, summerAdv : f32, advCoupling : f32, winterInvDiff : f32,
   winterInvAdv : f32, dPhi : f32, resDeg : f32, ridgeAbsN : f32,
   ridgeAbsS : f32, summerN : u32, summerS : u32, hasEvap : u32,
-  accumulate : u32, accumSlot : u32, _p0 : u32, _p1 : u32,
+  accumulate : u32, accumSlot : u32, hasEvapFb : u32, _p1 : u32,
 };
 
 @group(0) @binding(0) var<uniform> P : Params;
@@ -72,7 +74,8 @@ struct Params {
 // 行別(間隔は ch): 0 cosCenter, 1 metricZonal, 2 rowIsChannel, 3 insolAnnual,
 //                   4.. 12 か月の日射
 @group(0) @binding(2) var<storage, read> rows : array<f32>;
-// 月別セル別(各 12*N): 0 cloud, 1 windU, 2 windV, 3 evap
+// 月別セル別(各 12*N): 0 cloud, 1 windU, 2 windV, 3 evap,
+//                     4 evapFbK(W/m²/K), 5 evapRefT(°C)
 @group(0) @binding(3) var<storage, read> monthly : array<f32>;
 // **temp は二役**: 各時間ステップの入口では前ステップの温度 T^n(prepA が
 // 右辺 (C/dt)·T^n を作るのに読む)、以降は反復の作業変数。prepA より前に
@@ -80,7 +83,7 @@ struct Params {
 // (2026-08-02 に初期推定の外挿を prepA の前へ置いて気温 RMSE 3000°C を出した)
 @group(0) @binding(4) var<storage, read_write> temp : array<f32>;
 // 作業: 0 rhs, 1 diag, 2 gzE, 3 gzW, 4 gN, 5 gS, 6 advCu, 7 advCv,
-//       8 upwindU, 9 upwindV, 10 dfEff, 11 cOverDt
+//       8 upwindU, 9 upwindV, 10 dfEff, 11 cOverDt, 12 evapK
 // dfEff と diag を別の場に分けるのは、第 2 段が隣接セルの dfEff を読みながら
 // 自セルへ diag を書くため(同じ場だと未読のスレッドの入力を壊す)
 @group(0) @binding(5) var<storage, read_write> work : array<f32>;
@@ -139,8 +142,17 @@ fn prepA(@builtin(global_invocation_id) gid : vec3<u32>) {
   if (P.hasEvap == 1u) {
     evap = monthlyF(3u, P.m0, i) * (1.0 - P.frac) + monthlyF(3u, P.m1, i) * P.frac;
   }
+  // 蒸発帰還 ∂LE/∂T。対角へ k、右辺へ k·T_ref(CPU 版と同じ月按分)
+  var evapK = 0.0;
+  var evapRhs = 0.0;
+  if (P.hasEvapFb == 1u) {
+    evapK = monthlyF(4u, P.m0, i) * (1.0 - P.frac) + monthlyF(4u, P.m1, i) * P.frac;
+    let tRef = monthlyF(5u, P.m0, i) * (1.0 - P.frac) + monthlyF(5u, P.m1, i) * P.frac;
+    evapRhs = evapK * tRef;
+  }
+  setWork(12u, i, evapK);
   let cOverDt = capEff / P.dtSec;
-  setWork(0u, i, cOverDt * temp[i] + s * (1.0 - albedo) - cellF(1u, i) + cellF(4u, i) - evap);
+  setWork(0u, i, cOverDt * temp[i] + s * (1.0 - albedo) - cellF(1u, i) + cellF(4u, i) - evap + evapRhs);
   // 冬(月日射 < 年平均)の陸は接地逆転層で拡散が地表に届きにくい
   var invD = 1.0;
   if (insolOf(P.m0, r) < rowF(3u, r)) {
@@ -222,7 +234,7 @@ fn prepB(@builtin(global_invocation_id) gid : vec3<u32>) {
   let gzW = gz * 0.5 * (dfI + workF(10u, west));
   let gNEff = gN * 0.5 * (dfI + workF(10u, north));
   let gSEff = gS * 0.5 * (dfI + workF(10u, south));
-  setWork(1u, i, workF(11u, i) + P.olrB + gzE + gzW + gNEff + gSEff + advCu + advCv);
+  setWork(1u, i, workF(11u, i) + P.olrB + workF(12u, i) + gzE + gzW + gNEff + gSEff + advCu + advCv);
   setWork(2u, i, gzE);
   setWork(3u, i, gzW);
   setWork(4u, i, gNEff);
@@ -328,7 +340,7 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
 
   const bufCells = device.createBuffer({ size: CELL_FIELDS * N * 4, usage: ST | CD });
   const bufRows = device.createBuffer({ size: ROW_FIELDS * MAX_ROWS * 4, usage: ST | CD });
-  const bufMonthly = device.createBuffer({ size: 4 * M * N * 4, usage: ST | CD });
+  const bufMonthly = device.createBuffer({ size: MONTHLY_FIELDS * M * N * 4, usage: ST | CD });
   const bufTemp = device.createBuffer({ size: N * 4, usage: ST | CS | CD });
   const bufWork = device.createBuffer({ size: WORK_FIELDS * N * 4, usage: ST });
   const bufAccum = device.createBuffer({ size: M * N * 4, usage: ST | CS | CD });
@@ -385,7 +397,7 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
   const cellGroups = Math.ceil(N / GPU_WORKGROUP_SIZE);
   const scratchCells = new Float32Array(CELL_FIELDS * N);
   const scratchRows = new Float32Array(ROW_FIELDS * MAX_ROWS);
-  const scratchMonthly = new Float32Array(4 * M * N);
+  const scratchMonthly = new Float32Array(MONTHLY_FIELDS * M * N);
   const scratchTemp = new Float32Array(N);
   const scratchZeroCells = new Float32Array(M * N);
   const scratchResidual = new Float32Array(MAX_STEPS);
@@ -468,6 +480,8 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
       }
       for (let m = 0; m < M; m++) {
         scratchMonthly.set(fields.evapAnom?.[m] ?? zeroMonth, (3 * M + m) * N);
+        scratchMonthly.set(fields.evapFeedback?.k[m] ?? zeroMonth, (4 * M + m) * N);
+        scratchMonthly.set(fields.evapFeedback?.refTempC[m] ?? zeroMonth, (5 * M + m) * N);
       }
       device.queue.writeBuffer(bufMonthly, 0, asBufferSource(scratchMonthly));
 
@@ -569,6 +583,7 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
         pu[29] = ridgeNNow > fields.meanRidgeN ? 1 : 0;
         pu[30] = ridgeSNow < fields.meanRidgeS ? 1 : 0;
         pu[31] = fields.evapAnom ? 1 : 0;
+        pu[34] = fields.evapFeedback ? 1 : 0;
         pu[32] = accumulate ? 1 : 0;
         pu[33] = accumSlot;
         device.queue.writeBuffer(bufParams, 0, paramBuf);

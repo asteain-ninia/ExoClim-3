@@ -184,9 +184,12 @@ async function runPipelineCore(
   // 事前に確定する。**帰還の口は 2 つあり、どちらか一方でも有効なら 2 パス**:
   //   蒸発冷却(潜熱)      … evapCoolingWm2PerMmDay > 0
   //   熱容量の土壌水分依存 … landDryCapacityFrac < 1
+  //   蒸発帰還(∂LE/∂T)    … evapFeedbackFrac > 0
   // どちらも前パスの土壌水分を読むので、必要な 2 パス目は同じ 1 回で足りる
   const twoPass =
-    MODEL_CONSTANTS.evapCoolingWm2PerMmDay > 0 || MODEL_CONSTANTS.landDryCapacityFrac < 1;
+    MODEL_CONSTANTS.evapCoolingWm2PerMmDay > 0 ||
+    MODEL_CONSTANTS.landDryCapacityFrac < 1 ||
+    MODEL_CONSTANTS.evapFeedbackFrac > 0;
   const units: Array<{ stage: RunStage; cost: number }> = [
     { stage: 'context', cost: STAGE_COST.context },
     { stage: 'prepass', cost: STAGE_COST.prepass },
@@ -360,8 +363,32 @@ async function runPipelineCore(
     temperature = await stage(
       'temperature',
       'step5b_temperature',
-      [context, itcz, windBelt, ocean, airflow, precipitation1, P.atmosphere, ...solverKey],
-      (o) => computeTemperature(context, itcz, windBelt, ocean, airflow, precipitation1, o),
+      [
+        context,
+        itcz,
+        windBelt,
+        ocean,
+        airflow,
+        precipitation1,
+        temperature1,
+        P.atmosphere,
+        ...solverKey,
+      ],
+      // 蒸発帰還は前パスの**気温**のまわりで線形化するので、蒸発散を出したときの
+      // 気温(= temperature1)を一緒に渡す。片方だけでは展開の基準点にならない
+      (o) =>
+        computeTemperature(
+          context,
+          itcz,
+          windBelt,
+          ocean,
+          airflow,
+          {
+            ...(precipitation1.land ? { land: precipitation1.land } : {}),
+            priorTemperatureC: temperature1.monthlyTemperatureC,
+          },
+          o,
+        ),
       (r) => ({ temperature: r }),
     );
     // 2 パス目が最終場になるため、診断も 2 パス目のもので上書きする
