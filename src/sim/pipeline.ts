@@ -185,11 +185,13 @@ async function runPipelineCore(
   //   蒸発冷却(潜熱)      … evapCoolingWm2PerMmDay > 0
   //   熱容量の土壌水分依存 … landDryCapacityFrac < 1
   //   蒸発帰還(∂LE/∂T)    … evapFeedbackFrac > 0
+  //   陸の対流雲          … landCloudBoost > 0
   // どちらも前パスの土壌水分を読むので、必要な 2 パス目は同じ 1 回で足りる
   const twoPass =
     MODEL_CONSTANTS.evapCoolingWm2PerMmDay > 0 ||
     MODEL_CONSTANTS.landDryCapacityFrac < 1 ||
-    MODEL_CONSTANTS.evapFeedbackFrac > 0;
+    MODEL_CONSTANTS.evapFeedbackFrac > 0 ||
+    MODEL_CONSTANTS.landCloudBoost > 0;
   const units: Array<{ stage: RunStage; cost: number }> = [
     { stage: 'context', cost: STAGE_COST.context },
     { stage: 'prepass', cost: STAGE_COST.prepass },
@@ -386,6 +388,7 @@ async function runPipelineCore(
           {
             ...(precipitation1.land ? { land: precipitation1.land } : {}),
             priorTemperatureC: temperature1.monthlyTemperatureC,
+            priorPrecipMm: precipitation1.monthlyPrecipMm,
           },
           o,
         ),

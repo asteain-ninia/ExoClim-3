@@ -265,6 +265,11 @@ export async function computeTemperature(
      * land と同じパスのものを渡すこと
      */
     priorTemperatureC?: Float32Array[];
+    /**
+     * 前パスの月別降水(1° 格子、mm/月)。陸の対流雲の駆動量。
+     * **飽和させて使う**ので降水の誤差が温度へ増幅されない
+     */
+    priorPrecipMm?: Float32Array[];
   },
   opts?: RunOptions,
 ): Promise<TemperatureResult> {
@@ -396,6 +401,12 @@ export async function computeTemperature(
   }
 
   // ---- 雲アルベドの循環変調(月別・セル別) ----
+  // 陸の対流・前線雲の駆動量(EBM 格子・月別の陸降水 mm/月)。
+  // 無効(landCloudBoost = 0)なら作らない = 従来と厳密に一致する
+  const landPrecipCg: Float32Array[] | null =
+    priorSurface?.priorPrecipMm && K.landCloudBoost > 0
+      ? coarsenLandField(ctx, priorSurface.priorPrecipMm, cg)
+      : null;
   const cloudAlbedoMonthly: Float32Array[] = [];
   for (let m = 0; m < MONTHS_PER_YEAR; m++) {
     const field = new Float32Array(N);
@@ -449,13 +460,23 @@ export async function computeTemperature(
           sstA < 0 ? K.stratocumulusBoostPerNegC * Math.min(1.5, -sstA / 2) * oceanFrac : 0;
         // 周極海峡行は常時ストーム雲(南大洋型。上限も少し引き上げる)
         const chanCloud = rowIsChannel[row] ? K.channelCloudBoost * oceanFrac : 0;
+        // 陸の対流・前線雲。**海側の項がすべて oceanFrac 倍で入っている**ため、
+        // これが無いと中高緯度の夏の大陸は月 100mm 降っていても雲が基準値のまま。
+        // 供給を飽和させるので、降水が過大な場所でも雲は上限で止まる
+        const landCloud =
+          landPrecipCg && K.landCloudBoost > 0
+            ? K.landCloudBoost *
+              landFrac *
+              Math.min(1, (landPrecipCg[m]?.[i] ?? 0) / K.landCloudSupplyNormMm)
+            : 0;
         const factor =
           1 -
           K.subsidenceCloudReduction * subsidenceWeight * ridgeProx * (1 - itczInf) +
           K.convectiveCloudBoost * itczInf +
           K.stormTrackCloudBoost * stormW * oceanFrac +
           scDeck +
-          chanCloud;
+          chanCloud +
+          landCloud;
         const capMax = K.cloudAlbedoMax + (rowIsChannel[row] ? 0.08 : 0);
         field[i] = Math.min(capMax, Math.max(0.04, atm.cloudAlbedo * factor));
       }
@@ -1385,6 +1406,42 @@ function aggregateToCoarse(
         sstAnomalyC: oceanN > 0 ? sstSum / oceanN : 0,
       };
     }
+  }
+  return out;
+}
+
+/**
+ * 1° の月別の場を EBM 粗格子へ**陸セルだけ**平均する(海セルは 0)。
+ * 陸の対流雲の駆動量を作るのに使う。
+ */
+function coarsenLandField(ctx: SimContext, monthly: Float32Array[], cg: Grid): Float32Array[] {
+  const src = ctx.grid;
+  const out: Float32Array[] = [];
+  for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+    const f = monthly[m];
+    const field = new Float32Array(cg.cellCount);
+    const n = new Float32Array(cg.cellCount);
+    for (let row = 0; row < src.heightCells; row++) {
+      const cgRow = Math.min(
+        cg.heightCells - 1,
+        Math.floor((row * src.resolutionDeg) / cg.resolutionDeg),
+      );
+      for (let col = 0; col < src.widthCells; col++) {
+        const si = row * src.widthCells + col;
+        if (!ctx.terrain.landMask[si]) continue;
+        const cgCol = Math.min(
+          cg.widthCells - 1,
+          Math.floor((col * src.resolutionDeg) / cg.resolutionDeg),
+        );
+        const ci = cgRow * cg.widthCells + cgCol;
+        field[ci] = (field[ci] ?? 0) + (f?.[si] ?? 0);
+        n[ci] = (n[ci] ?? 0) + 1;
+      }
+    }
+    for (let i = 0; i < cg.cellCount; i++) {
+      if ((n[i] ?? 0) > 0) field[i] = (field[i] ?? 0) / (n[i] ?? 1);
+    }
+    out.push(field);
   }
   return out;
 }
