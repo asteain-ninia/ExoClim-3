@@ -42,6 +42,13 @@ const MONTHLY_FIELDS = 6;
 /** 作業領域の本数 */
 const WORK_FIELDS = 14;
 /**
+ * ユニフォーム(Params)の大きさ。**WGSL の struct と CPU 側の ArrayBuffer が
+ * 必ずこれを共有すること。** CPU 側だけ小さいと、はみ出した書き込みが
+ * TypedArray の仕様で黙って捨てられ、定数が 0 のまま GPU へ渡る。
+ * WGSL のユニフォームは 16 バイトの倍数である必要がある
+ */
+const PARAM_BYTES = 192;
+/**
  * 残差バッファに収まる時間ステップ数の上限。
  *
  * **掲げた上限が下流の上限に収まっているか**(教訓 §9)。step05 は周期定常に
@@ -420,7 +427,7 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
   const bufPrev = device.createBuffer({ size: N * 4, usage: ST | CS | CD });
   const bufAccumPrev = device.createBuffer({ size: M * N * 4, usage: ST | CS | CD });
   const bufIce = device.createBuffer({ size: N * 4, usage: ST | CS | CD });
-  const bufParams = device.createBuffer({ size: 192, usage: GPUBufferUsage.UNIFORM | CD });
+  const bufParams = device.createBuffer({ size: PARAM_BYTES, usage: GPUBufferUsage.UNIFORM | CD });
   const stage = new ReadbackStage(device, 2 * M * N + N + MAX_STEPS + N);
 
   const module = device.createShaderModule({ code: WGSL });
@@ -479,7 +486,7 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
   const scratchZeroCells = new Float32Array(M * N);
   const scratchResidual = new Float32Array(MAX_STEPS);
   const zeroMonth = new Float32Array(N);
-  const paramBuf = new ArrayBuffer(144);
+  const paramBuf = new ArrayBuffer(PARAM_BYTES);
   const pu = new Uint32Array(paramBuf);
   const pf = new Float32Array(paramBuf);
 
