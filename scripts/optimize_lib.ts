@@ -45,6 +45,12 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['stormCloudSummerOcean', 0.5, 0.85],
   ['itczCloudWidthFactor', 0.7, 1.1],
   ['stratocumulusBoostPerNegC', 0.35, 0.75],
+  // 陸の対流雲の飽和量(mm/月)。**強さ landCloudBoost は敢えて入れていない。**
+  // v3 は boost を上げると単調に下がる(大分類が落ちるため)ので、探索空間へ
+  // 入れると座標降下が真っ先に 0 へ戻す — 他の定数が補償を見つける前に。
+  // 「座標降下は谷を渡れない」(教訓 §9)の典型なので、強さは構造として固定し、
+  // **効く場所の分布だけ**を較正に決めさせる。
+  ['landCloudSupplyNormMm', 40, 200],
   ['channelCloudBoost', 0.35, 0.8],
   ['circumpolarChannelFactor', 0.2, 0.5],
   ['winterInversionAdvectionFactor', 0.35, 0.7],
