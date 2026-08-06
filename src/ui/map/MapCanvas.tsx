@@ -7,10 +7,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { latDegOfRow, lonDegOfCol } from '@/domain/grid';
 import { KOPPEN_CLASSES } from '@/domain/koppen';
-import type { PipelineResult } from '@/sim/types';
+import type { PartialPipelineResult } from '@/sim/types';
 import { smoothForDrawing } from '@/domain/polyline';
-import { useResultsStore } from '@/store/results';
-import { useUiStore } from '@/store/ui';
+import { displayResult, useResultsStore } from '@/store/results';
+import { useUiStore, type OverlayKind } from '@/store/ui';
+import { hasLayer, LAYER_WAIT_REASON } from './layers';
 import earthKoppenObs from '@/domain/data/earth_koppen_1deg.json';
 import {
   currentColor,
@@ -22,12 +23,22 @@ import {
   OCEAN_COLOR,
 } from './colorScales';
 
+/** 断り書きに出す層の名前(タブの表記と合わせる) */
+const OVERLAY_LABEL: Partial<Record<OverlayKind, string>> = {
+  terrain: '地形',
+  currents: '海流',
+  pressure: '気圧・風帯',
+  temperature: '気温',
+  precipitation: '降水',
+  koppen: '気候区分',
+};
+
 const CANVAS_W = 1080;
 const CANVAS_H = 540;
 const SPACE_BG = '#0a0e18';
 
 export function MapCanvas() {
-  const result = useResultsStore((s) => s.result);
+  const result = useResultsStore(displayResult);
   const overlay = useUiStore((s) => s.overlay);
   const month = useUiStore((s) => s.month);
   const showItczLine = useUiStore((s) => s.showItczLine);
@@ -102,27 +113,40 @@ export function MapCanvas() {
     }
 
     // -- 基層ビットマップ --
+    // 途中結果ではまだ計算されていない層がある。その場合は**地形へ退避**して
+    // 「計算中」を別途出す。空白にすると地図の位置関係が分からなくなるので、
+    // 常に何かしら見えている状態を保つ(2026-08-03)
+    const layerReadyNow = hasLayer(result, overlay);
+    const koppenField = result.koppen;
+    const tempField = result.temperature;
+    const precipField = result.precipitation;
+    const oceanField = result.ocean;
+    const windBeltField = result.windBelt;
+    const airflowField = result.airflow;
+    const itczField = result.itcz;
+    const drawnOverlay: OverlayKind = layerReadyNow ? overlay : 'terrain';
+
     const img = new ImageData(W, H);
     for (let i = 0; i < grid.cellCount; i++) {
       const isLand = terrain.landMask[i] === 1;
       let rgb: readonly [number, number, number] = OCEAN_COLOR;
-      switch (overlay) {
+      switch (drawnOverlay) {
         case 'koppen':
-          rgb = koppenColor(result.koppen.classId[i] ?? 0, isLand);
+          rgb = koppenColor(koppenField?.classId[i] ?? 0, isLand);
           break;
         case 'temperature': {
           const t =
             month < 0
-              ? (result.temperature.annualMeanC[i] ?? 0)
-              : (result.temperature.monthlyTemperatureC[month]?.[i] ?? 0);
+              ? (tempField?.annualMeanC[i] ?? 0)
+              : (tempField?.monthlyTemperatureC[month]?.[i] ?? 0);
           rgb = temperatureColor(t);
           break;
         }
         case 'precipitation': {
           const p =
             month < 0
-              ? (result.precipitation.annualPrecipMm[i] ?? 0)
-              : (result.precipitation.monthlyPrecipMm[month]?.[i] ?? 0) * 12;
+              ? (precipField?.annualPrecipMm[i] ?? 0)
+              : (precipField?.monthlyPrecipMm[month]?.[i] ?? 0) * 12;
           rgb = precipitationColor(p, isLand);
           break;
         }
@@ -130,17 +154,17 @@ export function MapCanvas() {
           rgb = terrainColor(terrain.elevationMeters[i] ?? 0, isLand);
           break;
         case 'currents':
-          rgb = currentColor(result.ocean.sstAnomalyC[i] ?? 0, isLand);
+          rgb = currentColor(oceanField?.sstAnomalyC[i] ?? 0, isLand);
           break;
         case 'pressure': {
           let p: number;
           if (month < 0) {
             let sum = 0;
             for (let m = 0; m < 12; m++)
-              sum += result.windBelt.monthlyPressureAnomalyHpa[m]?.[i] ?? 0;
+              sum += windBeltField?.monthlyPressureAnomalyHpa[m]?.[i] ?? 0;
             p = sum / 12;
           } else {
-            p = result.windBelt.monthlyPressureAnomalyHpa[month]?.[i] ?? 0;
+            p = windBeltField?.monthlyPressureAnomalyHpa[month]?.[i] ?? 0;
           }
           rgb = pressureColor(p, isLand);
           break;
@@ -164,10 +188,10 @@ export function MapCanvas() {
     const cellH = CANVAS_H / H;
     const m = month < 0 ? 6 : month;
 
-    if (showItczLine) {
-      const centers = result.itcz.monthlyCenterLatDegByCol[m];
+    if (showItczLine && itczField) {
+      const centers = itczField.monthlyCenterLatDegByCol[m];
       if (centers) {
-        const hw = result.itcz.halfWidthDeg;
+        const hw = itczField.halfWidthDeg;
         const yOf = (lat: number) => ((90 - lat) / 180) * CANVAS_H;
         ctx2d.fillStyle = 'rgba(255, 120, 60, 0.14)';
         ctx2d.beginPath();
@@ -206,7 +230,7 @@ export function MapCanvas() {
       for (let row = 0; row < H; row++) {
         for (let col = 0; col < W; col++) {
           const i = row * W + col;
-          if (result.ocean.upwellingMask[i]) {
+          if (oceanField?.upwellingMask[i]) {
             ctx2d.fillStyle = 'rgba(90, 240, 255, 0.75)';
             ctx2d.fillRect(
               col * cellW + cellW * 0.3,
@@ -214,7 +238,7 @@ export function MapCanvas() {
               cellW * 0.4,
               cellH * 0.4,
             );
-          } else if (result.ocean.coralReefMask[i]) {
+          } else if (oceanField?.coralReefMask[i]) {
             ctx2d.fillStyle = 'rgba(120, 255, 150, 0.7)';
             ctx2d.beginPath();
             ctx2d.arc(
@@ -231,8 +255,8 @@ export function MapCanvas() {
 
       const lines =
         month >= 0
-          ? (result.ocean.monthlyStreamlines[month] ?? result.ocean.streamlines)
-          : result.ocean.streamlines;
+          ? (oceanField?.monthlyStreamlines[month] ?? oceanField?.streamlines ?? [])
+          : (oceanField?.streamlines ?? []);
       for (const sl of lines) {
         ctx2d.strokeStyle = colors[sl.kind];
         ctx2d.fillStyle = colors[sl.kind];
@@ -272,8 +296,7 @@ export function MapCanvas() {
 
     // 気温オーバーレイ: 等温線(6°C 刻み — WL#34/35 の作図表現)
     if (overlay === 'temperature') {
-      const field =
-        month < 0 ? result.temperature.annualMeanC : result.temperature.monthlyTemperatureC[month];
+      const field = month < 0 ? tempField?.annualMeanC : tempField?.monthlyTemperatureC[month];
       if (field) {
         const cw = CANVAS_W / W;
         const ch = CANVAS_H / H;
@@ -347,10 +370,10 @@ export function MapCanvas() {
     if (overlay === 'pressure') {
       const yOfLat = (lat: number) => ((90 - lat) / 180) * CANVAS_H;
       const beltLines: Array<[number, string]> = [
-        [result.windBelt.monthlyRidgeLatNDeg[m] ?? 31, 'rgba(120,200,255,0.8)'],
-        [result.windBelt.monthlyRidgeLatSDeg[m] ?? -31, 'rgba(120,200,255,0.8)'],
-        [result.windBelt.monthlyPolarFrontLatNDeg[m] ?? 60, 'rgba(190,160,255,0.8)'],
-        [result.windBelt.monthlyPolarFrontLatSDeg[m] ?? -60, 'rgba(190,160,255,0.8)'],
+        [windBeltField?.monthlyRidgeLatNDeg[m] ?? 31, 'rgba(120,200,255,0.8)'],
+        [windBeltField?.monthlyRidgeLatSDeg[m] ?? -31, 'rgba(120,200,255,0.8)'],
+        [windBeltField?.monthlyPolarFrontLatNDeg[m] ?? 60, 'rgba(190,160,255,0.8)'],
+        [windBeltField?.monthlyPolarFrontLatSDeg[m] ?? -60, 'rgba(190,160,255,0.8)'],
       ];
       ctx2d.setLineDash([7, 5]);
       ctx2d.lineWidth = 1.5;
@@ -369,10 +392,10 @@ export function MapCanvas() {
         if (month < 0) {
           let sum = 0;
           for (let mm = 0; mm < 12; mm++)
-            sum += result.windBelt.monthlyPressureAnomalyHpa[mm]?.[i] ?? 0;
+            sum += windBeltField?.monthlyPressureAnomalyHpa[mm]?.[i] ?? 0;
           field[i] = sum / 12;
         } else {
-          field[i] = result.windBelt.monthlyPressureAnomalyHpa[m]?.[i] ?? 0;
+          field[i] = windBeltField?.monthlyPressureAnomalyHpa[m]?.[i] ?? 0;
         }
       }
       const R = 6;
@@ -407,8 +430,8 @@ export function MapCanvas() {
     }
 
     if (showWindArrows) {
-      const u = result.airflow.monthlyWindU[m];
-      const v = result.airflow.monthlyWindV[m];
+      const u = airflowField?.monthlyWindU[m];
+      const v = airflowField?.monthlyWindV[m];
       if (u && v) {
         ctx2d.strokeStyle = 'rgba(255,255,255,0.65)';
         ctx2d.lineWidth = 1;
@@ -695,8 +718,29 @@ export function MapCanvas() {
     return () => canvas.removeEventListener('wheel', onWheel);
   }, []);
 
+  const layerPending = !!result && !hasLayer(result, overlay);
+  const readyLayers = (
+    ['terrain', 'currents', 'pressure', 'temperature', 'precipitation', 'koppen'] as const
+  )
+    .filter((k) => k !== overlay && hasLayer(result, k))
+    .map((k) => OVERLAY_LABEL[k] ?? k);
+
   return (
     <div className="map-wrap">
+      {layerPending && (
+        <div className="layer-pending" data-testid="layer-pending">
+          <strong>{OVERLAY_LABEL[overlay] ?? 'この層'}はまだ計算されていません</strong>
+          <span>
+            下は地形です
+            {LAYER_WAIT_REASON[overlay] ? ` — ${LAYER_WAIT_REASON[overlay]}` : ''}
+          </span>
+          {/* **いま見られる層を挙げる**。既定のタブ(気候区分)は EBM のあいだ
+              ずっと出てこないので、これが無いと「何も進んでいない」に見える */}
+          {readyLayers.length > 0 && (
+            <span data-testid="ready-layers">いま見られるのは {readyLayers.join('・')}</span>
+          )}
+        </div>
+      )}
       <canvas ref={baseRef} width={CANVAS_W} height={CANVAS_H} className="map-base" />
       <canvas
         ref={topRef}
@@ -736,7 +780,7 @@ export function MapCanvas() {
   );
 }
 
-function CellTooltip({ result }: { result: PipelineResult | null }) {
+function CellTooltip({ result }: { result: PartialPipelineResult | null }) {
   const hoveredCell = useUiStore((s) => s.hoveredCell);
   const month = useUiStore((s) => s.month);
   const info = useMemo(() => {
@@ -745,11 +789,13 @@ function CellTooltip({ result }: { result: PipelineResult | null }) {
     const { row, col } = hoveredCell;
     const i = row * grid.widthCells + col;
     const isLand = terrain.landMask[i] === 1;
-    const cls = KOPPEN_CLASSES[result.koppen.classId[i] ?? 0] ?? '';
-    const tAnnual = result.temperature.annualMeanC[i] ?? 0;
-    const pAnnual = result.precipitation.annualPrecipMm[i] ?? 0;
-    const tMonth = month >= 0 ? (result.temperature.monthlyTemperatureC[month]?.[i] ?? 0) : null;
-    const pMonth = month >= 0 ? (result.precipitation.monthlyPrecipMm[month]?.[i] ?? 0) : null;
+    // 途中結果では未計算の場がある。数字が無いことを「0」と偽らず null にする
+    const cls = result.koppen ? (KOPPEN_CLASSES[result.koppen.classId[i] ?? 0] ?? '') : '—';
+    const tAnnual = result.temperature?.annualMeanC[i] ?? null;
+    const pAnnual = result.precipitation?.annualPrecipMm[i] ?? null;
+    const tMonth =
+      month >= 0 ? (result.temperature?.monthlyTemperatureC[month]?.[i] ?? null) : null;
+    const pMonth = month >= 0 ? (result.precipitation?.monthlyPrecipMm[month]?.[i] ?? null) : null;
     return {
       lat: latDegOfRow(grid, row),
       lon: lonDegOfCol(grid, col),
@@ -774,12 +820,15 @@ function CellTooltip({ result }: { result: PipelineResult | null }) {
           気候区分 <strong>{info.cls}</strong>
         </div>
       )}
+      {/* 未計算の量は「—」で出す。0 と書くと計算済みの 0 と区別できない */}
       <div>
-        年平均 {info.tAnnual.toFixed(1)}°C / 年降水 {Math.round(info.pAnnual)}mm
+        年平均 {info.tAnnual === null ? '—' : `${info.tAnnual.toFixed(1)}°C`} / 年降水{' '}
+        {info.pAnnual === null ? '—' : `${Math.round(info.pAnnual)}mm`}
       </div>
-      {info.tMonth !== null && (
+      {(info.tMonth !== null || info.pMonth !== null) && (
         <div>
-          この月 {info.tMonth.toFixed(1)}°C / {Math.round(info.pMonth ?? 0)}mm
+          この月 {info.tMonth === null ? '—' : `${info.tMonth.toFixed(1)}°C`} /{' '}
+          {info.pMonth === null ? '—' : `${Math.round(info.pMonth)}mm`}
         </div>
       )}
     </div>
