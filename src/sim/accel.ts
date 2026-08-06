@@ -176,6 +176,8 @@ export interface EbmStaticFields {
   meanRidgeS: number;
   /** [cell] 初期温度。null なら緯度からの既定値 */
   initialT: Float32Array | null;
+  /** [cell] 初期氷厚(水等価 mm)。null なら 0 から。0 層模型のときだけ意味を持つ */
+  initialIce: Float32Array | null;
 }
 
 /** EBM に渡す較正定数(呼び出し側が MODEL_CONSTANTS から渡す) */
@@ -198,6 +200,16 @@ export interface EbmConstants {
   solveToleranceC: number;
   /** 1 時間ステップあたりの反復回数(残差は記録して検証する) */
   iterationsPerStep: number;
+  /**
+   * 0 層海氷模型を使うか。**CPU 経路と同じ式が GPU にも入っている**ことが前提。
+   * 片方だけに入れると加速器の有無で物理が変わる
+   */
+  slabIce: boolean;
+  seaFreezeC: number;
+  seaIceConductivityWmK: number;
+  seaIceLatentJPerMm: number;
+  seaIceMinThicknessMm: number;
+  seaIceCoverScaleMm: number;
 }
 
 export interface EbmAccelResult {
@@ -207,6 +219,8 @@ export interface EbmAccelResult {
   monthCount: number[];
   /** [cell] パス終了時の温度(次パスのウォームスタート用) */
   finalT: Float32Array;
+  /** [cell] パス終了時の氷厚(水等価 mm)。0 層模型のときだけ意味を持つ */
+  finalIce: Float32Array;
   /** 全時間ステップを通じた最大残差(°C)。許容差を超えたら収束していない */
   maxResidualC: number;
   /** 全ステップで許容差を満たしたか。false なら反復回数が足りない */

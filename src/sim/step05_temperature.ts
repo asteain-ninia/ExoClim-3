@@ -642,24 +642,37 @@ export async function computeTemperature(
         for (let col = 0; col < CW; col++) {
           const i = row * CW + col;
           const tSurf = (t[i] ?? 0) - gamma * (elevM[i] ?? 0);
-          // 0 層模型では氷の有無は**厚さ**で決まる(気温では決まらない)。
-          // 温度で決めると「冷たいほど断熱が強く、断熱が強いほど冷える」
-          // 正帰還になり両極が固着する(2026-08-04 実測)
-          const iceW = slabIce
-            ? (iceMm[i] ?? 0) > 0
-              ? 1
-              : 0
-            : Math.min(1, Math.max(0, ((iceOnset[i] ?? 0) - tSurf) / K.iceRampWidthC));
+          // **陸の季節雪と海氷は別の量**。混ぜると 0 層模型を入れた途端に
+          // 陸の雪アルベドが消える(氷厚は海セルにしか育たないため)。
+          //   陸 … 気温で決まる季節雪(実効値。融解・森林マスキング込み)
+          //   海 … 0 層模型なら**氷量**で決まる。温度で決めると
+          //         「冷たいほど断熱が強く、断熱が強いほど冷える」正帰還になり
+          //         両極が固着する(2026-08-04 実測)
+          const snowW = Math.min(
+            1,
+            Math.max(0, ((iceOnset[i] ?? 0) - tSurf) / K.iceRampWidthC),
+          );
+          // 氷量を被覆率の代理にして**連続**にする。二値だと融けた瞬間に
+          // アルベドが 0.39 → 0.07 へ跳び、白夜の日射で夏が暴走する
+          const seaW = slabIce
+            ? Math.min(1, (iceMm[i] ?? 0) / K.seaIceCoverScaleMm)
+            : snowW;
+          const oceanFrac = 1 - (coarse[i]?.landFrac ?? 0);
+          const landFrac = 1 - oceanFrac;
+          // 0 層模型が無効なら混合式を通さない。landFrac*w + oceanFrac*w は
+          // 数学的には w だが浮動小数では 1ulp ずれることがあり、
+          // 「無効なら旧と完全一致」という来歴の保証が壊れる
+          const iceW = slabIce ? landFrac * snowW + oceanFrac * seaW : snowW;
           let aSurf =
             (surfAlbedoBase[i] ?? 0.15) + (K.albedoIce - (surfAlbedoBase[i] ?? 0.15)) * iceW;
           if (permanentIce?.[i]) aSurf = Math.max(aSurf, K.permanentIceAlbedo);
           const cloud = (cloud0?.[i] ?? 0.2) * (1 - frac) + (cloud1?.[i] ?? 0.2) * frac;
           const albedo = cloud + (1 - cloud) * aSurf;
           // 海氷断熱: 氷結海面は混合層を切り離し実効熱容量が陸並みに落ちる
-          // (極域の季節振幅の再現に必須 — constants.seaIceInsulationFactor 参照)
-          const oceanFrac = 1 - (coarse[i]?.landFrac ?? 0);
+          // (極域の季節振幅の再現に必須 — constants.seaIceInsulationFactor 参照)。
+          // **断熱は海の側だけ**の現象なので seaW で掛ける
           capEff[i] =
-            (heatCap[i] ?? 1) * (1 - K.seaIceInsulationFactor * iceW * oceanFrac) * capScale;
+            (heatCap[i] ?? 1) * (1 - K.seaIceInsulationFactor * seaW * oceanFrac) * capScale;
           // 氷を通じた海からの伝導 F = k(T_freeze − T)/h。**T の関数なので陰的に**
           // 扱う(対角へ k/h、右辺へ k/h × T_freeze)。h の下限は数値のための
           // ものであって較正つまみではない
@@ -869,7 +882,6 @@ export async function computeTemperature(
           const tNew = t[i] ?? 0;
           if ((iceMm[i] ?? 0) > 0) {
             // 氷あり: 海 → 表面の伝導ぶんだけ海が凍り、氷が厚くなる。
-            // 表面が凍結点より暖かければ、その熱でまず氷を融かす
             const cond = (iceCond[i] ?? 0) * (K.seaFreezeC - tNew); // W/m²(正 = 海が熱を失う)
             // **潜熱も加速期には同じ比率で縮める**。熱容量だけ 1/16 にして
             // 潜熱を実寸のまま残すと、気温は速く落ち着くのに氷厚だけが実時間
@@ -883,6 +895,27 @@ export async function computeTemperature(
               h = 0;
               const cFull = (heatCap[i] ?? 1) * capScale;
               if (cFull > 0) t[i] = K.seaFreezeC + leftoverJ / cFull;
+            }
+            // ---- 融解中の表面は凍結点に留まる ----
+            // **これが無いと氷の上の空気が自由に暖まる**。実在の融解期の海氷面が
+            // 0°C に張り付くのは、余分な熱が全部潜熱に食われるからで、
+            // 白夜の日射をいくら受けても気温は上がらない。伝導 k/h だけでは
+            // 引き戻しが足りず、北極の 7 月が +16.8°C まで走った(2026-08-04)。
+            // 混合セルでは海の割合ぶんだけ引き戻す(oceanFrac=1 で厳密な固定)
+            const tAfter = t[i] ?? 0;
+            if (h > 0 && tAfter > K.seaFreezeC) {
+              const excessJ = (capEff[i] ?? 0) * oceanFrac * (tAfter - K.seaFreezeC);
+              const meltMm = excessJ / (K.seaIceLatentJPerMm * capScale);
+              if (meltMm < h) {
+                h -= meltMm;
+                t[i] = tAfter - oceanFrac * (tAfter - K.seaFreezeC);
+              } else {
+                // 残りの氷を全部使っても足りない: 使った潜熱ぶんだけ下げて融け切る
+                const usedJ = h * K.seaIceLatentJPerMm * capScale;
+                h = 0;
+                const cCell = capEff[i] ?? 0;
+                if (cCell > 0) t[i] = tAfter - usedJ / cCell;
+              }
             }
             iceMm[i] = h;
           } else if (tNew < K.seaFreezeC) {
@@ -959,6 +992,7 @@ export async function computeTemperature(
   const buildEbmFields = (
     permanentIce: Uint8Array | null,
     initialT?: Float64Array,
+    initialIce?: Float64Array,
   ): EbmStaticFields => {
     const insolFlat = new Float32Array(MONTHS_PER_YEAR * CH);
     for (let m = 0; m < MONTHS_PER_YEAR; m++) {
@@ -1005,6 +1039,7 @@ export async function computeTemperature(
       meanRidgeN,
       meanRidgeS,
       initialT: initialT ? f32(initialT) : null,
+      initialIce: initialIce ? f32(initialIce) : null,
     };
   };
   const ebmConstants: EbmConstants = {
@@ -1024,6 +1059,12 @@ export async function computeTemperature(
     winterInversionAdvectionFactor: K.winterInversionAdvectionFactor,
     solveToleranceC: EBM_SOLVE_TOLERANCE_C,
     iterationsPerStep: EBM_SOLVER.sweeps > 0 ? EBM_SOLVER.sweeps : EBM_GPU_ITERATIONS,
+    slabIce: K.seaIceModel > 0,
+    seaFreezeC: K.seaFreezeC,
+    seaIceConductivityWmK: K.seaIceConductivityWmK,
+    seaIceLatentJPerMm: K.seaIceLatentJPerMm,
+    seaIceMinThicknessMm: K.seaIceMinThicknessMm,
+    seaIceCoverScaleMm: K.seaIceCoverScaleMm,
   };
   const integrateAny = async (
     permanentIce: Uint8Array | null,
@@ -1038,16 +1079,12 @@ export async function computeTemperature(
     monthAccum: Float64Array[];
     monthCount: number[];
     finalT: Float64Array;
-    /**
-     * 氷厚(0 層模型のときだけ意味を持つ)。GPU 経路はまだ 0 層模型を
-     * 実装していないので undefined を返す。**CPU 経路と GPU 経路で
-     * 物理が食い違わないよう、0 層模型を有効にするのは両方に入ってから**
-     */
+    /** 氷厚(0 層模型のときだけ意味を持つ)。CPU・GPU の両経路が返す */
     finalIce?: Float64Array;
   }> => {
     if (!ebmAccel)
       return integrate(permanentIce, initialT, passLabel, passFrom, passTo, initialIce);
-    const fields = buildEbmFields(permanentIce, initialT);
+    const fields = buildEbmFields(permanentIce, initialT, initialIce);
     // 反復回数は**惑星ごとに必要量が違う**。地球は 512 で足りるが、全陸惑星は
     // 熱容量が小さく対角優位が弱いため足りない(2026-08-02 実測)。
     // 収束するまで倍々に増やす。回数を固定すると、地球以外で黙って
@@ -1200,6 +1237,8 @@ export async function computeTemperature(
       monthAccum: r.monthAccum.map(toF64),
       monthCount: r.monthCount,
       finalT: toF64(r.finalT),
+      // 氷厚はパス 1 → パス 2 へ持ち越す(CPU 経路と同じ)
+      ...(K.seaIceModel > 0 ? { finalIce: toF64(r.finalIce) } : {}),
     };
   };
 

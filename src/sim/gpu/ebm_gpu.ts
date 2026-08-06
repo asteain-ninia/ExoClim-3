@@ -40,7 +40,7 @@ const CELL_FIELDS = 10;
 /** 月別セル別の場の数: 0 cloud, 1 windU, 2 windV, 3 evap, 4 evapFbK, 5 evapRefT */
 const MONTHLY_FIELDS = 6;
 /** 作業領域の本数 */
-const WORK_FIELDS = 13;
+const WORK_FIELDS = 14;
 /**
  * 残差バッファに収まる時間ステップ数の上限。
  *
@@ -64,7 +64,9 @@ struct Params {
   chanFactor : f32, summerAdv : f32, advCoupling : f32, winterInvDiff : f32,
   winterInvAdv : f32, dPhi : f32, resDeg : f32, ridgeAbsN : f32,
   ridgeAbsS : f32, summerN : u32, summerS : u32, hasEvap : u32,
-  accumulate : u32, accumSlot : u32, hasEvapFb : u32, _p1 : u32,
+  accumulate : u32, accumSlot : u32, hasEvapFb : u32, slabIce : u32,
+  seaFreeze : f32, iceK : f32, iceLatent : f32, iceMinH : f32,
+  iceCoverScale : f32, _p1 : u32, _p2 : u32, _p3 : u32,
 };
 
 @group(0) @binding(0) var<uniform> P : Params;
@@ -83,7 +85,7 @@ struct Params {
 // (2026-08-02 に初期推定の外挿を prepA の前へ置いて気温 RMSE 3000°C を出した)
 @group(0) @binding(4) var<storage, read_write> temp : array<f32>;
 // 作業: 0 rhs, 1 diag, 2 gzE, 3 gzW, 4 gN, 5 gS, 6 advCu, 7 advCv,
-//       8 upwindU, 9 upwindV, 10 dfEff, 11 cOverDt, 12 evapK
+//       8 upwindU, 9 upwindV, 10 dfEff, 11 cOverDt, 12 evapK, 13 iceCond
 // dfEff と diag を別の場に分けるのは、第 2 段が隣接セルの dfEff を読みながら
 // 自セルへ diag を書くため(同じ場だと未読のスレッドの入力を壊す)
 @group(0) @binding(5) var<storage, read_write> work : array<f32>;
@@ -95,6 +97,11 @@ struct Params {
 @group(0) @binding(8) var<storage, read_write> tPrev : array<f32>;
 /** 前年の月別積算。最終年との差が周期定常への到達度になる */
 @group(0) @binding(9) var<storage, read_write> accumPrev : array<f32>;
+/**
+ * 海氷の厚さ(水等価 mm)。**時間ステップをまたいで持ち越す状態**。
+ * 0 層模型が無効(P.slabIce == 0)なら誰も読み書きしない
+ */
+@group(0) @binding(10) var<storage, read_write> ice : array<f32>;
 
 const WG : u32 = ${GPU_WORKGROUP_SIZE}u;
 var<workgroup> partial : array<f32, ${GPU_WORKGROUP_SIZE}>;
@@ -129,15 +136,31 @@ fn prepA(@builtin(global_invocation_id) gid : vec3<u32>) {
   let s = s0 * (1.0 - P.frac) + s1 * P.frac;
 
   let tSurf = temp[i] - P.gamma * cellF(5u, i);
-  let iceW = clamp((cellF(3u, i) - tSurf) / P.iceRamp, 0.0, 1.0);
+  // **陸の季節雪と海氷は別の量**(CPU 版と同じ扱い)。
+  // 陸 = 気温で決まる季節雪、海 = 0 層模型なら氷量で決まる被覆率
+  let snowW = clamp((cellF(3u, i) - tSurf) / P.iceRamp, 0.0, 1.0);
+  var seaW = snowW;
+  let oceanFrac = 1.0 - cellF(6u, i);
+  // 無効時は混合式を通さない(1ulp のずれで旧結果との一致が壊れるため)
+  var iceW = snowW;
+  if (P.slabIce == 1u) {
+    seaW = min(1.0, ice[i] / P.iceCoverScale);
+    iceW = cellF(6u, i) * snowW + oceanFrac * seaW;
+  }
   let base = cellF(2u, i);
   var aSurf = base + (P.albedoIce - base) * iceW;
   if (cellF(9u, i) >= 0.5) { aSurf = max(aSurf, P.permIceAlbedo); }
   let cloud = monthlyF(0u, P.m0, i) * (1.0 - P.frac) + monthlyF(0u, P.m1, i) * P.frac;
   let albedo = cloud + (1.0 - cloud) * aSurf;
 
-  let oceanFrac = 1.0 - cellF(6u, i);
-  let capEff = cellF(0u, i) * (1.0 - P.seaIceInsul * iceW * oceanFrac) * P.capScale;
+  // 断熱は海の側だけの現象なので seaW で掛ける
+  let capEff = cellF(0u, i) * (1.0 - P.seaIceInsul * seaW * oceanFrac) * P.capScale;
+  // 氷を通じた海からの伝導 F = k(T_freeze − T)/h。T の関数なので陰的に扱う
+  var iceCond = 0.0;
+  if (P.slabIce == 1u && ice[i] > 0.0) {
+    iceCond = (P.iceK * oceanFrac * 1000.0) / max(P.iceMinH, ice[i]);
+  }
+  setWork(13u, i, iceCond);
   var evap = 0.0;
   if (P.hasEvap == 1u) {
     evap = monthlyF(3u, P.m0, i) * (1.0 - P.frac) + monthlyF(3u, P.m1, i) * P.frac;
@@ -152,7 +175,8 @@ fn prepA(@builtin(global_invocation_id) gid : vec3<u32>) {
   }
   setWork(12u, i, evapK);
   let cOverDt = capEff / P.dtSec;
-  setWork(0u, i, cOverDt * temp[i] + s * (1.0 - albedo) - cellF(1u, i) + cellF(4u, i) - evap + evapRhs);
+  setWork(0u, i, cOverDt * temp[i] + iceCond * P.seaFreeze + s * (1.0 - albedo)
+    - cellF(1u, i) + cellF(4u, i) - evap + evapRhs);
   // 冬(月日射 < 年平均)の陸は接地逆転層で拡散が地表に届きにくい
   var invD = 1.0;
   if (insolOf(P.m0, r) < rowF(3u, r)) {
@@ -234,7 +258,8 @@ fn prepB(@builtin(global_invocation_id) gid : vec3<u32>) {
   let gzW = gz * 0.5 * (dfI + workF(10u, west));
   let gNEff = gN * 0.5 * (dfI + workF(10u, north));
   let gSEff = gS * 0.5 * (dfI + workF(10u, south));
-  setWork(1u, i, workF(11u, i) + P.olrB + workF(12u, i) + gzE + gzW + gNEff + gSEff + advCu + advCv);
+  setWork(1u, i, workF(11u, i) + P.olrB + workF(12u, i) + workF(13u, i)
+    + gzE + gzW + gNEff + gSEff + advCu + advCv);
   setWork(2u, i, gzE);
   setWork(3u, i, gzW);
   setWork(4u, i, gNEff);
@@ -297,6 +322,53 @@ fn polar(@builtin(global_invocation_id) gid : vec3<u32>) {
   }
 }
 
+// ---- 海氷の厚さを更新する(0 層模型)----
+// **CPU 版 step05_temperature.ts の同名ブロックと 1 対 1 に対応させること。**
+// 片方だけ直すと加速器の有無で物理が変わる。順序も同じ:
+//   反復の後 → 氷更新 → 積算(finish)
+@compute @workgroup_size(${GPU_WORKGROUP_SIZE})
+fn updateIce(@builtin(global_invocation_id) gid : vec3<u32>) {
+  let i = gid.x;
+  if (i >= P.n) { return; }
+  if (P.slabIce == 0u) { return; }
+  let oceanFrac = 1.0 - cellF(6u, i);
+  if (oceanFrac <= 0.0) { return; }
+  let capEff = workF(11u, i) * P.dtSec;
+  let tNew = temp[i];
+  var h = ice[i];
+  if (h > 0.0) {
+    // 海 → 氷底の伝導ぶんだけ凍る(負なら融ける)。潜熱も加速期に同じ比率で縮める
+    let cond = workF(13u, i) * (P.seaFreeze - tNew);
+    h = h + (cond * P.dtSec) / (P.iceLatent * P.capScale);
+    if (h < 0.0) {
+      let leftoverJ = -h * P.iceLatent * P.capScale;
+      h = 0.0;
+      let cFull = cellF(0u, i) * P.capScale;
+      if (cFull > 0.0) { temp[i] = P.seaFreeze + leftoverJ / cFull; }
+    }
+    // 融解中の表面は凍結点に留まる(余分な熱は全部潜熱に食われる)
+    let tAfter = temp[i];
+    if (h > 0.0 && tAfter > P.seaFreeze) {
+      let excessJ = capEff * oceanFrac * (tAfter - P.seaFreeze);
+      let meltMm = excessJ / (P.iceLatent * P.capScale);
+      if (meltMm < h) {
+        h = h - meltMm;
+        temp[i] = tAfter - oceanFrac * (tAfter - P.seaFreeze);
+      } else {
+        let usedJ = h * P.iceLatent * P.capScale;
+        h = 0.0;
+        if (capEff > 0.0) { temp[i] = tAfter - usedJ / capEff; }
+      }
+    }
+    ice[i] = h;
+  } else if (tNew < P.seaFreeze) {
+    // 氷なしで凍結点を下回った: 超過分を氷に変え、温度を凍結点へ戻す
+    let deficitJ = capEff * (P.seaFreeze - tNew);
+    ice[i] = h + deficitJ / (P.iceLatent * P.capScale);
+    temp[i] = P.seaFreeze;
+  }
+}
+
 // ---- 残差(合成作用素 1 反復ぶんの最大変化量)と月別積算 ----
 // 縮約は 1 ワークグループ・固定順で行う(atomic や順序不定の並列縮約は
 // 実行ごとに答えが変わる — device.ts の注記)
@@ -347,8 +419,9 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
   const bufResidual = device.createBuffer({ size: MAX_STEPS * 4, usage: ST | CS | CD });
   const bufPrev = device.createBuffer({ size: N * 4, usage: ST | CS | CD });
   const bufAccumPrev = device.createBuffer({ size: M * N * 4, usage: ST | CS | CD });
-  const bufParams = device.createBuffer({ size: 144, usage: GPUBufferUsage.UNIFORM | CD });
-  const stage = new ReadbackStage(device, 2 * M * N + N + MAX_STEPS);
+  const bufIce = device.createBuffer({ size: N * 4, usage: ST | CS | CD });
+  const bufParams = device.createBuffer({ size: 192, usage: GPUBufferUsage.UNIFORM | CD });
+  const stage = new ReadbackStage(device, 2 * M * N + N + MAX_STEPS + N);
 
   const module = device.createShaderModule({ code: WGSL });
   // **明示レイアウトが必須**。layout: 'auto' はエントリごとに「実際に使う
@@ -367,6 +440,7 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
       { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
       { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
       { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      { binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
     ],
   });
   const pipeLayout = device.createPipelineLayout({ bindGroupLayouts: [bindLayout] });
@@ -378,6 +452,7 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
   const pipeBlack = mk('sweepBlack');
   const pipePolar = mk('polar');
   const pipeFinish = mk('finish');
+  const pipeUpdateIce = mk('updateIce');
 
   const entries: GPUBindGroupEntry[] = [
     { binding: 0, resource: { buffer: bufParams } },
@@ -390,6 +465,7 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
     { binding: 7, resource: { buffer: bufResidual } },
     { binding: 8, resource: { buffer: bufPrev } },
     { binding: 9, resource: { buffer: bufAccumPrev } },
+    { binding: 10, resource: { buffer: bufIce } },
   ];
   // レイアウトが共通なので束ねは 1 つで足りる
   const bind = device.createBindGroup({ layout: bindLayout, entries });
@@ -399,6 +475,7 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
   const scratchRows = new Float32Array(ROW_FIELDS * MAX_ROWS);
   const scratchMonthly = new Float32Array(MONTHLY_FIELDS * M * N);
   const scratchTemp = new Float32Array(N);
+  const scratchIce = new Float32Array(N);
   const scratchZeroCells = new Float32Array(M * N);
   const scratchResidual = new Float32Array(MAX_STEPS);
   const zeroMonth = new Float32Array(N);
@@ -419,6 +496,7 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
         bufResidual,
         bufPrev,
         bufAccumPrev,
+        bufIce,
         bufParams,
       ]) {
         b.destroy();
@@ -494,6 +572,13 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
         }
       }
       device.queue.writeBuffer(bufTemp, 0, asBufferSource(scratchTemp));
+      // 氷厚は**パスをまたいで持ち越す状態**。渡されなければ 0 から始める
+      if (fields.initialIce) {
+        scratchIce.set(fields.initialIce);
+      } else {
+        scratchIce.fill(0);
+      }
+      device.queue.writeBuffer(bufIce, 0, asBufferSource(scratchIce));
       scratchZeroCells.fill(0);
       device.queue.writeBuffer(bufAccum, 0, asBufferSource(scratchZeroCells));
       device.queue.writeBuffer(bufAccumPrev, 0, asBufferSource(scratchZeroCells));
@@ -584,6 +669,12 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
         pu[30] = ridgeSNow < fields.meanRidgeS ? 1 : 0;
         pu[31] = fields.evapAnom ? 1 : 0;
         pu[34] = fields.evapFeedback ? 1 : 0;
+        pu[35] = k.slabIce ? 1 : 0;
+        pf[36] = k.seaFreezeC;
+        pf[37] = k.seaIceConductivityWmK;
+        pf[38] = k.seaIceLatentJPerMm;
+        pf[39] = k.seaIceMinThicknessMm;
+        pf[40] = k.seaIceCoverScaleMm;
         pu[32] = accumulate ? 1 : 0;
         pu[33] = accumSlot;
         device.queue.writeBuffer(bufParams, 0, paramBuf);
@@ -606,6 +697,8 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
           run(pipeBlack, cellGroups);
           run(pipePolar, polarGroups);
         }
+        // 氷更新は**反復の後・積算の前**(CPU 版と同じ順序)
+        if (k.slabIce) run(pipeUpdateIce, cellGroups);
         run(pipeFinish, 1);
         // 途中経過の読み戻しは**計算と同じ submit** に積む。別々に submit すると
         // 3 回目の読み戻しでアクセス違反が起きた(device.ts の実測注記)。
@@ -641,8 +734,9 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
       stage.enqueueCopyAt(enc, bufAccumPrev, M * N, M * N);
       stage.enqueueCopyAt(enc, bufTemp, 2 * M * N, N);
       stage.enqueueCopyAt(enc, bufResidual, 2 * M * N + N, MAX_STEPS);
+      stage.enqueueCopyAt(enc, bufIce, 2 * M * N + N + MAX_STEPS, N);
       device.queue.submit([enc.finish()]);
-      const flat = await stage.map(2 * M * N + N + MAX_STEPS);
+      const flat = await stage.map(2 * M * N + N + MAX_STEPS + N);
 
       const monthAccum: Float32Array[] = [];
       for (let m = 0; m < M; m++) monthAccum.push(flat.slice(m * N, (m + 1) * N));
@@ -685,6 +779,7 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
         monthAccum,
         monthCount,
         finalT,
+        finalIce: flat.slice(2 * M * N + N + MAX_STEPS, 2 * M * N + N + MAX_STEPS + N),
         maxResidualC,
         converged: maxResidualC <= k.solveToleranceC,
         maxYearDriftC,
