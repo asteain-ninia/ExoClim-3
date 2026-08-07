@@ -59,6 +59,9 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['zonalAdvectionCouplingWm2PerK', 30, 60],
   ['summerAdvectionFactor', 0.3, 0.6],
   ['seaIceInsulationFactor', 0.8, 0.95],
+  // 海氷の被覆率が飽和する氷量。アルベドと断熱の**効く範囲**を決める。
+  // 強さに当たる物性値(伝導率・潜熱)は物理定数なので入れない
+  ['seaIceCoverScaleMm', 100, 800],
   ['albedoIce', 0.28, 0.42],
   ['permanentIceAlbedo', 0.55, 0.75],
   // 陸の実効熱容量(水柱換算 m)。**2026-08-01 に追加**。

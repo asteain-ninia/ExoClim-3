@@ -481,7 +481,7 @@ export const MODEL_CONSTANTS = {
    * 厚くなるほど熱供給が細り成長も鈍る(Stefan の √t 則)— 青天井にならない。
    * 設計は docs/設計_海氷の潜熱と伝導_2026-08-04.md。
    */
-  seaIceModel: 0,
+  seaIceModel: 1,
   /** 海氷の熱伝導率 W/(m·K)。物性値であり較正つまみではない */
   seaIceConductivityWmK: 2.0,
   /**
