@@ -58,54 +58,84 @@ function oceanBand(result: PipelineResult, lo: number, hi: number): number[] {
 }
 
 /**
- * 帯状平均気温(陸)の観測との最大乖離。最終受入ゲートの未達項目そのもの。
- * report.json と同じく 10° 帯・月別で測り、1 月と 7 月の最大を返す
+ * 帯状平均気温の観測との最大乖離(°C)。**最終受入ゲートの未達項目そのもの。**
+ *
+ * scripts/validate.ts の `zonalAnnual` と**同じ帯の切り方・同じ量**で測る:
+ *   帯 = Math.round((89 − 行*2) / 10) * 10   … 10° 刻みの**四捨五入**
+ *   量 = 年平均・1 月・7 月の |モデル − 観測| の最大
+ *
+ * ここを自前の切り方で書いたら、帯が 5° ずれて南緯 60° 帯(南極半島を含む)を
+ * 取りこぼし、受入ゲートの 26.4°C とは別物を測っていた(2026-08-07 に踏んだ)。
+ * **既にある判定と同じ数字を出したいなら、同じ式を写すこと。**
  */
 function zonalMaxGap(result: PipelineResult): { gap: number; where: string } {
   const clim = getClimObs();
   const grid = result.context.grid;
   const land = result.context.terrain.landMask;
   const f = Math.round(2 / grid.resolutionDeg);
-  let worst = 0;
-  let where = '—';
-  for (const m of [0, 6]) {
-    for (let lo = -90; lo < 90; lo += 10) {
-      let sO = 0;
-      let nO = 0;
-      let sM = 0;
-      let nM = 0;
-      for (let cr = 0; cr < clim.heightCells; cr++) {
-        const lat = 90 - (cr + 0.5) * 2;
-        if (lat < lo || lat >= lo + 10) continue;
-        for (let cc = 0; cc < clim.widthCells; cc++) {
-          const ci = cr * clim.widthCells + cc;
-          const t = clim.monthlyTemperatureDeciC[m]?.[ci] ?? -9999;
-          if (t === -9999) continue;
-          let sum = 0;
-          let n = 0;
-          for (let dr = 0; dr < f; dr++) {
-            for (let dc = 0; dc < f; dc++) {
-              const gr = cr * f + dr;
-              const gc = cc * f + dc;
-              if (gr >= grid.heightCells || gc >= grid.widthCells) continue;
-              const gi = gr * grid.widthCells + gc;
-              if (!land[gi]) continue;
-              sum += result.temperature.monthlyTemperatureC[m]?.[gi] ?? 0;
-              n++;
-            }
-          }
-          if (n === 0) continue;
-          sO += t / 10;
-          nO++;
-          sM += sum / n;
-          nM++;
+  interface Acc {
+    o: number[];
+    m: number[];
+    n: number;
+  }
+  const bands = new Map<number, Acc>();
+
+  for (let cr = 0; cr < clim.heightCells; cr++) {
+    for (let cc = 0; cc < clim.widthCells; cc++) {
+      const ci = cr * clim.widthCells + cc;
+      const obsMonthly: number[] = [];
+      let ok = true;
+      for (let m = 0; m < 12; m++) {
+        const t = clim.monthlyTemperatureDeciC[m]?.[ci] ?? -9999;
+        if (t === -9999) {
+          ok = false;
+          break;
+        }
+        obsMonthly.push(t / 10);
+      }
+      if (!ok) continue;
+      const mdl = new Array<number>(12).fill(0);
+      let n = 0;
+      for (let dr = 0; dr < f; dr++) {
+        for (let dc = 0; dc < f; dc++) {
+          const gr = cr * f + dr;
+          const gc = cc * f + dc;
+          if (gr >= grid.heightCells || gc >= grid.widthCells) continue;
+          const gi = gr * grid.widthCells + gc;
+          if (!land[gi]) continue;
+          n++;
+          for (let m = 0; m < 12; m++)
+            mdl[m] = (mdl[m] ?? 0) + (result.temperature.monthlyTemperatureC[m]?.[gi] ?? 0);
         }
       }
-      if (nO === 0 || nM === 0) continue;
-      const d = Math.abs(sM / nM - sO / nO);
+      if (n === 0) continue;
+      for (let m = 0; m < 12; m++) mdl[m] = (mdl[m] ?? 0) / n;
+      const latBand = Math.round((89 - cr * 2) / 10) * 10;
+      const acc = bands.get(latBand) ?? { o: new Array<number>(12).fill(0), m: new Array<number>(12).fill(0), n: 0 };
+      for (let m = 0; m < 12; m++) {
+        acc.o[m] = (acc.o[m] ?? 0) + (obsMonthly[m] ?? 0);
+        acc.m[m] = (acc.m[m] ?? 0) + (mdl[m] ?? 0);
+      }
+      acc.n++;
+      bands.set(latBand, acc);
+    }
+  }
+
+  let worst = 0;
+  let where = '—';
+  for (const [lat, acc] of bands) {
+    const o = acc.o.map((x) => x / acc.n);
+    const m = acc.m.map((x) => x / acc.n);
+    const mean = (a: number[]): number => a.reduce((x, y) => x + y, 0) / 12;
+    const cand: Array<[number, string]> = [
+      [Math.abs(mean(m) - mean(o)), '年平均'],
+      [Math.abs((m[0] ?? 0) - (o[0] ?? 0)), '1 月'],
+      [Math.abs((m[6] ?? 0) - (o[6] ?? 0)), '7 月'],
+    ];
+    for (const [d, tag] of cand) {
       if (d > worst) {
         worst = d;
-        where = `${lo}〜${lo + 10}° の ${m === 0 ? '1' : '7'} 月`;
+        where = `${lat >= 0 ? lat + '°N' : -lat + '°S'} 帯の ${tag}`;
       }
     }
   }
