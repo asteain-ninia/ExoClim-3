@@ -376,11 +376,17 @@ fn updateIce(@builtin(global_invocation_id) gid : vec3<u32>) {
   }
 }
 
-// ---- 残差(合成作用素 1 反復ぶんの最大変化量)と月別積算 ----
+// ---- 残差(合成作用素 1 反復ぶんの最大変化量)----
 // 縮約は 1 ワークグループ・固定順で行う(atomic や順序不定の並列縮約は
-// 実行ごとに答えが変わる — device.ts の注記)
+// 実行ごとに答えが変わる — device.ts の注記)。
+//
+// **氷の更新より前に測ること。** 残差は「反復作用素が収束したか」を測る量で、
+// 反復の外で起きる物理(海氷の生成・融解による温度の飛び)を混ぜてはいけない。
+// 混ぜると反復回数の適応が**決して下がらない残差**を追いかけ、毎ステップ上限
+// まで登る(2026-08-07 に実測: 残差 26°C・費用 25 倍)。CPU 経路は反復の中で
+// しか maxDelta を取らないので、混ぜると両経路で意味が食い違う。
 @compute @workgroup_size(${GPU_WORKGROUP_SIZE})
-fn finish(@builtin(local_invocation_id) lid : vec3<u32>) {
+fn measureResidual(@builtin(local_invocation_id) lid : vec3<u32>) {
   let tid = lid.x;
   var m = 0.0;
   for (var i = tid; i < P.n; i = i + WG) {
@@ -393,6 +399,14 @@ fn finish(@builtin(local_invocation_id) lid : vec3<u32>) {
     for (var k = 0u; k < WG; k = k + 1u) { mm = max(mm, partial[k]); }
     residual[P.stepIndex] = mm;
   }
+}
+
+// ---- 月別積算 ----
+// **氷の更新より後に積算する**(CPU 経路と同じ順序)。積算するのは
+// そのステップの最終的な温度でなければならない。
+@compute @workgroup_size(${GPU_WORKGROUP_SIZE})
+fn accumulate(@builtin(local_invocation_id) lid : vec3<u32>) {
+  let tid = lid.x;
   if (P.accumulate == 1u) {
     for (var i = tid; i < P.n; i = i + WG) {
       let idx = P.monthIndex * P.n + i;
@@ -458,7 +472,8 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
   const pipeRed = mk('sweepRed');
   const pipeBlack = mk('sweepBlack');
   const pipePolar = mk('polar');
-  const pipeFinish = mk('finish');
+  const pipeResidual = mk('measureResidual');
+  const pipeAccumulate = mk('accumulate');
   const pipeUpdateIce = mk('updateIce');
 
   const entries: GPUBindGroupEntry[] = [
@@ -704,9 +719,11 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
           run(pipeBlack, cellGroups);
           run(pipePolar, polarGroups);
         }
-        // 氷更新は**反復の後・積算の前**(CPU 版と同じ順序)
+        // 順序が意味を持つ: 残差は反復の収束だけを測るので**氷更新の前**、
+        // 積算は最終温度を足すので**氷更新の後**(CPU 経路と同じ)
+        run(pipeResidual, 1);
         if (k.slabIce) run(pipeUpdateIce, cellGroups);
-        run(pipeFinish, 1);
+        run(pipeAccumulate, 1);
         // 途中経過の読み戻しは**計算と同じ submit** に積む。別々に submit すると
         // 3 回目の読み戻しでアクセス違反が起きた(device.ts の実測注記)。
         const tickEnd = step % TICK_STEPS === TICK_STEPS - 1 || step === totalSteps - 1;
