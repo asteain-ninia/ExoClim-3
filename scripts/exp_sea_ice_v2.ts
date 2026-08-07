@@ -129,7 +129,20 @@ interface Case {
 async function runCase(label: string, accelOpts: unknown): Promise<Case> {
   EBM_SOLVER_STATS.maxResidualC = 0;
   EBM_SOLVER_STATS.meanYearDriftC = 0;
+  EBM_SOLVER_STATS.fullCapacityYears = 0;
+  EBM_SOLVER_STATS.maxSweeps = 0;
+  // **1 件ごとに逐次出す。** 最後にまとめて出す造りにしたせいで、
+  // 8 時間走らせて何も分からないという事故を起こした(2026-08-07)
+  console.log(`  … ${label} 開始`);
+  const t0 = Date.now();
   const result = await runPipeline(EARTH_PARAMS, accelOpts as never);
+  console.log(
+    `  … ${label} 完了 ${((Date.now() - t0) / 60000).toFixed(1)} 分  ` +
+      `全熱容量 ${EBM_SOLVER_STATS.fullCapacityYears} 年  ` +
+      `最大反復 ${EBM_SOLVER_STATS.maxSweeps}  ` +
+      `残差 ${EBM_SOLVER_STATS.maxResidualC.toExponential(2)}  ` +
+      `ドリフト ${EBM_SOLVER_STATS.meanYearDriftC.toFixed(4)}`,
+  );
   const s = evaluateResult(result);
   const z = zonalMaxGap(result);
   return {
