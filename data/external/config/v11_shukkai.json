@@ -1,0 +1,50 @@
+{
+  "model": "v0.11-shukkai-earth-emulator-transfer",
+  "decision": {
+    "status": "consistency_audit",
+    "reason": "Transfer the Earth-validated emulator without regional refitting. Treat the five Shukkai profiles as creative hypotheses to audit, never as fitting targets or model acceptance gates."
+  },
+  "paths": {
+    "earth_model_dir": "02_current_models/v11_earth/models",
+    "output_dir": "outputs/v11_shukkai",
+    "archive": "outputs/shukkai_climate_v11.zip"
+  },
+  "shukkai": {
+    "global_mean_c": 8.0,
+    "axial_tilt_deg": 19.505,
+    "target_land_precip_mm": 690.0,
+    "months": 12,
+    "iterations": 45,
+    "monsoon_strength": 2.8,
+    "bathymetry_scenarios": [
+      "shallow_shelf",
+      "rift_trench",
+      "deep_strait"
+    ]
+  },
+  "regions": {
+    "will_vertices": [
+      [-140, 31], [-133, 34], [-123, 33], [-113, 31], [-103, 28],
+      [-102, 20], [-109, 13], [-121, 11], [-134, 14], [-141, 22]
+    ],
+    "derle": [-70.0, 17.0, 14.0, 10.0],
+    "rutia": [-73.0, 2.5, 7.0, 5.0],
+    "shanteriya": [-32.0, 29.0, 9.0, 8.0]
+  },
+  "expected_profiles": {
+    "will_min_arid_pct": 50.0,
+    "deladua_coast_min_arid_pct": 50.0,
+    "derle_min_temperate_pct": 50.0,
+    "derle_max_tropical_pct": 10.0,
+    "rutia_min_tropical_pct": 50.0,
+    "shanteriya_max_arid_pct": 50.0,
+    "global_max_arid_pct": 23.9
+  },
+  "provenance": {
+    "earth_transfer": "Earth v0.11 XGBoost continuous emulator and the identical 128 region-independent features; no Shukkai fit.",
+    "planet_constraints": "A single global offset preserves the independent 8 C mean; a single global scale preserves 690 mm mean land precipitation.",
+    "interpretation": "Shukkai expectations are lore hypotheses. A discrepancy is a terrain-versus-lore finding, not grounds to refit the climate model.",
+    "rutia": "Source Illustrator text anchors for Rutia, Rutia Basin, and Rutia Province map to approximately 73 W, 2.5 N; the ellipse is an explicit provisional audit polygon.",
+    "bathymetry": "Original v0.3 SST input remains absent; all three deterministic Deladua sensitivity scenarios are retained."
+  }
+}

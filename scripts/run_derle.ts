@@ -1,5 +1,5 @@
 // デーレ(出界)に ExoClim-3 のモデルを適用する。
-// 地形: derle-climate の shukkai_geography(scripts/build_derle_terrain.py で変換)
+// 地形: data/external/processed/shukkai_geography(scripts/build_derle_terrain.py で変換)
 // 惑星諸元: derle-climate/docs/PROJECT_CONTEXT.md
 //   主星光度 1.2879 / 軌道長半径 1.225 AU / 半径 1.0489 地球 /
 //   自転 28.4698 h / 傾斜 19.505°

@@ -43,7 +43,7 @@ import zipfile
 
 import numpy as np
 
-BASE = os.path.join(os.path.dirname(__file__), "..", "..", "derle-climate", "data")
+BASE = os.path.join(os.path.dirname(__file__), "..", "data", "external")
 ZIP = os.path.join(BASE, "raw", "koppen_geiger_tif_v2.zip")
 MEMBER = "1991_2020/koppen_geiger_0p00833333.tif"
 NPZ = os.path.join(BASE, "processed", "etopo2022_surface_1deg.npz")

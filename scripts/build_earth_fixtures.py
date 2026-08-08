@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """地球フィクスチャ生成スクリプト。
 
-../derle-climate/data/processed/ の処理済みデータ(出所・ライセンスは同リポジトリの
+data/external/processed/ の処理済みデータ(出所は derle-climate。ライセンスは同リポジトリの
 data/manifest.json 参照)から、ExoClim-3 用の JSON フィクスチャを生成する。
 
 - ETOPO 2022 (NOAA, CC0): 1° 標高 + 陸海マスク → src/domain/data/earth_terrain_1deg.json
@@ -20,7 +20,7 @@ import sys
 
 import numpy as np
 
-BASE = os.path.join(os.path.dirname(__file__), "..", "..", "derle-climate", "data", "processed")
+BASE = os.path.join(os.path.dirname(__file__), "..", "data", "external", "processed")
 OUT_ROOT = os.path.join(os.path.dirname(__file__), "..")
 
 

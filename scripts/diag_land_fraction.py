@@ -19,7 +19,7 @@ import os
 import numpy as np
 from netCDF4 import Dataset
 
-BASE = os.path.join(os.path.dirname(__file__), "..", "..", "derle-climate", "data")
+BASE = os.path.join(os.path.dirname(__file__), "..", "data", "external")
 NC = os.path.join(BASE, "raw", "ETOPO_2022_v1_60s_surface.nc")
 NPZ = os.path.join(BASE, "processed", "etopo2022_surface_1deg.npz")
 KOPPEN = os.path.join(os.path.dirname(__file__), "..", "tests", "fixtures", "earth_koppen_1deg.json")

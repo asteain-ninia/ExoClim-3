@@ -2,7 +2,7 @@
 
 入力:
   out/derle/country_polygons.json      derle-map-visualizer から抽出した面(SVG 座標)
-  derle-climate/config/map_labels_extracted.json  国名ラベル(緯度経度)
+  data/external/config/map_labels_extracted.json  国名ラベル(緯度経度、出所 derle-climate)
 出力:
   src/domain/data/derle_country_polygons.json
     { countries: [{ name|null, isStub, area, ring: [[lon,lat], ...] }] }
@@ -23,7 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 POLY_IN = ROOT / "out" / "derle" / "country_polygons.json"
-LABELS = Path(r"e:/WORKSPACE/derle-climate/config/map_labels_extracted.json")
+LABELS = Path(__file__).resolve().parent.parent / "data" / "external" / "config" / "map_labels_extracted.json"
 OUT = ROOT / "src" / "domain" / "data" / "derle_country_polygons.json"
 
 COUNTRY_PATTERN = re.compile(r"国|共和|帝国|王国|連邦|公国|首領|領国|合議")

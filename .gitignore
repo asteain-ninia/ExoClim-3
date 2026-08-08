@@ -9,3 +9,7 @@ playwright-report/
 # 第三者著作物(参照専用、公開しない)
 docs/参考-ExoClim2/動画要約/
 docs/動画書き起こし/
+
+# 外部データの元ファイル(大きいので git には入れない — data/external/README.md 参照)
+data/external/raw/ETOPO_2022_v1_60s_surface.nc
+data/external/raw/koppen_geiger_tif_v2.zip

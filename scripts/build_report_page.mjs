@@ -541,6 +541,7 @@ section{margin-top:76px;}
   white-space:nowrap;padding-top:4px;}
 .plate-h h2{font-size:clamp(21px,2.6vw,27px);margin:0;}
 .lead{max-width:44rem;color:var(--ink-2);margin:0 0 26px;}
+h3.sub{font-size:19px;margin:44px 0 12px;padding-top:10px;border-top:1px solid var(--rule);}
 
 .panels{display:grid;gap:22px;}
 .panels.p2{grid-template-columns:repeat(2,1fr);}
@@ -635,7 +636,7 @@ footer{margin-top:80px;padding-top:26px;border-top:1px solid var(--rule);
 
 <header class="top">
   <div class="col">
-    <div class="eyebrow">ExoClim-3 ／ 検証記録 2026-08-06</div>
+    <div class="eyebrow">ExoClim-3 ／ 検証記録 2026-08-08（v15）</div>
     <h1>地球はどこまで再現できているか</h1>
     <p>惑星のパラメータだけを入力し、ITCZ・風帯・海流・気流・気温・降水を順に解いて出した結果を、
       実際の地球の観測とそのまま並べる。<b>ケッペン気候区はモデルの中では使っていない</b> —
@@ -643,8 +644,8 @@ footer{margin-top:80px;padding-top:26px;border-top:1px solid var(--rule);
     <p>下の図はすべて<b>同じ 1 回の計算</b>から出ている。地域ごとの補正も、
       緯度帯を決め打ちしたルールも入れていない。合っていないところは、合っていないまま出す。</p>
     <div class="meta">
-      <span>コミット <b>346caa8</b></span>
-      <span>定数 <b>v13evap(62 件)</b></span>
+      <span>コミット <b>8f41e25</b></span>
+      <span>定数 <b>v15(64 件・195 評価)</b></span>
       <span>格子 <b>1°(気温・降水の採点は 2°)</b></span>
       <span>観測 <b>Beck 2023 ／ earth_climate_2deg</b></span>
     </div>
@@ -656,6 +657,77 @@ footer{margin-top:80px;padding-top:26px;border-top:1px solid var(--rule);
       .join('')}
   </div>
 </header>
+
+<section>
+  <div class="plate-h"><span class="pnum">今回</span><h2>この版で何が変わったか</h2></div>
+  <p class="lead">前回(v13evap、2026-08-06)からの差分。<b>物理の構造を 2 つ足し、1 つ棄却し、
+    実行するまで気づけない不具合を 3 件潰した。</b>下の図はすべて v15 の同じ 1 回の計算から。</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>指標</th><th>v13evap</th><th>v15</th><th>差</th></tr></thead>
+      <tbody>
+        <tr><th>目的関数 v3</th><td>85.769</td><td><b>86.190</b></td><td>+0.42</td></tr>
+        <tr><th>ケッペン大分類</th><td>75.22%</td><td><b>75.37%</b></td><td>+0.15</td></tr>
+        <tr><th>ケッペン詳細</th><td>44.07%</td><td><b>45.01%</b></td><td>+0.94</td></tr>
+        <tr><th>年平均気温 RMSE</th><td>4.16°C</td><td><b>3.85°C</b></td><td>−0.31</td></tr>
+        <tr><th>地域ゲート</th><td>14 / 17</td><td>14 / 17</td><td>—</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note"><p><b>詳細一致の +0.94 が今回の主産物。</b>面積の 24.5% を占める
+    冷帯で第 3 文字が当たらない — その原因が「夏の気温が 40〜60°N で +5°C 高い」の
+    <b>一変数</b>だと突き止めたところから始まっている。</p></div>
+
+  <h3 class="sub">足した構造 1 — 陸の対流・前線雲</h3>
+  <p class="lead">雲アルベドの変調を読み直したら、<b>ストームトラック雲・層積雲・海峡雲が
+    すべて <code>oceanFrac</code> 倍で入っており、陸の雲は ITCZ 近傍しか増えない</b>
+    構造になっていた。夏の大陸は月 100mm 以上降っていても雲が基準値のまま。
+    しかも「陸では 0.35 残す」と書かれた分岐が、外側の <code>oceanFrac</code> 倍で
+    必ず 0 になる<b>死んだ分岐</b>として化石化していた。</p>
+  <div class="note"><p>前パスの降水を<b>飽和させて</b>雲に足す(飽和させるのは、降水の誤差が
+    そのまま温度の誤差へ増幅されるのを防ぐため)。冷帯の夏は +5.38 → +4.67°C、
+    第 3 文字の一致は 27.5% → 33.3% に。<b>砂漠には効かない</b>
+    (降水がほぼ 0 なので項が 0)ので、乾燥ゲート 3 件は無傷のまま。</p></div>
+
+  <h3 class="sub">足した構造 2 — 0 層海氷(第 2 版)</h3>
+  <p class="lead">氷の量を潜熱と伝導で解き、アルベドと断熱を<b>氷量に連続で</b>結ぶ。
+    融解中は表面を凍結点に留める。第 1 版(2026-08-04)は事前登録の判定に不成立だったが、
+    それは機構ではなく<b>実装の不具合 3 件</b>のせいだった。</p>
+  <div class="note"><p>両極が<b>同時に</b>改善(北極の秋 −0.98°C ／ 南大洋の夏 +0.90°C)。
+    第 1 版で +16.8°C まで暴走した北極の 7 月が <b>+1.7°C</b>(実物ほぼ 0°C)に収まった。
+    CPU 経路と GPU 経路の一致も検算済み(年平均気温の差は面積重み平均 0.026°C)。</p></div>
+
+  <h3 class="sub">棄却 — 蒸発冷却の陰的化</h3>
+  <p class="lead">蒸発冷却を気温に対する負帰還として EBM の対角へ入れる案。
+    4 段階すべてで事前登録の主判定に届かず<b>棄却</b>した。</p>
+  <div class="note"><p>理由は着想の側にあった。線形化の基準点がパイプラインの
+    <b>パス 1 の気温</b>で、そのパス 1 は陸面結合を持たずに呼ばれている。つまりこの項は
+    「パス 2 の答えを、陸面結合を持たないパス 1 へ引き戻す」働きをしていた。
+    <b>ニュートン法の形をしていても、基準点が別の物理で作られていれば 1 歩目は後退になる。</b></p></div>
+
+  <h3 class="sub">潰した不具合 3 件 — どれも「実行はできるが物理が違う」</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>不具合</th><th>見えた症状</th><th>実際の影響</th></tr></thead>
+      <tbody>
+        <tr><th>残差の測定に反復の外の物理が混ざる</th>
+            <td>「なんか遅い」だけ</td>
+            <td>適応制御が下がらない残差を追いかけ、費用が <b>25 倍</b>(8 時間 対 23 分)</td></tr>
+        <tr><th>ユニフォームの CPU 側だけ小さい</th>
+            <td>症状なし</td>
+            <td>はみ出した書き込みが例外にならず捨てられ、<b>海氷の物性値が全部 0</b> で GPU へ</td></tr>
+        <tr><th>0 層海氷で陸の季節雪が消える</th>
+            <td>成績が落ちるだけ</td>
+            <td>氷厚は海セルにしか育たないのに <code>iceW</code> を氷厚だけで決めていた</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="note"><p><b>片方の経路にしか無い機構・片側にしか掛からない項・
+    大きさの合っていないバッファ</b>は、症状ではなく構造として探すしかない。
+    結果だけ見ていたら、海氷の機構ごと棄却していた。</p></div>
+</section>
 
 ${plates.join('\n')}
 

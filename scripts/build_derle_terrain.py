@@ -1,6 +1,6 @@
 """デーレ(出界)の地形を ExoClim-3 形式へ変換する。
 
-入力: derle-climate の shukkai_geography_*.npz(1° と 0.5°)
+入力: data/external/processed/shukkai_geography_*.npz(1° と 0.5°、出所 derle-climate)
 出力: src/domain/data/derle_terrain_1deg.json
   { widthCells, heightCells, elevationMeters, landMask, crestMeters }
 
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-SRC_DIR = Path(r"e:/WORKSPACE/derle-climate/data/processed")
+SRC_DIR = Path(__file__).resolve().parent.parent / "data" / "external" / "processed"
 OUT_PATH = Path(__file__).resolve().parent.parent / "src" / "domain" / "data" / "derle_terrain_1deg.json"
 OCEAN_FLOOR_M = -4000.0
 

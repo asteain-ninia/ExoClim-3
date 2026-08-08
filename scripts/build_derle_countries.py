@@ -14,7 +14,7 @@ import json
 import re
 from pathlib import Path
 
-SRC = Path(r"e:/WORKSPACE/derle-climate/config/map_labels_extracted.json")
+SRC = Path(__file__).resolve().parent.parent / "data" / "external" / "config" / "map_labels_extracted.json"
 OUT = Path(__file__).resolve().parent.parent / "src" / "domain" / "data" / "derle_countries.json"
 
 # 国・領邦を示す語(都市国家も国として扱う)

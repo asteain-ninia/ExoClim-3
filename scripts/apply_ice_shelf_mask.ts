@@ -23,9 +23,8 @@ import path from 'node:path';
 
 const GEOJSON = path.join(
   process.cwd(),
-  '..',
-  'derle-climate',
   'data',
+  'external',
   'raw',
   'ne_50m_antarctic_ice_shelves_polys.geojson',
 );
