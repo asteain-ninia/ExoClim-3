@@ -323,7 +323,9 @@ async function main(): Promise<void> {
     ebmMaxResidualC: EBM_SOLVER_STATS.maxResidualC,
     ebmMeanYearDriftC: EBM_SOLVER_STATS.meanYearDriftC,
     precipCouplingConverged: result.precipitation.coupling?.converged ?? true,
-    soilConverged: true,
+    // **ベタ書きをやめる。** 以前はここが true 固定で、土壌水分の周期定常は
+    // 一度も検査されていなかった(2026-08-09 の外部レビューで発覚)
+    soilConverged: result.precipitation.soil?.converged ?? true,
   });
   console.log(
     `\n数値的健全性(凍結 ${NUMERICAL_GATES.frozenAt}): ${numerical.pass ? '✅ PASS' : '❌ FAIL — 非零終了'}`,

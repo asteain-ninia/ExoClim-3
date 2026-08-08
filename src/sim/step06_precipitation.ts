@@ -999,7 +999,22 @@ export async function computePrecipitation(
   const land = soil
     ? { monthlyEtMm: soil.actualEtMm, monthlyWetness01: soil.wetness01 }
     : undefined;
-  return { monthlyPrecipMm, annualPrecipMm, coupling, ...(land ? { land } : {}) };
+  return {
+    monthlyPrecipMm,
+    annualPrecipMm,
+    coupling,
+    ...(land ? { land } : {}),
+    ...(soil
+      ? {
+          soil: {
+            converged: soil.converged,
+            spinupYears: soil.spinupYears,
+            meanAnnualStorageDriftMm: soil.meanAnnualStorageDriftMm,
+            maxAnnualStorageDriftMm: soil.maxAnnualStorageDriftMm,
+          },
+        }
+      : {}),
+  };
 }
 
 /**

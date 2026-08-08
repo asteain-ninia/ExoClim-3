@@ -10,7 +10,7 @@ import { computeItcz } from './step01_itcz';
 import { computeWindBelt } from './step02_windbelt';
 import { computeOceanCurrent } from './step03_ocean';
 import { computeAirflow } from './step04_airflow';
-import { computeTemperature } from './step05_temperature';
+import { computeTemperature, resetEbmSolverStats } from './step05_temperature';
 import {
   computePrecipitation,
   type PrecipDiagBox,
@@ -179,6 +179,11 @@ async function runPipelineCore(
 ): Promise<PipelineResult> {
   // 事前検査(変更レビュー FB): 計算不能な入力は配列確保・反復の前に明示エラー
   assertComputableInputs(params);
+  // **EBM の診断を毎回初期化する。** モジュール全体の可変状態なので、ここで
+  // 揃えないと同一プロセスの前の実行の値が漏れる。以前は呼び出し側が各自
+  // 一部の項目だけ手で 0 にしており、validate.ts は一度もリセットしていなかった
+  // (2026-08-09 の外部レビューで発覚)
+  resetEbmSolverStats();
 
   // 2 パス目(陸面の水 → 気温の帰還)が走るかは定数で決まるので、進捗の総量は
   // 事前に確定する。**帰還の口は 2 つあり、どちらか一方でも有効なら 2 パス**:

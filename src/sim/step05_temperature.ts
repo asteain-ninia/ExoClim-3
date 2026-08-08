@@ -241,6 +241,18 @@ export const EBM_SOLVER_STATS = {
   fullCapacityYears: 0,
 };
 
+/** 診断を初期化する。パイプラインの入口で 1 回だけ呼ぶ */
+export function resetEbmSolverStats(): void {
+  EBM_SOLVER_STATS.totalSweeps = 0;
+  EBM_SOLVER_STATS.steps = 0;
+  EBM_SOLVER_STATS.maxSweeps = 0;
+  EBM_SOLVER_STATS.capHits = 0;
+  EBM_SOLVER_STATS.maxResidualC = 0;
+  EBM_SOLVER_STATS.maxYearDriftC = 0;
+  EBM_SOLVER_STATS.meanYearDriftC = 0;
+  EBM_SOLVER_STATS.fullCapacityYears = 0;
+}
+
 interface CoarseCell {
   landFrac: number;
   meanLandElevM: number;
@@ -940,11 +952,17 @@ export async function computeTemperature(
             }
             iceMm[i] = h;
           } else if (tNew < K.seaFreezeC) {
-            // 氷なしで凍結点を下回った: 超過分の熱を氷に変え、温度を凍結点へ戻す
-            const cFull = (capEff[i] ?? 1);
-            const deficitJ = cFull * (K.seaFreezeC - tNew);
+            // 氷なしで凍結点を下回った: 超過分の熱を氷に変え、温度を凍結点へ戻す。
+            //
+            // **融解側と同じく海の割合ぶんだけ扱う。** 以前はセル全体を凍結点へ
+            // 引き上げており、陸率 90% の沿岸セルでも海が少しでもあれば
+            // −1.9°C を下回れず、**陸側の熱不足まで海氷に変換していた**
+            // (2026-08-09 の外部レビューで発覚)。融解側だけ oceanFrac で
+            // 按分して凍結側を全体のままにしていたのは、単純な書き漏らし。
+            const cOcean = (capEff[i] ?? 1) * oceanFrac;
+            const deficitJ = cOcean * (K.seaFreezeC - tNew);
             iceMm[i] = (iceMm[i] ?? 0) + deficitJ / (K.seaIceLatentJPerMm * capScale);
-            t[i] = K.seaFreezeC;
+            t[i] = tNew + oceanFrac * (K.seaFreezeC - tNew);
           }
         }
       }

@@ -369,10 +369,12 @@ fn updateIce(@builtin(global_invocation_id) gid : vec3<u32>) {
     }
     ice[i] = h;
   } else if (tNew < P.seaFreeze) {
-    // 氷なしで凍結点を下回った: 超過分を氷に変え、温度を凍結点へ戻す
-    let deficitJ = capEff * (P.seaFreeze - tNew);
+    // 氷なしで凍結点を下回った: 超過分を氷に変え、温度を凍結点へ戻す。
+    // **融解側と同じく海の割合ぶんだけ扱う**(CPU 版と 1 対 1)。
+    // 全体を引き上げると陸側の熱不足まで海氷に変わる(2026-08-09 に修正)
+    let deficitJ = capEff * oceanFrac * (P.seaFreeze - tNew);
     ice[i] = h + deficitJ / (P.iceLatent * P.capScale);
-    temp[i] = P.seaFreeze;
+    temp[i] = tNew + oceanFrac * (P.seaFreeze - tNew);
   }
 }
 

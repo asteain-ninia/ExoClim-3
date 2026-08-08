@@ -126,6 +126,17 @@ export interface PrecipitationResult {
   coupling: PrecipCouplingDiagnostics;
   /** 陸面の水の状態(土壌水分が有効なときのみ)。気温の 2 パス目が読む */
   land?: LandSurfaceState;
+  /**
+   * 土壌水分バケツの周期定常への到達度。**採点の数値的健全性がこれを読む。**
+   * 以前は validate.ts が `soilConverged: true` をベタ書きしており、
+   * 土壌の収束は一度も検査されていなかった(2026-08-09 の外部レビューで発覚)。
+   */
+  soil?: {
+    converged: boolean;
+    spinupYears: number;
+    meanAnnualStorageDriftMm: number;
+    maxAnnualStorageDriftMm: number;
+  };
 }
 
 export interface KoppenResult {
