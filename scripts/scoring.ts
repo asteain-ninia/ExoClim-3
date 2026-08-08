@@ -363,6 +363,19 @@ export interface FieldScore {
   tempRangeRmseC: number;
   /** 季節位相のずれの RMS(日)。熱慣性の物差し */
   tempPhaseRmseDays: number;
+  /**
+   * 降水の季節位相のずれの RMS(日)。**雨季がいつ来るか**の物差し。
+   *
+   * これが無いと、モンスーンの開始が 2 か月ずれても最多月の「量」が合えば
+   * 減点されない。ケッペンの第 2 文字(s/w)は雨季と乾季の**時期**で決まるので、
+   * 分類一致率の分散源を測っていないことになる
+   * (2026-08-09 の外部レビュー 2 件がそろって指摘)。
+   *
+   * 気温の位相と同じ手続き(年 1 周期の調和解析 + 月の原点補正)で作る。
+   * 季節性の乏しいセルは位相が定義しにくいので、観測の年降水に対する
+   * 振幅比が閾値未満なら除く。
+   */
+  precipPhaseRmseDays: number;
   /** 最少月降水の RMSE mm/月。乾季の深さ = Af/Am/Aw と s/w を決める */
   precipDriestRmseMm: number;
   /** 最多月降水の RMSE mm/月 */
@@ -388,6 +401,12 @@ const OBS_MONTH_ORIGIN_OFFSET = 0.355;
 
 /** 季節位相を比べる下限振幅(°C)。これ未満の熱帯は位相が定義しにくい */
 const PHASE_MIN_AMPLITUDE_C = 2;
+
+/**
+ * 降水の位相を比べる下限(年 1 周期の振幅 / 年平均月降水)。
+ * 季節性の乏しい場所は位相が定義しにくいので除く
+ */
+const PRECIP_PHASE_MIN_RATIO = 0.3;
 
 /** 12 点の周期系列から年 1 周期の振幅と位相(月単位)を取り出す */
 function annualHarmonic(series: number[]): { amp: number; peak: number } {
@@ -426,6 +445,8 @@ export function fieldScore(
   let wRange = 0;
   let sePhase = 0;
   let wPhase = 0;
+  let sePPhase = 0;
+  let wPPhase = 0;
   let seDry = 0;
   let seWet = 0;
   let wDryWet = 0;
@@ -557,6 +578,20 @@ export function fieldScore(
         const modWet = Math.max(...pMon);
         const dDry = modDry - obsDry;
         const dWet = modWet - obsWet;
+        // 降水の季節位相(雨季の時期)。気温と同じ調和解析・同じ原点補正を使う
+        {
+          const mean = pObsMon.reduce((x, y) => x + y, 0) / 12;
+          const ho = annualHarmonic(pObsMon);
+          if (mean > 0 && ho.amp / mean >= PRECIP_PHASE_MIN_RATIO) {
+            const hm = annualHarmonic(pMon);
+            let dp = hm.peak - ho.peak - OBS_MONTH_ORIGIN_OFFSET;
+            while (dp > 6) dp -= 12;
+            while (dp < -6) dp += 12;
+            const days = dp * 30.44;
+            sePPhase += w * days * days;
+            wPPhase += w;
+          }
+        }
         seDry += w * dDry * dDry;
         seWet += w * dWet * dWet;
         wDryWet += w;
@@ -597,6 +632,7 @@ export function fieldScore(
     logCorrelation,
     tempRangeRmseC: Math.sqrt(seRange / Math.max(1e-9, wRange)),
     tempPhaseRmseDays: Math.sqrt(sePhase / Math.max(1e-9, wPhase)),
+    precipPhaseRmseDays: Math.sqrt(sePPhase / Math.max(1e-9, wPPhase)),
     precipDriestRmseMm: Math.sqrt(seDry / Math.max(1e-9, wDryWet)),
     precipWettestRmseMm: Math.sqrt(seWet / Math.max(1e-9, wDryWet)),
     obsSdTempC: sd(oT, oT2, wObs),

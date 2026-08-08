@@ -193,6 +193,9 @@ async function main(): Promise<void> {
       annualRmseMm: Math.round(f.precipRmseMm),
       driestMonthRmseMm: round2(f.precipDriestRmseMm),
       wettestMonthRmseMm: round2(f.precipWettestRmseMm),
+      // **雨季がいつ来るか**。量だけ見ていると、モンスーンの開始が 2 か月
+      // ずれても最多月が合えば減点されなかった(2026-08-09 の外部レビュー)
+      phaseRmseDays: round2(f.precipPhaseRmseDays),
       obsSdAnnualMm: Math.round(f.obsSdPrecipMm),
       obsSdDriestMm: round2(f.obsSdPrecipDriestMm),
       obsSdWettestMm: round2(f.obsSdPrecipWettestMm),
