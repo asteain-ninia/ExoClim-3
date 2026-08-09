@@ -31,7 +31,11 @@ export const SECONDS_PER_MONTH = 30.44 * 86400;
 export interface MoistureTransportOptions {
   /** 水平拡散係数 m²/s(渦による混合。0 で純移流) */
   diffusivityM2PerS?: number;
-  /** 収束判定: 平均 W に対する相対変化 */
+  /**
+   * 収束判定: **方程式の残差** max|S − C(W) − ∇·(WV)| を平均 S で割った値。
+   * 2026-08-09 まで「1 反復あたりの変化量」だったが、緩和の遅い系で
+   * 嘘をつくので改めた(docs/検証_輸送の収束と初期値依存_2026-08-09.md)。
+   */
   tolerance?: number;
   /**
    * 反復上限。**既定は実測で決めてある**(2026-08-04、
@@ -80,6 +84,16 @@ export interface MoistureTransportOptions {
    * 渡さないときは局所平衡 S/λ から始める(従来どおり)。
    */
   initialGuessMm?: ArrayLike<number>;
+  /**
+   * 逐次過緩和(SOR)の係数。**渡さなければ 1.9 から始めて、発散を検知したら
+   * 1.0 へ落として解き直す**(自動)。明示すると自動の落としは行わない。
+   * **答えを変えない** — 収束点では w = wGs なので ω に依らない。
+   *
+   * 1 より大きくすると拡散支配の配置では速くなるが、**拡散の無い純移流では
+   * 発散する**(2026-08-09 に ω=1.5 を既定にして全セル NaN を作った)。
+   * 上げるなら、その配置で収束することを実測してからにすること。
+   */
+  relaxation?: number;
 }
 
 export interface MoistureTransportResult {
@@ -126,6 +140,16 @@ export function solveMoistureTransport(
   const diffusivity = (options.diffusivityM2PerS ?? 0) * SECONDS_PER_MONTH; // m²/月
   const tolerance = options.tolerance ?? 1e-5;
   const maxIterations = options.maxIterations ?? 4000;
+  // 逐次過緩和の係数。**不動点は変わらない**(収束したとき w = wGs なので
+  // ω に依らない)。速度だけの量なので較正定数ではなく、探索空間にも入れない。
+  //
+  // 既定は 1.9 から始めて、**発散を検知したら 1.0 へ落として最初からやり直す**。
+  // 拡散支配の配置(地球の設定はこちら)では過緩和が桁で効くが、拡散の無い
+  // 純移流では発散する(2026-08-09 に ω=1.5 固定で全セル NaN を作った)。
+  // どちらの配置が来るかは惑星のパラメータ次第なので、**固定値にせず自動で
+  // 落とす**。答えは残差で判定するので、どちらに転んでも解は同じである。
+  let relaxation = options.relaxation ?? 1.9;
+  const allowFallback = options.relaxation === undefined;
   const capacity = options.holdingCapacityMm ?? null;
   const vExport = options.verticalExportRatePerMonth ?? null;
 
@@ -173,7 +197,7 @@ export function solveMoistureTransport(
   }
 
   // ---- 反復不変量を先に作る ----
-  // 面の法線速度と局所時間刻みは**風と格子だけで決まり、反復では変わらない**。
+  // 面の法線速度と流出係数は**風と格子だけで決まり、反復では変わらない**。
   // 内側ループで毎回組み直すと、1 セルあたり除算 2 回と max 8 回を
   // 数千反復ぶん繰り返すことになる。値は同じ(Float64 で保持するので
   // 丸めも変わらない)ので、**結果はビット一致する**。
@@ -181,7 +205,7 @@ export function solveMoistureTransport(
   const faceW = new Float64Array(N);
   const faceN = new Float64Array(N);
   const faceS = new Float64Array(N);
-  const dtArr = new Float64Array(N);
+  const outRateArr = new Float64Array(N);
   for (let row = 0; row < H; row++) {
     const area = areaM2[row] ?? 1;
     const dxC = dxCenterM[row] ?? 1;
@@ -210,7 +234,7 @@ export function solveMoistureTransport(
           ? (2 * lenMeridionalM * diffusivity) / (area * dxC) +
             ((lenN + lenS) * diffusivity) / (area * dyCenterM)
           : 0);
-      dtArr[i] = 0.8 / Math.max(1e-9, outRate + 1e-9);
+      outRateArr[i] = outRate;
     }
   }
 
@@ -220,6 +244,11 @@ export function solveMoistureTransport(
   let meanSource = 0;
   for (let i = 0; i < N; i++) meanSource += Math.max(0, sourceMmPerMonth[i] ?? 0);
   meanSource = Math.max(1e-9, meanSource / N);
+
+  // 発散したときに戻すための初期値の控え
+  const initial = Float64Array.from(cur);
+  let bestResidual = Number.POSITIVE_INFINITY;
+  let fellBack = false;
 
   let residual = Number.POSITIVE_INFINITY;
   let iterations = 0;
@@ -237,18 +266,24 @@ export function solveMoistureTransport(
   // 全球の水収支(閉包)も証拠にならない。発散項は隣接セルで打ち消し合うので
   // 全球和は自動的に 0 になり、**局所解が大きくずれていても閉包は合う**。
   // 閉包が見ているのは不均衡の平均であって最大ではない。
+  let sweeps = 0;
   for (let it = 1; it <= maxIterations; it++) {
-    iterations = it;
+    sweeps++;
+    iterations = sweeps;
     let maxImbalance = 0;
-    const forward = it % 2 === 1;
+    // 掃引順を 4 通り回す(行 × 列 の昇降の組合せ)。移流は情報が風下へ伝わる
+    // ので、風向と揃った掃引が来る回で一気に伝播する。決定的なので再現する
+    const dir = (it - 1) % 4;
+    const rowForward = dir < 2;
+    const colForward = dir % 2 === 0;
     for (let rr = 0; rr < H; rr++) {
-      const row = forward ? rr : H - 1 - rr;
+      const row = rowForward ? rr : H - 1 - rr;
       const area = areaM2[row] ?? 1;
       const dxC = dxCenterM[row] ?? 1;
       const lenN = lenNorthM[row] ?? 0;
       const lenS = lenSouthM[row] ?? 0;
       for (let cc = 0; cc < W; cc++) {
-        const col = forward ? cc : W - 1 - cc;
+        const col = colForward ? cc : W - 1 - cc;
         const i = row * W + col;
         const iE = row * W + wrapCol(grid, col + 1);
         const iW = row * W + wrapCol(grid, col - 1);
@@ -267,59 +302,83 @@ export function solveMoistureTransport(
         const wN = iN >= 0 ? (cur[iN] ?? 0) : wi;
         const wS = iS >= 0 ? (cur[iS] ?? 0) : wi;
 
-        // 風上流束(外向き正)。東面: un>0 なら自セルから流出
-        const fluxE = lenMeridionalM * (Math.max(0, unE) * wi + Math.min(0, unE) * wE);
-        // 西面: un>0 は西セルから流入(= 自セルから見ると −)
-        const fluxW = lenMeridionalM * (Math.max(0, unW) * wW + Math.min(0, unW) * wi);
-        const fluxN = iN >= 0 ? lenN * (Math.max(0, unN) * wi + Math.min(0, unN) * wN) : 0;
-        const fluxS = iS >= 0 ? lenS * (Math.max(0, unS) * wS + Math.min(0, unS) * wi) : 0;
-        // 拡散(外向き正: 自セルが高いほど流出)
-        const diffE = diffusivity ? (lenMeridionalM * diffusivity * (wi - wE)) / dxC : 0;
-        const diffW = diffusivity ? (lenMeridionalM * diffusivity * (wi - wW)) / dxC : 0;
-        const diffN = diffusivity && iN >= 0 ? (lenN * diffusivity * (wi - wN)) / dyCenterM : 0;
-        const diffS = diffusivity && iS >= 0 ? (lenS * diffusivity * (wi - wS)) / dyCenterM : 0;
+        // 正味流出は w_i について 1 次なので、係数と定数へ分けられる:
+        //   netOutflow = a·w_i − b
+        // a/area は既に作ってある outRate と同じ量である。
+        // b は**隣から入ってくるぶん**(風上流束の流入側 + 拡散の流入側)。
+        let inflow =
+          lenMeridionalM * Math.max(0, -unE) * wE +
+          lenMeridionalM * Math.max(0, unW) * wW +
+          (iN >= 0 ? lenN * Math.max(0, -unN) * wN : 0) +
+          (iS >= 0 ? lenS * Math.max(0, unS) * wS : 0);
+        if (diffusivity) {
+          inflow +=
+            (lenMeridionalM * diffusivity * wE) / dxC +
+            (lenMeridionalM * diffusivity * wW) / dxC +
+            (iN >= 0 ? (lenN * diffusivity * wN) / dyCenterM : 0) +
+            (iS >= 0 ? (lenS * diffusivity * wS) / dyCenterM : 0);
+        }
+        const inflowRate = inflow / area; // mm/月
+        const outRate = outRateArr[i] ?? 0; // 1/月(a/area)
 
-        const netOutflow = fluxE - fluxW + fluxN - fluxS + diffE + diffW + diffN + diffS;
-        const divergence = netOutflow / area; // mm/月
-
-        // 局所時間刻み: 流出係数から CFL を評価(定常解を求めるので局所で可)。反復不変
-        const dt = dtArr[i] ?? 0;
-
-        // 凝結項は陰的(λG が大きくても安定)。
-        // 閾値ありのときは C = rate·max(0, W − cap) を陰的に解く:
-        //   w = explicit − dt·rate·max(0, w − cap)
-        //   w > cap の枝: w = (explicit + dt·rate·cap) / (1 + dt·rate)
-        //     (この枝が有効なのは explicit > cap のときで、判定は explicit だけで済む)
-        //   それ以外: w = explicit(凝結なし = 通過する)
         const rate = Math.max(1e-6, condensationRatePerMonth[i] ?? 0);
         // 鉛直輸出も陰的に扱う(W に比例して柱から抜ける。降水にはならない)
         const ex = vExport ? Math.max(0, vExport[i] ?? 0) : 0;
-        const explicit = wi + dt * ((sourceMmPerMonth[i] ?? 0) - divergence);
-        let w: number;
+        const src = sourceMmPerMonth[i] ?? 0;
+
+        // **反復前の残差**(この反復子がどれだけ方程式を満たしていないか)。
+        // 更新後ではなく更新前で測るのが正しい — 更新後は「次の反復子」の
+        // 残差の一部を先取りしてしまい、収束を実際より良く見せる
+        const condNow = capacity
+          ? rate * Math.max(0, wi - Math.max(0, capacity[i] ?? 0))
+          : rate * wi;
+        const absImb = Math.abs(src + inflowRate - condNow - ex * wi - outRate * wi);
+        // **NaN を素通りさせない**(`absImb > maxImbalance` は NaN で false)
+        if (!(absImb <= maxImbalance)) maxImbalance = absImb;
+
+        // 局所方程式を **w_i について厳密に解く**(点ガウス=ザイデル)。
+        // 以前は dt = 0.8/outRate の擬似時間更新で、解かずに 0.8 倍へ
+        // 減衰させていた。楕円型(この系は拡散が凝結より 2 桁速い)では
+        // これが収束を大きく損なう
+        let wGs: number;
         if (capacity) {
           const cap = Math.max(0, capacity[i] ?? 0);
-          // 閾値ありのとき、凝結は超過分にだけ効き、鉛直輸出は柱全体に効く:
-          //   w = explicit − dt·rate·max(0, w − cap) − dt·ex·w
-          const withCond = (explicit + dt * rate * cap) / (1 + dt * (rate + ex));
-          w = withCond > cap ? withCond : Math.max(0, explicit / (1 + dt * ex));
+          const withCond = (src + inflowRate + rate * cap) / (rate + ex + outRate);
+          wGs =
+            withCond > cap ? withCond : (src + inflowRate) / Math.max(1e-9, ex + outRate);
         } else {
-          w = Math.max(0, explicit / (1 + dt * (rate + ex)));
+          wGs = (src + inflowRate) / (rate + ex + outRate);
         }
-        w = Math.max(0, w);
-        cur[i] = w;
-
-        // **方程式の残差**: S − C(w) − ∇·(wV) を新しい w で評価する。
-        // 発散は更新前の w_i で作った値なので厳密には遅れているが、
-        // 収束すれば遅れは消えるので判定として正しく閉じる。
-        const cond = capacity
-          ? rate * Math.max(0, w - Math.max(0, capacity[i] ?? 0))
-          : rate * w;
-        const imbalance = (sourceMmPerMonth[i] ?? 0) - cond - ex * w - divergence;
-        const absImb = Math.abs(imbalance);
-        if (absImb > maxImbalance) maxImbalance = absImb;
+        // 逐次過緩和。**不動点は変わらない**(収束したときに w = wGs なので、
+        // ω を掛けても解は同じ)。速度だけの量なので較正定数ではない
+        cur[i] = Math.max(0, wi + relaxation * (wGs - wi));
       }
     }
     residual = maxImbalance / meanSource;
+    // **非有限に対して閉じる。** NaN は大小比較が全て false になるので、
+    // 黙って「収束した」になる(2026-08-09 に実際に踏んだ)
+    const diverging = !Number.isFinite(residual) || residual > 10 * bestResidual;
+    if (diverging) {
+      if (allowFallback && !fellBack) {
+        // 過緩和が効かない配置(拡散が弱く移流が支配する)。
+        // **1.0 へ落として最初からやり直す**。答えは変わらない
+        fellBack = true;
+        relaxation = 1.0;
+        cur.set(initial);
+        bestResidual = Number.POSITIVE_INFINITY;
+        residual = Number.POSITIVE_INFINITY;
+        // 落とした後は**反復の予算を仕切り直す**(発散して捨てた掃引を
+        // 数えたままだと、上限に足りずに未収束で終わる)。
+        // 最悪の仕事量は 2 倍になるが、iterations には総掃引数を返すので
+        // 費用は隠れない
+        it = 0;
+        continue;
+      }
+      residual = Number.POSITIVE_INFINITY;
+      converged = false;
+      break;
+    }
+    if (residual < bestResidual) bestResidual = residual;
     if (residual <= tolerance) {
       converged = true;
       break;
