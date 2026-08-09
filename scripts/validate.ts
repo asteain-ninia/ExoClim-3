@@ -34,6 +34,7 @@ import {
   evaluateRegression,
 } from './validate_criteria';
 import { EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
+import { computeOceanEvaporation } from '../src/sim/evaporation';
 import { regionKoppenDiag, regionPrecipDiag, regionTargetStatus } from './scoring_regions';
 import { loadFoldBest } from './optimize_store';
 import { HOLDOUT_FOLDS, gateFoldAssignments, keepExcludingFold, keepOnlyFold } from './holdout';
@@ -187,6 +188,41 @@ async function main(): Promise<void> {
       obsSdRangeC: round2(f.obsSdTempRangeC),
       nonAreaWeighted: temperatureNW,
     },
+    // ---- 水収支の閉包(2026-08-09 追加)----
+    // 「解けたか」(EBM 残差)とは別に「**保存しているか**」を測る。
+    // 両レビューが揃って「E−P−ΔW の閉包が指標に無い」と指摘した。
+    // 現行の非保存な定式化では E と P は独立に決まるので、ここは必ず食い違う。
+    // **その食い違いの大きさ自体が、保存則へ移る動機の定量である。**
+    waterBudget: (() => {
+      const ev = computeOceanEvaporation(result.context, result.temperature, result.airflow);
+      const et = result.precipitation.land?.monthlyEtMm ?? [];
+      const grid = result.context.grid;
+      const landMask = result.context.terrain.landMask;
+      let wl = 0, el = 0, pl = 0, wo = 0, eo = 0, po = 0;
+      for (let row = 0; row < grid.heightCells; row++) {
+        const lat = 90 - (row + 0.5) * grid.resolutionDeg;
+        const w = Math.cos((lat * Math.PI) / 180);
+        for (let col = 0; col < grid.widthCells; col++) {
+          const i = row * grid.widthCells + col;
+          let e = 0, p = 0;
+          for (let m = 0; m < 12; m++) {
+            e += landMask[i] ? (et[m]?.[i] ?? 0) : (ev.monthlyOceanEvapMm[m]?.[i] ?? 0);
+            p += result.precipitation.monthlyPrecipMm[m]?.[i] ?? 0;
+          }
+          if (landMask[i]) { wl += w; el += w * e; pl += w * p; }
+          else { wo += w; eo += w * e; po += w * p; }
+        }
+      }
+      const f = wl / Math.max(1e-9, wl + wo);
+      const eG = f * (el / Math.max(1e-9, wl)) + (1 - f) * (eo / Math.max(1e-9, wo));
+      const pG = f * (pl / Math.max(1e-9, wl)) + (1 - f) * (po / Math.max(1e-9, wo));
+      return {
+        evapGlobalMmPerYear: Math.round(eG),
+        precipGlobalMmPerYear: Math.round(pG),
+        closureRelative: Math.round(((pG - eG) / Math.max(1e-9, eG)) * 1000) / 1000,
+        note: '非保存の定式化では E と P は独立に決まるので食い違って当然。閉包の大きさが保存則へ移る動機の定量',
+      };
+    })(),
     precipitation: {
       modelLandMeanMmPerYear: Math.round(f.landMeanModelMm),
       obsLandMeanMmPerYear: Math.round(f.landMeanObsMm),

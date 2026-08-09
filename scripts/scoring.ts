@@ -216,6 +216,87 @@ export interface RegionGateResult {
   detail: string;
 }
 
+/**
+ * ゲートの失敗が**降水由来か気温由来か**を分ける診断。
+ *
+ * なぜ要るか(2026-08-09 の外部レビュー):
+ *   `patagonia_rainshadow` は「雨陰の乾燥」と命名されているが、実際の失敗は
+ *   ET 49%(ツンドラ)である。ケッペンは B の乾燥閾値が年平均気温とともに
+ *   下がり、その後に最暖月 10°C 未満なら E になる。つまり**寒すぎる**という
+ *   気温の失敗を、雨陰の名前で追いかけていた。
+ *
+ * 観測と比べた年降水比・年平均気温差・最暖月差を併記して、
+ * **どちらを直せばよいか**をゲートの出力自体に持たせる。
+ */
+function gateComponents(
+  result: PipelineResult,
+  g: RegionGate,
+  clim: ClimateFixture,
+): string {
+  const grid = result.context.grid;
+  const land = result.context.terrain.landMask;
+  let n = 0;
+  let pM = 0;
+  let pO = 0;
+  let tM = 0;
+  let tO = 0;
+  let wM = 0;
+  let wO = 0;
+  for (let row = 0; row < grid.heightCells; row++) {
+    const lat = latDegOfRow(grid, row);
+    if (lat < g.latMin || lat > g.latMax) continue;
+    for (let col = 0; col < grid.widthCells; col++) {
+      const lon = -180 + (col + 0.5) * grid.resolutionDeg;
+      if (lon < g.lonMin || lon > g.lonMax) continue;
+      const i = row * grid.widthCells + col;
+      if (!land[i]) continue;
+      const cr = Math.min(clim.heightCells - 1, Math.max(0, Math.floor((90 - lat) / 2)));
+      const cc = Math.min(clim.widthCells - 1, Math.max(0, Math.floor((lon + 180) / 2)));
+      const ci = cr * clim.widthCells + cc;
+      let po = 0;
+      let to = 0;
+      let woM = -1e9;
+      let ok = true;
+      for (let m = 0; m < 12; m++) {
+        const t = clim.monthlyTemperatureDeciC[m]?.[ci] ?? -9999;
+        const p = clim.monthlyPrecipitationMm[m]?.[ci] ?? -9999;
+        if (t === -9999 || p === -9999) {
+          ok = false;
+          break;
+        }
+        po += p;
+        to += t / 10;
+        woM = Math.max(woM, t / 10);
+      }
+      if (!ok) continue;
+      let pm = 0;
+      let tm = 0;
+      let wmM = -1e9;
+      for (let m = 0; m < 12; m++) {
+        pm += result.precipitation.monthlyPrecipMm[m]?.[i] ?? 0;
+        const t = result.temperature.monthlyTemperatureC[m]?.[i] ?? 0;
+        tm += t;
+        wmM = Math.max(wmM, t);
+      }
+      n++;
+      pM += pm;
+      pO += po;
+      tM += tm / 12;
+      tO += to / 12;
+      wM += wmM;
+      wO += woM;
+    }
+  }
+  if (n === 0) return '';
+  const ratio = pO > 0 ? pM / pO : NaN;
+  const dT = tM / n - tO / n;
+  const dW = wM / n - wO / n;
+  return (
+    `[降水 ${(ratio * 100).toFixed(0)}% / 年平均気温 ${dT >= 0 ? '+' : ''}${dT.toFixed(1)}°C / ` +
+    `最暖月 ${dW >= 0 ? '+' : ''}${dW.toFixed(1)}°C]`
+  );
+}
+
 export function scoreRegionGates(result: PipelineResult): RegionGateResult[] {
   const grid = result.context.grid;
   const land = result.context.terrain.landMask;
@@ -256,7 +337,10 @@ export function scoreRegionGates(result: PipelineResult): RegionGateResult[] {
       for (const [sym, c] of counts.entries()) if (sym.startsWith(g.expect)) matched += c;
       pass = matched / total >= 0.1;
     }
-    gates.push({ id: g.id, pass, detail });
+    // **失敗の由来を併記する。** 記号だけでは降水と気温のどちらを直せばよいか
+    // 分からず、名前(rainshadow など)に引きずられて誤った場所を掘ることになる
+    const comp = gateComponents(result, g, getClimObs());
+    gates.push({ id: g.id, pass, detail: comp ? `${detail} ${comp}` : detail });
   }
   return gates;
 }
