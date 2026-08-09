@@ -85,7 +85,7 @@ export interface MoistureTransportOptions {
    */
   initialGuessMm?: ArrayLike<number>;
   /**
-   * 逐次過緩和(SOR)の係数。**渡さなければ 1.9 から始めて、発散を検知したら
+   * 逐次過緩和(SOR)の係数。**渡さなければ 1.6 から始めて、発散を検知したら
    * 1.0 へ落として解き直す**(自動)。明示すると自動の落としは行わない。
    * **答えを変えない** — 収束点では w = wGs なので ω に依らない。
    *
@@ -143,12 +143,15 @@ export function solveMoistureTransport(
   // 逐次過緩和の係数。**不動点は変わらない**(収束したとき w = wGs なので
   // ω に依らない)。速度だけの量なので較正定数ではなく、探索空間にも入れない。
   //
-  // 既定は 1.9 から始めて、**発散を検知したら 1.0 へ落として最初からやり直す**。
+  // 既定は 1.6 から始めて、**発散を検知したら 1.0 へ落として最初からやり直す**。
+  // 1.6 は実測で選んだ(scripts/bench_transport_relaxation.ts、地球 1° 月 0):
+  //   ω    1.0   1.2   1.4   1.6   1.8   1.9
+  //   掃引  384   259   171   119   152   発散
   // 拡散支配の配置(地球の設定はこちら)では過緩和が桁で効くが、拡散の無い
   // 純移流では発散する(2026-08-09 に ω=1.5 固定で全セル NaN を作った)。
   // どちらの配置が来るかは惑星のパラメータ次第なので、**固定値にせず自動で
   // 落とす**。答えは残差で判定するので、どちらに転んでも解は同じである。
-  let relaxation = options.relaxation ?? 1.9;
+  let relaxation = options.relaxation ?? 1.6;
   const allowFallback = options.relaxation === undefined;
   const capacity = options.holdingCapacityMm ?? null;
   const vExport = options.verticalExportRatePerMonth ?? null;
@@ -206,6 +209,11 @@ export function solveMoistureTransport(
   const faceN = new Float64Array(N);
   const faceS = new Float64Array(N);
   const outRateArr = new Float64Array(N);
+  const cEArr = new Float64Array(N);
+  const cWArr = new Float64Array(N);
+  const cNArr = new Float64Array(N);
+  const cSArr = new Float64Array(N);
+  const diagArr = new Float64Array(N);
   for (let row = 0; row < H; row++) {
     const area = areaM2[row] ?? 1;
     const dxC = dxCenterM[row] ?? 1;
@@ -235,6 +243,81 @@ export function solveMoistureTransport(
             ((lenN + lenS) * diffusivity) / (area * dyCenterM)
           : 0);
       outRateArr[i] = outRate;
+
+      // 係数を隣ごとに分けて持つ。方程式は
+      //   diag·w_i − cE·w_E − cW·w_W − cN·w_N − cS·w_S = S_i
+      // で、diag = rate + ex + outRate。**すべて反復不変**である
+      const diffX = diffusivity ? (lenMeridionalM * diffusivity) / dxC : 0;
+      const diffY = diffusivity ? diffusivity / dyCenterM : 0;
+      cEArr[i] = (lenMeridionalM * Math.max(0, -unE) + diffX) / area;
+      cWArr[i] = (lenMeridionalM * Math.max(0, unW) + diffX) / area;
+      cNArr[i] = iN >= 0 ? (lenN * (Math.max(0, -unN) + diffY)) / area : 0;
+      cSArr[i] = iS >= 0 ? (lenS * (Math.max(0, unS) + diffY)) / area : 0;
+      diagArr[i] =
+        Math.max(1e-6, condensationRatePerMonth[i] ?? 0) +
+        (vExport ? Math.max(0, vExport[i] ?? 0) : 0) +
+        outRate;
+    }
+  }
+
+  // ---- 行ごとの周期三重対角の分解を先に作る ----
+  // **経度方向を陰的に解く(線緩和)**ための下ごしらえ。
+  //
+  // なぜ要るか(2026-08-09 の診断): 緯度 89.5° では dx = a·Δλ·cos(lat) ≈ 970 m
+  // まで縮むので、拡散の結合 K·Δt/dx² が 4.1e6 に達する(赤道は 320)。
+  // 極の 1 行は事実上「無限に伝導する」状態で、点緩和では 1 掃引につき
+  // 1 セルしか情報が進まない。**行を丸ごと直接解けば、この剛性は消える。**
+  //
+  // 行の行列は風と格子だけで決まり反復では変わらないので、分解は 1 度でよい。
+  // 周期境界(経度)は Sherman–Morrison で扱う。
+  const lineRelax = !capacity;
+  const denArr = new Float64Array(lineRelax ? N : 0);
+  const cpArr = new Float64Array(lineRelax ? N : 0);
+  const zArr = new Float64Array(lineRelax ? N : 0);
+  const gammaArr = new Float64Array(lineRelax ? H : 0);
+  if (lineRelax) {
+    const tmp = new Float64Array(W);
+    for (let row = 0; row < H; row++) {
+      const base = row * W;
+      const gamma = -(diagArr[base] ?? 1);
+      gammaArr[row] = gamma;
+      // 修正した対角(Sherman–Morrison)
+      const bp = (col: number): number => {
+        const d = diagArr[base + col] ?? 1;
+        if (col === 0) return d - gamma;
+        if (col === W - 1) {
+          const cLast = -(cEArr[base + W - 1] ?? 0);
+          const aFirst = -(cWArr[base] ?? 0);
+          return d - (cLast * aFirst) / gamma;
+        }
+        return d;
+      };
+      // 前進消去の係数を蓄える(a = −cW, c = −cE)
+      let prevCp = 0;
+      for (let col = 0; col < W; col++) {
+        const a = -(cWArr[base + col] ?? 0);
+        const c = -(cEArr[base + col] ?? 0);
+        const den = bp(col) - (col === 0 ? 0 : a * prevCp);
+        denArr[base + col] = den;
+        const cp = den !== 0 ? c / den : 0;
+        cpArr[base + col] = cp;
+        prevCp = cp;
+      }
+      // u = [gamma, 0, …, 0, c_{W−1}] に対する解 z(行ごとに 1 度でよい)
+      tmp.fill(0);
+      tmp[0] = gamma;
+      tmp[W - 1] = -(cEArr[base + W - 1] ?? 0);
+      let prev = 0;
+      for (let col = 0; col < W; col++) {
+        const a = -(cWArr[base + col] ?? 0);
+        const den = denArr[base + col] ?? 1;
+        const val = ((tmp[col] ?? 0) - (col === 0 ? 0 : a * prev)) / (den !== 0 ? den : 1);
+        zArr[base + col] = val;
+        prev = val;
+      }
+      for (let col = W - 2; col >= 0; col--) {
+        zArr[base + col] = (zArr[base + col] ?? 0) - (cpArr[base + col] ?? 0) * (zArr[base + col + 1] ?? 0);
+      }
     }
   }
 
@@ -266,6 +349,10 @@ export function solveMoistureTransport(
   // 全球の水収支(閉包)も証拠にならない。発散項は隣接セルで打ち消し合うので
   // 全球和は自動的に 0 になり、**局所解が大きくずれていても閉包は合う**。
   // 閉包が見ているのは不均衡の平均であって最大ではない。
+  // 線緩和の作業配列(行ごとに使い回す)
+  const rowRhs = new Float64Array(lineRelax ? W : 0);
+  const rowY = new Float64Array(lineRelax ? W : 0);
+
   let sweeps = 0;
   for (let it = 1; it <= maxIterations; it++) {
     sweeps++;
@@ -282,6 +369,58 @@ export function solveMoistureTransport(
       const dxC = dxCenterM[row] ?? 1;
       const lenN = lenNorthM[row] ?? 0;
       const lenS = lenSouthM[row] ?? 0;
+
+      if (lineRelax) {
+        // ---- 行を丸ごと解く(経度方向は陰的)----
+        const base = row * W;
+        for (let col = 0; col < W; col++) {
+          const i = base + col;
+          const iN = row > 0 ? i - W : -1;
+          const iS = row < H - 1 ? i + W : -1;
+          const wi = cur[i] ?? 0;
+          const wN = iN >= 0 ? (cur[iN] ?? 0) : 0;
+          const wS = iS >= 0 ? (cur[iS] ?? 0) : 0;
+          const rhs =
+            (sourceMmPerMonth[i] ?? 0) + (cNArr[i] ?? 0) * wN + (cSArr[i] ?? 0) * wS;
+          rowRhs[col] = rhs;
+          // **反復前の残差**(南北は既知、東西は現在値で評価)
+          const absImb = Math.abs(
+            rhs +
+              (cEArr[i] ?? 0) * (cur[base + (col + 1) % W] ?? 0) +
+              (cWArr[i] ?? 0) * (cur[base + ((col - 1 + W) % W)] ?? 0) -
+              (diagArr[i] ?? 0) * wi,
+          );
+          // **NaN を素通りさせない**
+          if (!(absImb <= maxImbalance)) maxImbalance = absImb;
+        }
+        // 周期三重対角を解く(分解は反復不変なので使い回す)
+        let prev = 0;
+        for (let col = 0; col < W; col++) {
+          const a = -(cWArr[base + col] ?? 0);
+          const den = denArr[base + col] ?? 1;
+          const val = ((rowRhs[col] ?? 0) - (col === 0 ? 0 : a * prev)) / (den !== 0 ? den : 1);
+          rowY[col] = val;
+          prev = val;
+        }
+        for (let col = W - 2; col >= 0; col--) {
+          rowY[col] = (rowY[col] ?? 0) - (cpArr[base + col] ?? 0) * (rowY[col + 1] ?? 0);
+        }
+        const gamma = gammaArr[row] ?? -1;
+        const aFirst = -(cWArr[base] ?? 0);
+        const num = (rowY[0] ?? 0) + (aFirst * (rowY[W - 1] ?? 0)) / gamma;
+        const denom =
+          1 + (zArr[base] ?? 0) + (aFirst * (zArr[base + W - 1] ?? 0)) / gamma;
+        const fac = denom !== 0 ? num / denom : 0;
+        for (let col = 0; col < W; col++) {
+          const i = base + col;
+          const wLine = (rowY[col] ?? 0) - fac * (zArr[i] ?? 0);
+          const wi = cur[i] ?? 0;
+          // 逐次過緩和。**不動点は変わらない**
+          cur[i] = Math.max(0, wi + relaxation * (wLine - wi));
+        }
+        continue;
+      }
+
       for (let cc = 0; cc < W; cc++) {
         const col = colForward ? cc : W - 1 - cc;
         const i = row * W + col;
