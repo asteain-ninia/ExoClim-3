@@ -655,6 +655,13 @@ export async function computePrecipitation(
   // R3: 陸面供給は「当月降水に比例」ではなく土壌水分バケツの実蒸発散に
   // 比例させる(乾季へ前月までの雨を持ち越す)。月をまたぐ状態を持つため
   // 結合反復を月ループの外側に置く — 土壌無効時は月ごと独立で従来と同一。
+  /**
+   * 土壌水分の周期解。**conservativeMonth より前に宣言する**必要がある
+   * (保存型の源泉が陸面蒸発散を読むため。以前は結合反復の直前で宣言しており、
+   * TDZ で `Cannot access 'soil' before initialization` になった — 2026-08-09)。
+   */
+  let soil: SoilWaterResult | null = null;
+
   // ---- 保存型の水収支(段 1)。既定は無効 ----
   // 海面蒸発は月・セルにしか依らないので 1 度だけ作って使い回す
   const evapCache: { v: EvaporationResult | null } = { v: null };
@@ -708,7 +715,13 @@ export async function computePrecipitation(
       v,
       src,
       rate,
-      { diffusivityM2PerS: K.moistureEddyDiffusivityM2PerS },
+      {
+        diffusivityM2PerS: K.moistureEddyDiffusivityM2PerS,
+        // **上限が答えを決めないところまで上げる。** 既定 4000 では 84 か月分が
+        // 未収束のまま残った(2026-08-09)。EBM で 3 回踏んだ隠しパラメータと
+        // 同じ型なので、収束を確かめてから採点する
+        maxIterations: 20000,
+      },
     );
     // **収束していない解を黙って採用しない**
     if (!r.converged) {
@@ -895,7 +908,6 @@ export async function computePrecipitation(
       warmStart,
     );
   };
-  let soil: SoilWaterResult | null = null;
   let iterations = 0;
   let residual = Number.POSITIVE_INFINITY;
   let converged = false;
