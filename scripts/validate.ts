@@ -221,7 +221,10 @@ async function main(): Promise<void> {
         evapGlobalMmPerYear: Math.round(eG),
         precipGlobalMmPerYear: Math.round(pG),
         closureRelative: Math.round(((pG - eG) / Math.max(1e-9, eG)) * 1000) / 1000,
-        note: '非保存の定式化では E と P は独立に決まるので食い違って当然。閉包の大きさが保存則へ移る動機の定量',
+        note:
+          MODEL_CONSTANTS.conservativeMoisture > 0
+            ? '保存型: 降水は凝結量なので閉包は 0 になるはず。0 でなければ実装の誤り'
+            : '非保存: E と P は独立に決まるので食い違って当然。閉包の大きさが保存則へ移る動機の定量',
       };
     })(),
     precipitation: {

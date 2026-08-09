@@ -8,6 +8,23 @@ import { fieldScore, itczLineRmse, koppenScore, scoreRegionGates } from './scori
 import { gateFoldAssignments, keepExcludingFold } from './holdout';
 
 export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
+  // ---- 保存型への移行(段 6、2026-08-09)----
+  // 消した定数と理由:
+  //   precipScaleMmPerUnit  保存則の中に置き場所が無い(降水量は収支が決める)
+  //   orographicDepletionM  段 2 で外して悪化しなかった(保存の欠落を補っていた)
+  //   upwindBlockReliefM    段 3 で外したら**改善した**(詳細 +0.59)。
+  //   upwindBlockFloor      風上で降ったぶんは収支で既に減っており、二重に乾かしていた
+  // 残した定数:
+  //   eastCoastSubsidenceRelief  段 4 で外したら悪化(大分類 −0.63)。
+  //                              柱収支から出ない物理を代弁している
+  //   moistureDecay*Km           保存型では**凝結寿命 λ = U_ref/L そのもの**。
+  //                              外す対象ではない(段 5 の実験は設計が誤っていた)
+  // 新しく効くようになった定数(範囲は物理から決めた。目的関数は見ていない):
+  ['condensationRefWindMs', 4, 14],
+  ['moistureEddyDiffusivityM2PerS', 5e5, 3e6],
+  // **evap 系は入れない。** 源泉を目的関数で動かせるようにすると、保存則が
+  // 「源泉の誤りを増幅する装置」から「源泉の誤りを隠す装置」へ変わる。
+  // C_E = 1.0e-3 と海上相対湿度 0.8 は S2 で独立に検証して固定した
   ['moistureDecayOceanKm', 1500, 3200],
   ['moistureDecayLandKm', 1100, 2400],
   ['landRecyclingStrength', 0.2, 0.6],
@@ -25,11 +42,7 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['stormMinQRel', 0.25, 0.55],
   ['stormMoistureSupply', 1.0, 2.4],
   ['stormMoistureDecayKm', 1000, 2000],
-  ['orographicDepletionM', 1000, 2600],
-  ['upwindBlockReliefM', 800, 1800],
-  ['upwindBlockFloor', 0.08, 0.3],
   ['coldCoastSuppression', 0.25, 0.6],
-  ['precipScaleMmPerUnit', 7, 10],
   ['winterFloorFracOfWettest', 0.2, 0.5],
   ['winterFloorMaxMm', 12, 34],
   ['equatorialItczResidual', 0.3, 0.8],

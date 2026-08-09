@@ -201,7 +201,9 @@ export const MODEL_CONSTANTS = {
    *
    * 段階的に置換する(docs/計画_保存則の段階的置換_2026-08-09.md)。
    */
-  conservativeMoisture: 0,
+  // **1 = 保存型を既定にする(段 6、2026-08-09)。** 降水は凝結量として
+  // 収支から出る。0 に戻すと非保存の旧経路(段 0)。移行が終われば分岐ごと畳む
+  conservativeMoisture: 1,
   /**
    * 凝結の時定数を作る基準風速(m/s)。λ = U_ref / L で、L は既存の
    * moistureDecay*Km。**「水が消える距離」を「凝結寿命」として写す**ための係数。
@@ -490,13 +492,17 @@ export const MODEL_CONSTANTS = {
    * 水蒸気が e 分の 1 に減る(風上斜面で雨として落ちた分。パタゴニア・チベット
    * 風下の雨陰の主機構 — 2026-07-30 レビュー P1)
    */
-  orographicDepletionM: 2600,
+  // **段 2 で無効化(2026-08-09)。** 保存型では風上で降ったぶんだけ気柱の水が
+  // 減るので、枯渇は収支から自然に出る。外しても成績は動かなかった(v3 +0.03)
+  orographicDepletionM: 1e9,
   /** \u7a1c\u7dda\u63a8\u5b9a: \u96a3\u63a5\u3068\u306e\u6bd4\u9ad8\u306b\u639b\u3051\u308b\u4fc2\u6570(\u72ed\u3044\u5c71\u8108\u306e 1\u00b0 \u5e73\u5747\u5747\u3057\u5bfe\u7b56\u3002\u906e\u853d/\u969c\u58c1\u306e\u307f) */
   crestProminenceFactor: 0,
   /** 風上山脈による遮蔽: この比高(m)以上で最大遮蔽、遮蔽時の残存率 */
-  upwindBlockReliefM: 1800,
+  // **段 3 で無効化(2026-08-09)。** 外したら**改善した**(詳細 +0.59、
+  // 陸平均降水が観測へ +20mm)。保存則と二重に乾かしていた
+  upwindBlockReliefM: 1e9,
   upwindBlockScanKm: 900,
-  upwindBlockFloor: 0.2794,
+  upwindBlockFloor: 1,
   /** 寒流沿岸の追加抑制率 */
   coldCoastSuppression: 0.25,
   /** 全球スケール係数(供給×持ち上げ → mm/月) */
