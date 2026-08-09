@@ -214,6 +214,8 @@ export function solveMoistureTransport(
   const cNArr = new Float64Array(N);
   const cSArr = new Float64Array(N);
   const diagArr = new Float64Array(N);
+  const rateArr = new Float64Array(N);
+  const exArr = new Float64Array(N);
   for (let row = 0; row < H; row++) {
     const area = areaM2[row] ?? 1;
     const dxC = dxCenterM[row] ?? 1;
@@ -253,10 +255,12 @@ export function solveMoistureTransport(
       cWArr[i] = (lenMeridionalM * Math.max(0, unW) + diffX) / area;
       cNArr[i] = iN >= 0 ? (lenN * (Math.max(0, -unN) + diffY)) / area : 0;
       cSArr[i] = iS >= 0 ? (lenS * (Math.max(0, unS) + diffY)) / area : 0;
-      diagArr[i] =
-        Math.max(1e-6, condensationRatePerMonth[i] ?? 0) +
-        (vExport ? Math.max(0, vExport[i] ?? 0) : 0) +
-        outRate;
+      const rateI = Math.max(1e-6, condensationRatePerMonth[i] ?? 0);
+      const exI = vExport ? Math.max(0, vExport[i] ?? 0) : 0;
+      rateArr[i] = rateI;
+      exArr[i] = exI;
+      // 凝結する枝の対角。閾値ありのときは掃引ごとに枝を選び直す
+      diagArr[i] = rateI + exI + outRate;
     }
   }
 
@@ -270,54 +274,69 @@ export function solveMoistureTransport(
   //
   // 行の行列は風と格子だけで決まり反復では変わらないので、分解は 1 度でよい。
   // 周期境界(経度)は Sherman–Morrison で扱う。
-  const lineRelax = !capacity;
-  const denArr = new Float64Array(lineRelax ? N : 0);
-  const cpArr = new Float64Array(lineRelax ? N : 0);
-  const zArr = new Float64Array(lineRelax ? N : 0);
-  const gammaArr = new Float64Array(lineRelax ? H : 0);
-  if (lineRelax) {
-    const tmp = new Float64Array(W);
+  //
+  // **閾値凝結(capacity)でも線緩和を使う。** C = rate·max(0, W − cap) は
+  // 非線形なので分解を使い回せないが、現在値から枝(W > cap か)を選んで
+  // 半陰的に解けばよい。分解は掃引ごとに作り直す — 分解も求解も同じ O(W) なので
+  // 1 掃引あたりの費用は 2 倍以内に収まる。
+  // (2026-08-04 に閾値凝結を棄却したときのソルバは点緩和で、しかも
+  //  収束判定が壊れていた。ここを直して測り直すために要る)
+  const denArr = new Float64Array(N);
+  const cpArr = new Float64Array(N);
+  const zArr = new Float64Array(N);
+  const gammaArr = new Float64Array(H);
+  const rowDiag = new Float64Array(W);
+  const rowZTmp = new Float64Array(W);
+
+  /** 行 row の周期三重対角を分解する。対角は rowDiag から読む */
+  const factorizeRow = (row: number): void => {
+    const base = row * W;
+    const gamma = -(rowDiag[0] ?? 1);
+    gammaArr[row] = gamma;
+    const bp = (col: number): number => {
+      const d = rowDiag[col] ?? 1;
+      if (col === 0) return d - gamma;
+      if (col === W - 1) {
+        const cLast = -(cEArr[base + W - 1] ?? 0);
+        const aFirst = -(cWArr[base] ?? 0);
+        return d - (cLast * aFirst) / gamma;
+      }
+      return d;
+    };
+    let prevCp = 0;
+    for (let col = 0; col < W; col++) {
+      const a = -(cWArr[base + col] ?? 0);
+      const c = -(cEArr[base + col] ?? 0);
+      const den = bp(col) - (col === 0 ? 0 : a * prevCp);
+      denArr[base + col] = den;
+      const cp = den !== 0 ? c / den : 0;
+      cpArr[base + col] = cp;
+      prevCp = cp;
+    }
+    // u = [gamma, 0, …, 0, c_{W−1}] に対する解 z
+    rowZTmp.fill(0);
+    rowZTmp[0] = gamma;
+    rowZTmp[W - 1] = -(cEArr[base + W - 1] ?? 0);
+    let prev = 0;
+    for (let col = 0; col < W; col++) {
+      const a = -(cWArr[base + col] ?? 0);
+      const den = denArr[base + col] ?? 1;
+      const val = ((rowZTmp[col] ?? 0) - (col === 0 ? 0 : a * prev)) / (den !== 0 ? den : 1);
+      zArr[base + col] = val;
+      prev = val;
+    }
+    for (let col = W - 2; col >= 0; col--) {
+      zArr[base + col] =
+        (zArr[base + col] ?? 0) - (cpArr[base + col] ?? 0) * (zArr[base + col + 1] ?? 0);
+    }
+  };
+
+  // 閾値なしなら対角は反復不変なので、分解は 1 度だけ作る
+  if (!capacity) {
     for (let row = 0; row < H; row++) {
       const base = row * W;
-      const gamma = -(diagArr[base] ?? 1);
-      gammaArr[row] = gamma;
-      // 修正した対角(Sherman–Morrison)
-      const bp = (col: number): number => {
-        const d = diagArr[base + col] ?? 1;
-        if (col === 0) return d - gamma;
-        if (col === W - 1) {
-          const cLast = -(cEArr[base + W - 1] ?? 0);
-          const aFirst = -(cWArr[base] ?? 0);
-          return d - (cLast * aFirst) / gamma;
-        }
-        return d;
-      };
-      // 前進消去の係数を蓄える(a = −cW, c = −cE)
-      let prevCp = 0;
-      for (let col = 0; col < W; col++) {
-        const a = -(cWArr[base + col] ?? 0);
-        const c = -(cEArr[base + col] ?? 0);
-        const den = bp(col) - (col === 0 ? 0 : a * prevCp);
-        denArr[base + col] = den;
-        const cp = den !== 0 ? c / den : 0;
-        cpArr[base + col] = cp;
-        prevCp = cp;
-      }
-      // u = [gamma, 0, …, 0, c_{W−1}] に対する解 z(行ごとに 1 度でよい)
-      tmp.fill(0);
-      tmp[0] = gamma;
-      tmp[W - 1] = -(cEArr[base + W - 1] ?? 0);
-      let prev = 0;
-      for (let col = 0; col < W; col++) {
-        const a = -(cWArr[base + col] ?? 0);
-        const den = denArr[base + col] ?? 1;
-        const val = ((tmp[col] ?? 0) - (col === 0 ? 0 : a * prev)) / (den !== 0 ? den : 1);
-        zArr[base + col] = val;
-        prev = val;
-      }
-      for (let col = W - 2; col >= 0; col--) {
-        zArr[base + col] = (zArr[base + col] ?? 0) - (cpArr[base + col] ?? 0) * (zArr[base + col + 1] ?? 0);
-      }
+      for (let col = 0; col < W; col++) rowDiag[col] = diagArr[base + col] ?? 1;
+      factorizeRow(row);
     }
   }
 
@@ -350,27 +369,21 @@ export function solveMoistureTransport(
   // 全球和は自動的に 0 になり、**局所解が大きくずれていても閉包は合う**。
   // 閉包が見ているのは不均衡の平均であって最大ではない。
   // 線緩和の作業配列(行ごとに使い回す)
-  const rowRhs = new Float64Array(lineRelax ? W : 0);
-  const rowY = new Float64Array(lineRelax ? W : 0);
+  const rowRhs = new Float64Array(W);
+  const rowY = new Float64Array(W);
 
   let sweeps = 0;
   for (let it = 1; it <= maxIterations; it++) {
     sweeps++;
     iterations = sweeps;
     let maxImbalance = 0;
-    // 掃引順を 4 通り回す(行 × 列 の昇降の組合せ)。移流は情報が風下へ伝わる
-    // ので、風向と揃った掃引が来る回で一気に伝播する。決定的なので再現する
-    const dir = (it - 1) % 4;
-    const rowForward = dir < 2;
-    const colForward = dir % 2 === 0;
+    // 行の掃引順を交互にする(南北方向の情報は行から行へ伝わるので、
+    // 風向と揃った掃引が来る回で一気に進む)。決定的なので再現する。
+    // 経度方向は行の中で直接解くので、列の順序は答えに影響しない
+    const rowForward = it % 2 === 1;
     for (let rr = 0; rr < H; rr++) {
       const row = rowForward ? rr : H - 1 - rr;
-      const area = areaM2[row] ?? 1;
-      const dxC = dxCenterM[row] ?? 1;
-      const lenN = lenNorthM[row] ?? 0;
-      const lenS = lenSouthM[row] ?? 0;
-
-      if (lineRelax) {
+      {
         // ---- 行を丸ごと解く(経度方向は陰的)----
         const base = row * W;
         for (let col = 0; col < W; col++) {
@@ -380,19 +393,39 @@ export function solveMoistureTransport(
           const wi = cur[i] ?? 0;
           const wN = iN >= 0 ? (cur[iN] ?? 0) : 0;
           const wS = iS >= 0 ? (cur[iS] ?? 0) : 0;
-          const rhs =
-            (sourceMmPerMonth[i] ?? 0) + (cNArr[i] ?? 0) * wN + (cSArr[i] ?? 0) * wS;
+          let rhs = (sourceMmPerMonth[i] ?? 0) + (cNArr[i] ?? 0) * wN + (cSArr[i] ?? 0) * wS;
+          // 閾値ありのときは現在値から枝を選ぶ(半陰的)。
+          //   凝結する枝: diag = rate + ex + outRate、rhs に + rate·cap
+          //   通過する枝: diag = ex + outRate（凝結しない = 水は下流へ)
+          let diagI = diagArr[i] ?? 1;
+          let condNow = (rateArr[i] ?? 0) * wi;
+          if (capacity) {
+            const cap = Math.max(0, capacity[i] ?? 0);
+            if (wi > cap) {
+              rhs += (rateArr[i] ?? 0) * cap;
+              condNow = (rateArr[i] ?? 0) * (wi - cap);
+            } else {
+              diagI = Math.max(1e-9, (exArr[i] ?? 0) + (outRateArr[i] ?? 0));
+              condNow = 0;
+            }
+          }
           rowRhs[col] = rhs;
+          rowDiag[col] = diagI;
           // **反復前の残差**(南北は既知、東西は現在値で評価)
           const absImb = Math.abs(
-            rhs +
-              (cEArr[i] ?? 0) * (cur[base + (col + 1) % W] ?? 0) +
+            (sourceMmPerMonth[i] ?? 0) +
+              (cNArr[i] ?? 0) * wN +
+              (cSArr[i] ?? 0) * wS +
+              (cEArr[i] ?? 0) * (cur[base + ((col + 1) % W)] ?? 0) +
               (cWArr[i] ?? 0) * (cur[base + ((col - 1 + W) % W)] ?? 0) -
-              (diagArr[i] ?? 0) * wi,
+              condNow -
+              (exArr[i] ?? 0) * wi -
+              (outRateArr[i] ?? 0) * wi,
           );
           // **NaN を素通りさせない**
           if (!(absImb <= maxImbalance)) maxImbalance = absImb;
         }
+        if (capacity) factorizeRow(row);
         // 周期三重対角を解く(分解は反復不変なので使い回す)
         let prev = 0;
         for (let col = 0; col < W; col++) {
@@ -418,79 +451,6 @@ export function solveMoistureTransport(
           // 逐次過緩和。**不動点は変わらない**
           cur[i] = Math.max(0, wi + relaxation * (wLine - wi));
         }
-        continue;
-      }
-
-      for (let cc = 0; cc < W; cc++) {
-        const col = colForward ? cc : W - 1 - cc;
-        const i = row * W + col;
-        const iE = row * W + wrapCol(grid, col + 1);
-        const iW = row * W + wrapCol(grid, col - 1);
-        const iN = row > 0 ? (row - 1) * W + col : -1;
-        const iS = row < H - 1 ? (row + 1) * W + col : -1;
-
-        // 面の法線速度は両側セルの平均(共有面で一意 → 保存的)。反復不変
-        const unE = faceE[i] ?? 0;
-        const unW = faceW[i] ?? 0;
-        const unN = faceN[i] ?? 0;
-        const unS = faceS[i] ?? 0;
-
-        const wi = cur[i] ?? 0;
-        const wE = cur[iE] ?? 0;
-        const wW = cur[iW] ?? 0;
-        const wN = iN >= 0 ? (cur[iN] ?? 0) : wi;
-        const wS = iS >= 0 ? (cur[iS] ?? 0) : wi;
-
-        // 正味流出は w_i について 1 次なので、係数と定数へ分けられる:
-        //   netOutflow = a·w_i − b
-        // a/area は既に作ってある outRate と同じ量である。
-        // b は**隣から入ってくるぶん**(風上流束の流入側 + 拡散の流入側)。
-        let inflow =
-          lenMeridionalM * Math.max(0, -unE) * wE +
-          lenMeridionalM * Math.max(0, unW) * wW +
-          (iN >= 0 ? lenN * Math.max(0, -unN) * wN : 0) +
-          (iS >= 0 ? lenS * Math.max(0, unS) * wS : 0);
-        if (diffusivity) {
-          inflow +=
-            (lenMeridionalM * diffusivity * wE) / dxC +
-            (lenMeridionalM * diffusivity * wW) / dxC +
-            (iN >= 0 ? (lenN * diffusivity * wN) / dyCenterM : 0) +
-            (iS >= 0 ? (lenS * diffusivity * wS) / dyCenterM : 0);
-        }
-        const inflowRate = inflow / area; // mm/月
-        const outRate = outRateArr[i] ?? 0; // 1/月(a/area)
-
-        const rate = Math.max(1e-6, condensationRatePerMonth[i] ?? 0);
-        // 鉛直輸出も陰的に扱う(W に比例して柱から抜ける。降水にはならない)
-        const ex = vExport ? Math.max(0, vExport[i] ?? 0) : 0;
-        const src = sourceMmPerMonth[i] ?? 0;
-
-        // **反復前の残差**(この反復子がどれだけ方程式を満たしていないか)。
-        // 更新後ではなく更新前で測るのが正しい — 更新後は「次の反復子」の
-        // 残差の一部を先取りしてしまい、収束を実際より良く見せる
-        const condNow = capacity
-          ? rate * Math.max(0, wi - Math.max(0, capacity[i] ?? 0))
-          : rate * wi;
-        const absImb = Math.abs(src + inflowRate - condNow - ex * wi - outRate * wi);
-        // **NaN を素通りさせない**(`absImb > maxImbalance` は NaN で false)
-        if (!(absImb <= maxImbalance)) maxImbalance = absImb;
-
-        // 局所方程式を **w_i について厳密に解く**(点ガウス=ザイデル)。
-        // 以前は dt = 0.8/outRate の擬似時間更新で、解かずに 0.8 倍へ
-        // 減衰させていた。楕円型(この系は拡散が凝結より 2 桁速い)では
-        // これが収束を大きく損なう
-        let wGs: number;
-        if (capacity) {
-          const cap = Math.max(0, capacity[i] ?? 0);
-          const withCond = (src + inflowRate + rate * cap) / (rate + ex + outRate);
-          wGs =
-            withCond > cap ? withCond : (src + inflowRate) / Math.max(1e-9, ex + outRate);
-        } else {
-          wGs = (src + inflowRate) / (rate + ex + outRate);
-        }
-        // 逐次過緩和。**不動点は変わらない**(収束したときに w = wGs なので、
-        // ω を掛けても解は同じ)。速度だけの量なので較正定数ではない
-        cur[i] = Math.max(0, wi + relaxation * (wGs - wi));
       }
     }
     residual = maxImbalance / meanSource;
