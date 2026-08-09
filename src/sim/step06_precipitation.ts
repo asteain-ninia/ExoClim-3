@@ -76,6 +76,11 @@ export const CONSERVATIVE_STATS = {
  * 反復数と減衰は**答えを決めてはならない** — 収束を確かめたうえで使う。
  */
 const VIRGA_OUTER_ITERATIONS = 6;
+/**
+ * 水蒸気輸送の反復上限。**答えを決めてはならない量**なので、
+ * 到達しなかった解は診断で適用範囲外にする(黙って採用しない)。
+ */
+export const TRANSPORT_MAX_ITERATIONS = 20000;
 const VIRGA_RELAXATION = 0.6;
 const VIRGA_TOLERANCE = 5e-3;
 
@@ -681,6 +686,14 @@ export async function computePrecipitation(
   // ---- 保存型の水収支(段 1)。既定は無効 ----
   // 海面蒸発は月・セルにしか依らないので 1 度だけ作って使い回す
   const evapCache: { v: EvaporationResult | null } = { v: null };
+  /**
+   * 月ごとの前回解(温間開始)。同じ月を結合反復で何度も解き直すので、
+   * 前回の水蒸気量から始めれば反復数が大きく減る。
+   *
+   * **答えが初期値に依らないことは実測で確かめること**(cold と warm を
+   * 突き合わせる)。速度のために答えを動かしては本末転倒である。
+   */
+  const warmStart: Array<Float32Array | null> = new Array(MONTHS_PER_YEAR).fill(null);
 
   /**
    * 降水を**凝結量**として作る。
@@ -736,9 +749,11 @@ export async function computePrecipitation(
         // **上限が答えを決めないところまで上げる。** 既定 4000 では 84 か月分が
         // 未収束のまま残った(2026-08-09)。EBM で 3 回踏んだ隠しパラメータと
         // 同じ型なので、収束を確かめてから採点する
-        maxIterations: 20000,
+        maxIterations: TRANSPORT_MAX_ITERATIONS,
+        ...(warmStart[m] ? { initialGuessMm: warmStart[m] as Float32Array } : {}),
       },
     );
+    warmStart[m] = r.waterMm;
     // **収束していない解を黙って採用しない**
     if (!r.converged) {
       CONSERVATIVE_STATS.nonConverged++;
@@ -785,8 +800,10 @@ export async function computePrecipitation(
       }
       last = solveMoistureTransport(grid, ctx.params.body.radiusKm, u, v, src, rateEff, {
         diffusivityM2PerS: K.moistureEddyDiffusivityM2PerS,
-        maxIterations: 20000,
+        maxIterations: TRANSPORT_MAX_ITERATIONS,
+        initialGuessMm: water,
       });
+      warmStart[m] = last.waterMm;
       if (!last.converged) {
         CONSERVATIVE_STATS.nonConverged++;
         CONSERVATIVE_STATS.worstResidual = Math.max(
@@ -1182,6 +1199,15 @@ export async function computePrecipitation(
             spinupYears: soil.spinupYears,
             meanAnnualStorageDriftMm: soil.meanAnnualStorageDriftMm,
             maxAnnualStorageDriftMm: soil.maxAnnualStorageDriftMm,
+          },
+        }
+      : {}),
+    ...(K.conservativeMoisture > 0
+      ? {
+          transport: {
+            nonConvergedSolves: CONSERVATIVE_STATS.nonConverged,
+            worstResidual: CONSERVATIVE_STATS.worstResidual,
+            maxIterations: TRANSPORT_MAX_ITERATIONS,
           },
         }
       : {}),

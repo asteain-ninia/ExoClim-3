@@ -305,6 +305,20 @@ export function diagnoseFields(
         `${FIELD_DOMAIN.monthlyPrecipMaxMm.toLocaleString()} mm/月 を超過 — 水収支近似の破綻`,
     });
   }
+  // 保存型の水蒸気輸送が収束していなければ**判定不能**にする。
+  // 「解けていない解」を分類して見せるのは、無いはずの気候を見せることに等しい。
+  // 地球で足りる反復上限が他の惑星でも足りるとは限らない(2026-08-09 実測)。
+  const tr = precipitation.transport;
+  if (tr && tr.nonConvergedSolves > 0) {
+    issues.push({
+      severity: 'error',
+      code: 'field:transport:nonconverged',
+      message:
+        `水蒸気輸送が収束していない(${tr.nonConvergedSolves} 件 / ` +
+        `最悪の相対残差 ${tr.worstResidual.toExponential(2)} / 反復上限 ${tr.maxIterations}) — ` +
+        `この惑星では上限が答えを決めており判定不能`,
+    });
+  }
   if (pMin < 0) {
     issues.push({
       severity: 'error',

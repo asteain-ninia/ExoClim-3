@@ -137,6 +137,24 @@ export interface PrecipitationResult {
     meanAnnualStorageDriftMm: number;
     maxAnnualStorageDriftMm: number;
   };
+  /**
+   * 保存型の水蒸気輸送の収束(保存型を使ったときだけ入る)。
+   *
+   * **反復上限を固定値にしない**ための口。2026-08-09 の実測で、同じソルバが
+   * 地球の入力では 1500 反復で収束するのに、別の入力では 20000 でも
+   * 収束しないことが分かった。上限は「地球で足りる値」でしかなく、
+   * **架空の惑星では上限が答えを決めうる**。
+   * 収束しなかったときは適用範囲外として扱い、ケッペン分類を有効な
+   * 科学出力として出さない(diagnostics 側で error にする)。
+   */
+  transport?: {
+    /** 収束しなかった解の数(月 × 結合反復) */
+    nonConvergedSolves: number;
+    /** その中での最悪の相対残差 */
+    worstResidual: number;
+    /** 使った反復上限 */
+    maxIterations: number;
+  };
 }
 
 export interface KoppenResult {
