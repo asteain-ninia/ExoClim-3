@@ -58,6 +58,8 @@ interface Meta {
 
 interface Case {
   label: string;
+  /** true なら 2026-08-04 の手作りの源泉を使う(対照) */
+  oldSource?: boolean;
   /** 閾値の大きさ。0 なら閾値なし(C = λG·W) */
   capScale: number;
   /** 閾値ありのときの凝結率(1/月)。G は閾値側へ回す */
@@ -77,6 +79,11 @@ const CASES: Case[] = [
   { label: 'cap=40 λ=6', capScale: 40, lambda: 6, exportRate: 0 },
   { label: 'cap=25 λ=6 輸出15', capScale: 25, lambda: 6, exportRate: 15 },
   { label: 'cap=25 λ=6 輸出40', capScale: 25, lambda: 6, exportRate: 40 },
+  // ---- 対照: 源泉だけ 2026-08-04 の手作りに戻す ----
+  // ソルバ(収束)と源泉(バルク式)を同時に変えているので、
+  // **どちらが効いて結論が逆転したのか**を分離する
+  { label: '[対照] 閾値なし・旧源泉', capScale: 0, lambda: 0, exportRate: 0, oldSource: true },
+  { label: '[対照] cap=25 λ=6・旧源泉', capScale: 25, lambda: 6, exportRate: 0, oldSource: true },
 ];
 
 function main(): void {
@@ -92,18 +99,60 @@ function main(): void {
   const grid = createGrid(meta.resolutionDeg);
   const land = all.subarray(meta.offsets.landMask, meta.offsets.landMask + N);
 
-  // 乾燥セル: 観測で年降水が非常に少ない陸(サハラ・アラビア・豪州内陸)。
-  // **地理を決め打ちしないため、観測降水の下位で選ぶ**
   const curAnnual = new Float32Array(N);
   for (let m = 0; m < MONTHS; m++) {
     const p = all.subarray(meta.offsets.precipMm + m * N, meta.offsets.precipMm + (m + 1) * N);
     for (let i = 0; i < N; i++) curAnnual[i] = (curAnnual[i] ?? 0) + (p[i] ?? 0);
   }
-  // 観測が無いので、**現行モデルの乾燥域**ではなく緯度と現行降水から選ぶと
-  // 循環参照になる。ここでは 2026-08-04 と同じく「現行モデルで年 100mm 未満の陸」
-  // を乾燥セルとする(前回と同じ集合を使うことが比較の条件)
+
+  // 乾燥セル: **観測のケッペンが砂漠(BWh/BWk)**の陸セル。
+  //
+  // 最初の版は「現行モデルで年 100mm 未満の陸」で選んでいた。これは循環参照で、
+  // 基準の現行モデルが良く見えるのは当たり前になる(実際 0.028 が出て、
+  // 2026-08-04 の 0.085 と比べられなかった)。**観測で選ぶ。**
+  // 緯度経度の決め打ちではなく観測由来なので、地理中立の原則にも反しない。
+  const kob = JSON.parse(
+    fs.readFileSync('tests/fixtures/earth_koppen_1deg.json', 'utf8'),
+  ) as { classes: string[]; classRaster: number[] };
+  const bwIds = new Set<number>();
+  kob.classes.forEach((c, idx) => {
+    if (c === 'BWh' || c === 'BWk') bwIds.add(idx);
+  });
   const dryCells: number[] = [];
-  for (let i = 0; i < N; i++) if (land[i] && (curAnnual[i] ?? 0) < 100) dryCells.push(i);
+  for (let i = 0; i < N; i++) {
+    if (land[i] && bwIds.has(kob.classRaster[i] ?? 0)) dryCells.push(i);
+  }
+  // **2 つの集合を出す。** 2026-08-04 は観測 44mm の極乾燥核を見ており、
+  // BW 全域(観測 139mm)とは別物である。同じ実験の結論が集合の取り方で
+  // 逆転しうるので、両方を並べて「どちらの話なのか」を曖昧にしない
+
+  // 観測の比も**この集合で**計算する(古い記録の 0.055 を鵜呑みにしない)。
+  // 観測降水は 2° なので 1° セルを 2 で割って引く
+  const clim = JSON.parse(
+    fs.readFileSync('tests/fixtures/earth_climate_2deg.json', 'utf8'),
+  ) as { widthCells: number; monthlyPrecipitationMm: number[][] };
+  const obsAnnual = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const oi = Math.floor(Math.floor(i / W) / 2) * clim.widthCells + Math.floor((i % W) / 2);
+    let sum = 0;
+    let ok = true;
+    for (let m = 0; m < MONTHS; m++) {
+      const v = clim.monthlyPrecipitationMm[m]?.[oi] ?? -9999;
+      if (v < 0) {
+        ok = false;
+        break;
+      }
+      sum += v;
+    }
+    obsAnnual[i] = ok ? sum : -1;
+  }
+
+  // 極乾燥核: 観測の年降水が 100mm 未満の陸(2026-08-04 の 44mm 集合に近い)
+  const coreCells: number[] = [];
+  for (let i = 0; i < N; i++) {
+    const o = obsAnnual[i] ?? -1;
+    if (land[i] && o >= 0 && o < 100) coreCells.push(i);
+  }
 
   const landMean = (v: ArrayLike<number>): number => {
     let s = 0;
@@ -127,12 +176,38 @@ function main(): void {
 
   const curLand = landMean(curAnnual);
   const curDry = cellMean(curAnnual, dryCells);
-  console.log(`乾燥セル ${dryCells.length} 個（現行モデルで年 100mm 未満の陸）`);
-  console.log('観測の比 0.055 / 現行(非保存) の比を下に出す\n');
-  console.log('案                    陸平均   砂漠年   **比**   収支残差  最大掃引  未収束  秒');
+  // 観測の比(降水が欠損しているセルは除く)
+  const obsCells = dryCells.filter((i) => (obsAnnual[i] ?? -1) >= 0);
+  let obsLandSum = 0;
+  let obsLandW = 0;
+  for (let row = 0; row < meta.heightCells; row++) {
+    const cw = Math.cos((latDegOfRow(grid, row) * Math.PI) / 180);
+    for (let col = 0; col < W; col++) {
+      const i = row * W + col;
+      if (!land[i] || (obsAnnual[i] ?? -1) < 0) continue;
+      obsLandSum += cw * (obsAnnual[i] ?? 0);
+      obsLandW += cw;
+    }
+  }
+  const obsLand = obsLandSum / Math.max(1e-9, obsLandW);
+  const obsDry = cellMean(obsAnnual, obsCells);
+  console.log(`乾燥セル ${dryCells.length} 個（観測のケッペンが BWh/BWk の陸、降水あり ${obsCells.length} 個）`);
+  console.log(
+    `観測              陸平均 ${obsLand.toFixed(0)} / 砂漠年 ${obsDry.toFixed(0)} / ` +
+      `**比 ${(obsDry / obsLand).toFixed(3)}**\n`,
+  );
+  console.log(
+    `極乾燥核 ${coreCells.length} 個（観測の年降水 100mm 未満の陸、観測 ` +
+      `${cellMean(obsAnnual, coreCells).toFixed(0)}mm / 比 ` +
+      `${(cellMean(obsAnnual, coreCells) / obsLand).toFixed(3)}）
+`,
+  );
+  console.log('案                    陸平均   BW年  BW比   核年   **核比**  収支残差  掃引  秒');
   console.log(
     `${'現行(風上追跡)'.padEnd(20)} ${curLand.toFixed(0).padStart(6)} ` +
-      `${curDry.toFixed(0).padStart(7)} ${(curDry / curLand).toFixed(3).padStart(7)}`,
+      `${curDry.toFixed(0).padStart(5)} ${(curDry / curLand).toFixed(3).padStart(5)} ` +
+      `${cellMean(curAnnual, coreCells).toFixed(0).padStart(6)} ` +
+      `${(cellMean(curAnnual, coreCells) / curLand).toFixed(3).padStart(8)}`,
   );
 
   const pressureHpa = 1013.25;
@@ -161,6 +236,11 @@ function main(): void {
         const tc = t[i] ?? 0;
         if (land[i]) {
           source[i] = et[i] ?? 0;
+        } else if (c.oldSource) {
+          // 2026-08-04 の手作りの源泉(E=120 × qs相対 × 風の弱い依存)
+          const spd = Math.hypot(u[i] ?? 0, v[i] ?? 0);
+          const qsRel = saturationVaporPressureHpa(tc) / saturationVaporPressureHpa(20);
+          source[i] = 120 * qsRel * Math.min(2, (0.4 + spd / 5) / 1.4);
         } else {
           // **S2 で検証したバルク式**（当時は手作りの定数だった）
           const spd = Math.max(K.evapMinWindMs, Math.hypot(u[i] ?? 0, v[i] ?? 0));
@@ -193,11 +273,13 @@ function main(): void {
     }
     const lm = landMean(annual);
     const dry = cellMean(annual, dryCells);
+    const core = cellMean(annual, coreCells);
     console.log(
-      `${c.label.padEnd(20)} ${lm.toFixed(0).padStart(6)} ${dry.toFixed(0).padStart(7)} ` +
-        `${(dry / Math.max(1e-9, lm)).toFixed(3).padStart(7)} ` +
-        `${worstBal.toExponential(1).padStart(9)} ${String(maxIter).padStart(9)} ` +
-        `${String(unconverged).padStart(6)} ${((performance.now() - t0) / 1000).toFixed(0).padStart(4)}`,
+      `${c.label.padEnd(20)} ${lm.toFixed(0).padStart(6)} ${dry.toFixed(0).padStart(5)} ` +
+        `${(dry / Math.max(1e-9, lm)).toFixed(3).padStart(5)} ` +
+        `${core.toFixed(0).padStart(6)} ${(core / Math.max(1e-9, lm)).toFixed(3).padStart(8)} ` +
+        `${worstBal.toExponential(1).padStart(8)} ${String(maxIter).padStart(5)} ` +
+        `${unconverged > 0 ? '未収束' : ''}${((performance.now() - t0) / 1000).toFixed(0).padStart(4)}`,
     );
   }
   console.log(
