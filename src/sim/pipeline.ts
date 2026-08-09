@@ -13,6 +13,7 @@ import { computeAirflow } from './step04_airflow';
 import { computeTemperature, resetEbmSolverStats } from './step05_temperature';
 import {
   computePrecipitation,
+  resetConservativeStats,
   type PrecipDiagBox,
   type PrecipDiagnostics,
   type SoilWaterResult,
@@ -184,6 +185,8 @@ async function runPipelineCore(
   // 一部の項目だけ手で 0 にしており、validate.ts は一度もリセットしていなかった
   // (2026-08-09 の外部レビューで発覚)
   resetEbmSolverStats();
+  // 保存型の水収支の診断も同じ理由で毎回初期化する
+  resetConservativeStats();
 
   // 2 パス目(陸面の水 → 気温の帰還)が走るかは定数で決まるので、進捗の総量は
   // 事前に確定する。**帰還の口は 2 つあり、どちらか一方でも有効なら 2 パス**:

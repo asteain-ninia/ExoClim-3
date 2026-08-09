@@ -12,6 +12,8 @@ import { MONTHS_PER_YEAR } from '@/domain/insolation';
 import { latDegOfRow, cellHeightKm, cellWidthKm, wrapCol } from '@/domain/grid';
 import type { Grid } from '@/domain/grid';
 import { MODEL_CONSTANTS as K } from './constants';
+import { solveMoistureTransport, SECONDS_PER_MONTH } from './moisture_transport';
+import { computeOceanEvaporation, type EvaporationResult } from './evaporation';
 import { itczInfluenceAt } from './step01_itcz';
 import type {
   AirflowResult,
@@ -46,6 +48,26 @@ function buildPrecipitationResult(
       annualPrecipMm[i] = (annualPrecipMm[i] ?? 0) + (month[i] ?? 0);
   }
   return { monthlyPrecipMm, annualPrecipMm, coupling };
+}
+
+/**
+ * 保存型の水収支の診断(報告用。物理結果には含めない)。
+ * **パイプラインの入口で初期化する**(resetConservativeStats)。
+ * 収束していない輸送の解を黙って採用しないために置く。
+ */
+export const CONSERVATIVE_STATS = {
+  /** 収束しなかった月の数(12 か月 × 結合反復ぶん数える) */
+  nonConverged: 0,
+  /** 収束しなかった中での最悪の相対残差 */
+  worstResidual: 0,
+  /** 反復数の合計(費用の目安) */
+  iterations: 0,
+};
+
+export function resetConservativeStats(): void {
+  CONSERVATIVE_STATS.nonConverged = 0;
+  CONSERVATIVE_STATS.worstResidual = 0;
+  CONSERVATIVE_STATS.iterations = 0;
 }
 
 /** 飽和水蒸気圧 hPa(Magnus 式)。水蒸気供給のスケールとして使用 */
@@ -633,11 +655,76 @@ export async function computePrecipitation(
   // R3: 陸面供給は「当月降水に比例」ではなく土壌水分バケツの実蒸発散に
   // 比例させる(乾季へ前月までの雨を持ち越す)。月をまたぐ状態を持つため
   // 結合反復を月ループの外側に置く — 土壌無効時は月ごと独立で従来と同一。
+  // ---- 保存型の水収支(段 1)。既定は無効 ----
+  // 海面蒸発は月・セルにしか依らないので 1 度だけ作って使い回す
+  const evapCache: { v: EvaporationResult | null } = { v: null };
+
+  /**
+   * 降水を**凝結量**として作る。
+   *   0 = S − C(W) − ∇·(WV) ,  C = λ·G·W ,  P = C
+   * S は蒸発(海面 + 陸面)、G は既存の乗数の積、λ は凝結の時定数。
+   * **precipScaleMmPerUnit はここに存在しない** — 収支が mm を決めるので、
+   * 無次元の供給を mm へ換算する定数は置き場所が無い。
+   */
+  const conservativeMonth = (
+    m: number,
+    tField: Float32Array,
+    u: Float32Array,
+    v: Float32Array,
+    supply: Float32Array,
+  ): Float32Array => {
+    const N = grid.cellCount;
+    // 凝結率の係数 G = 既存の乗数の積(この段では 1 つも外さない)
+    const G = new Float32Array(N);
+    convertToPrecip(
+      ctx, itcz, m, tField, u, v, supply,
+      windBelt.monthlyRidgeLatNDeg[m] ?? 31,
+      windBelt.monthlyRidgeLatSDeg[m] ?? -31,
+      windBelt.monthlyPolarFrontLatNDeg[m] ?? 60,
+      windBelt.monthlyPolarFrontLatSDeg[m] ?? -60,
+      dyKm, ocean, eastOceanKm, eastOceanSstA, meanItczCenters, crestElev,
+      coldAnomalyCache, undefined, G,
+    );
+    // 源泉 S = 海面蒸発 + 陸面蒸発散
+    if (!evapCache.v) evapCache.v = computeOceanEvaporation(ctx, temperature, airflow);
+    const src = new Float32Array(N);
+    const etM = soil?.actualEtMm[m];
+    const oceanE = evapCache.v.monthlyOceanEvapMm[m];
+    for (let i = 0; i < N; i++) {
+      src[i] = terrain.landMask[i] ? (etM?.[i] ?? 0) : (oceanE?.[i] ?? 0);
+    }
+    // 凝結率 λ·G。λ = U_ref / L で、既存の距離減衰を**凝結寿命**として写す
+    const rate = new Float32Array(N);
+    const travelKmPerMonth = (K.condensationRefWindMs * SECONDS_PER_MONTH) / 1000;
+    for (let i = 0; i < N; i++) {
+      const lKm = terrain.landMask[i] ? K.moistureDecayLandKm : K.moistureDecayOceanKm;
+      // 0 のセルは水蒸気が溜まり続けるので下限を置く(輸送側でも安全側に効く)
+      rate[i] = Math.max(0.05, (travelKmPerMonth / Math.max(1, lKm)) * (G[i] ?? 0));
+    }
+    const r = solveMoistureTransport(
+      grid,
+      ctx.params.body.radiusKm,
+      u,
+      v,
+      src,
+      rate,
+      { diffusivityM2PerS: K.moistureEddyDiffusivityM2PerS },
+    );
+    // **収束していない解を黙って採用しない**
+    if (!r.converged) {
+      CONSERVATIVE_STATS.nonConverged++;
+      CONSERVATIVE_STATS.worstResidual = Math.max(CONSERVATIVE_STATS.worstResidual, r.residual);
+    }
+    CONSERVATIVE_STATS.iterations += r.iterations;
+    return r.condensationMm;
+  };
+
   const monthlyConvert = (m: number, supply: Float32Array): Float32Array => {
     const tField = temperature.monthlyTemperatureC[m];
     const u = airflow.monthlyWindU[m];
     const v = airflow.monthlyWindV[m];
     if (!tField || !u || !v) return new Float32Array(grid.cellCount);
+    if (K.conservativeMoisture > 0) return conservativeMonth(m, tField, u, v, supply);
     return convertToPrecip(
       ctx,
       itcz,
@@ -1265,6 +1352,14 @@ function convertToPrecip(
    */
   coldAnomalyCache: Float32Array | null,
   diagM?: PrecipDiagMonth,
+  /**
+   * **保存型の水収支で使う凝結率の係数 G**(与えたときだけ書く)。
+   * 中身は「風上遮蔽 × 持上げ × CRH」の積で、現行の降水乗数と**同じもの**。
+   * 意味だけが「降水の乗数」から「凝結率の係数」へ変わる。
+   * 段階置換の段 1 ではここで 1 つも外さない
+   * (docs/計画_保存則の段階的置換_2026-08-09.md)。
+   */
+  condRateOut?: Float32Array,
 ): Float32Array {
   const { grid, params, terrain } = ctx;
   const W = grid.widthCells;
@@ -1556,6 +1651,7 @@ function convertToPrecip(
         precipMm *= 1 - lostFrac;
       }
       out[i] = precipMm;
+      if (condRateOut) condRateOut[i] = blockFactor * lift * crhFactor;
       if (diagM) {
         diagM.supplyStorm[i] = stormSupply;
         diagM.liftItcz[i] = liftItczF;
