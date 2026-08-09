@@ -128,7 +128,7 @@ async function main(): Promise<void> {
     const gates = scoreRegionGates(r).filter((g) => g.pass).length;
     console.log(
       `${st.label.padEnd(36)} ${(closure * 100).toFixed(1).padStart(6)}%  ` +
-        `${CONSERVATIVE_STATS.nonConverged === 0 ? ' ○ ' : ' × '}  ` +
+        `${CONSERVATIVE_STATS.nonConverged === 0 && CONSERVATIVE_STATS.virgaNonConverged === 0 ? ' ○ ' : ' × '}  ` +
         `${s.fitness.toFixed(3)}  ${s.majorPct.toFixed(2)}  ${s.detailPct.toFixed(2)}  ` +
         `${fs2.precipPhaseRmseDays.toFixed(1)}  ${Math.round(fs2.landMeanModelMm).toString().padStart(5)}   ${gates}`,
     );

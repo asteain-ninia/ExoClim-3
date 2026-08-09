@@ -35,6 +35,7 @@ import {
 } from './validate_criteria';
 import { EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
 import { computeOceanEvaporation } from '../src/sim/evaporation';
+import { CONSERVATIVE_STATS } from '../src/sim/step06_precipitation';
 import { regionKoppenDiag, regionPrecipDiag, regionTargetStatus } from './scoring_regions';
 import { loadFoldBest } from './optimize_store';
 import { HOLDOUT_FOLDS, gateFoldAssignments, keepExcludingFold, keepOnlyFold } from './holdout';
@@ -365,6 +366,8 @@ async function main(): Promise<void> {
     // **ベタ書きをやめる。** 以前はここが true 固定で、土壌水分の周期定常は
     // 一度も検査されていなかった(2026-08-09 の外部レビューで発覚)
     soilConverged: result.precipitation.soil?.converged ?? true,
+    moistureTransportNonConverged: CONSERVATIVE_STATS.nonConverged,
+    virgaNonConverged: CONSERVATIVE_STATS.virgaNonConverged,
   });
   console.log(
     `\n数値的健全性(凍結 ${NUMERICAL_GATES.frozenAt}): ${numerical.pass ? '✅ PASS' : '❌ FAIL — 非零終了'}`,

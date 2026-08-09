@@ -13,7 +13,11 @@ import { latDegOfRow, cellHeightKm, cellWidthKm, wrapCol } from '@/domain/grid';
 import type { Grid } from '@/domain/grid';
 import { MODEL_CONSTANTS as K } from './constants';
 import { solveMoistureTransport, SECONDS_PER_MONTH } from './moisture_transport';
-import { computeOceanEvaporation, type EvaporationResult } from './evaporation';
+import {
+  computeOceanEvaporation,
+  saturatedColumnMm,
+  type EvaporationResult,
+} from './evaporation';
 import { itczInfluenceAt } from './step01_itcz';
 import type {
   AirflowResult,
@@ -62,12 +66,24 @@ export const CONSERVATIVE_STATS = {
   worstResidual: 0,
   /** 反復数の合計(費用の目安) */
   iterations: 0,
+  /** virga の外側反復が収束しなかった月の数 */
+  virgaNonConverged: 0,
 };
+
+/**
+ * 雲底下の再蒸発は降水量そのものに依存する(弱い雨ほど多く失われる)ので、
+ * 凝結率を下げて解き直す**外側反復**が要る。
+ * 反復数と減衰は**答えを決めてはならない** — 収束を確かめたうえで使う。
+ */
+const VIRGA_OUTER_ITERATIONS = 6;
+const VIRGA_RELAXATION = 0.6;
+const VIRGA_TOLERANCE = 5e-3;
 
 export function resetConservativeStats(): void {
   CONSERVATIVE_STATS.nonConverged = 0;
   CONSERVATIVE_STATS.worstResidual = 0;
   CONSERVATIVE_STATS.iterations = 0;
+  CONSERVATIVE_STATS.virgaNonConverged = 0;
 }
 
 /** 飽和水蒸気圧 hPa(Magnus 式)。水蒸気供給のスケールとして使用 */
@@ -729,7 +745,63 @@ export async function computePrecipitation(
       CONSERVATIVE_STATS.worstResidual = Math.max(CONSERVATIVE_STATS.worstResidual, r.residual);
     }
     CONSERVATIVE_STATS.iterations += r.iterations;
-    return r.condensationMm;
+
+    // ---- 雲底下の再蒸発(virga)----
+    // 非保存の経路は `precipMm` を組んだ**後**に弱い雨を選択的に削っていた。
+    // その処理は乗数の積(G)に入らないので、保存型では**まったく効いていなかった**
+    // (2026-08-09 に実装を読み直して発覚)。
+    //
+    // ただし保存型での正しい扱いは「削る」ではない。**雲底下で蒸発した水は
+    // 大気へ戻る**ので、消してしまうと水が閉じなくなる。
+    // 等価で単純な書き方は「その分だけ凝結しなかったことにする」— 凝結率を
+    // (1 − 失われる割合) 倍する。水は気柱に残り、輸送されて別の場所で凝結する。
+    //
+    // 失われる割合は P に依存する(弱い雨ほど多く失われる)ので非線形。
+    // **外側反復**で解く。相対湿度は保存型では W/W_sat で直接得られる —
+    // 供給の代用ではなく、輸送が解いた水蒸気量そのものである。
+    if (K.subCloudEvapCoef <= 0) return r.condensationMm;
+
+    const pressureHpa = ctx.params.atmosphere.surfacePressureBar * 1013.25;
+    const rateEff = new Float32Array(N);
+    let cond = r.condensationMm;
+    let water = r.waterMm;
+    let last = r;
+    for (let outer = 0; outer < VIRGA_OUTER_ITERATIONS; outer++) {
+      let maxChange = 0;
+      for (let i = 0; i < N; i++) {
+        const p = cond[i] ?? 0;
+        let lost = 0;
+        if (p > 0) {
+          const wSat = saturatedColumnMm(tField[i] ?? 0, pressureHpa);
+          const rh = Math.min(1, (water[i] ?? 0) / Math.max(1e-6, wSat));
+          lost = Math.min(K.subCloudEvapMaxFrac, (K.subCloudEvapCoef * (1 - rh)) / Math.sqrt(p));
+        }
+        const target = (rate[i] ?? 0) * (1 - lost);
+        // 減衰つきで更新する(P ↓ → 失われる割合 ↑ の帰還が振動しうる)
+        const prev = outer === 0 ? (rate[i] ?? 0) : (rateEff[i] ?? 0);
+        const next = prev + VIRGA_RELAXATION * (target - prev);
+        maxChange = Math.max(maxChange, Math.abs(next - prev) / Math.max(1e-6, rate[i] ?? 1));
+        rateEff[i] = next;
+      }
+      last = solveMoistureTransport(grid, ctx.params.body.radiusKm, u, v, src, rateEff, {
+        diffusivityM2PerS: K.moistureEddyDiffusivityM2PerS,
+        maxIterations: 20000,
+      });
+      if (!last.converged) {
+        CONSERVATIVE_STATS.nonConverged++;
+        CONSERVATIVE_STATS.worstResidual = Math.max(
+          CONSERVATIVE_STATS.worstResidual,
+          last.residual,
+        );
+      }
+      CONSERVATIVE_STATS.iterations += last.iterations;
+      cond = last.condensationMm;
+      water = last.waterMm;
+      if (maxChange < VIRGA_TOLERANCE) return cond;
+    }
+    // 外側反復が収束しなかった月も**黙って通さない**
+    CONSERVATIVE_STATS.virgaNonConverged++;
+    return cond;
   };
 
   const monthlyConvert = (m: number, supply: Float32Array): Float32Array => {

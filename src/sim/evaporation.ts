@@ -49,6 +49,33 @@ export function saturationSpecificHumidity(tempC: number, pressureHpa: number): 
   return (EPSILON * es) / denom;
 }
 
+/**
+ * 飽和可降水量(mm)。**気柱に入りうる水蒸気の全量**で、保存型の水蒸気量 W を
+ * 相対湿度へ直すための分母になる。
+ *
+ * 気柱の水蒸気は  W = ∫ q dp/g  で、比湿は上空へ向かって急減する。
+ * 標準的な近似 q(p) = q_s(T_s)·(p/p_s)^α(α ≈ 2.5、放射対流平衡の議論で
+ * 慣用される値)を入れると
+ *
+ *   W_sat = q_s(T_s) · p_s / (g · (α+1))
+ *
+ * 地球で確かめると 288K・1013hPa で q_s = 0.0106、p_s/g = 10332 kg/m² なので
+ * W_sat ≈ 31 mm。観測の可降水量 25 mm に対し相対湿度 0.8 — **蒸発の式で
+ * 使っている海上相対湿度 0.8 と一致する**。別々の根拠から出した 2 つの量が
+ * 合うので、係数を目的関数で決める必要が無い。
+ *
+ * **α は較正定数ではない。** 探索空間へ入れてはならない。
+ */
+const HUMIDITY_PROFILE_EXPONENT = 2.5;
+const GRAVITY_M_PER_S2 = 9.80665;
+
+export function saturatedColumnMm(tempC: number, pressureHpa: number): number {
+  const qs = saturationSpecificHumidity(tempC, pressureHpa);
+  // p_s/g は kg/m² = mm(水柱)。hPa → Pa は ×100
+  const columnKgPerM2 = (pressureHpa * 100) / GRAVITY_M_PER_S2;
+  return (qs * columnKgPerM2) / (HUMIDITY_PROFILE_EXPONENT + 1);
+}
+
 export interface EvaporationResult {
   /** [month][cell] 海面蒸発 mm/月(陸セルは 0) */
   monthlyOceanEvapMm: Float32Array[];

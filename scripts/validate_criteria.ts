@@ -35,6 +35,16 @@ export interface NumericalMetrics {
   precipCouplingConverged: boolean;
   /** 土壌の空回しが収束したか(無効時は true) */
   soilConverged: boolean;
+  /**
+   * 保存型の水蒸気輸送で収束しなかった月の数(非保存のときは 0)。
+   * **未収束を黙って採点しない**ための門。2026-08-09 の段 1 で、既定の
+   * 反復上限 4000 では 84 か月分が未収束のまま成績が出ていた。
+   * EBM で 3 回踏んだ「上限が答えを決める」型の欠陥と同じなので、
+   * ここを通らない解は採点そのものを無効にする。
+   */
+  moistureTransportNonConverged?: number;
+  /** virga の外側反復が収束しなかった月の数(無効時は 0) */
+  virgaNonConverged?: number;
 }
 
 export function evaluateNumericalSoundness(
@@ -57,6 +67,12 @@ export function evaluateNumericalSoundness(
   }
   if (!m.precipCouplingConverged) failures.push('降水の結合反復が未収束');
   if (!m.soilConverged) failures.push('土壌の空回しが未収束');
+  if ((m.moistureTransportNonConverged ?? 0) > 0) {
+    failures.push(`保存型の水蒸気輸送が未収束(${m.moistureTransportNonConverged} か月)`);
+  }
+  if ((m.virgaNonConverged ?? 0) > 0) {
+    failures.push(`雲底下再蒸発の外側反復が未収束(${m.virgaNonConverged} か月)`);
+  }
   return { pass: failures.length === 0, failures };
 }
 

@@ -107,7 +107,8 @@ async function run(label: string, conservative: number): Promise<void> {
     console.log(
       `輸送    収束しなかった月 ${CONSERVATIVE_STATS.nonConverged} 件 / ` +
         `最悪の残差 ${CONSERVATIVE_STATS.worstResidual.toExponential(2)} / ` +
-        `反復合計 ${CONSERVATIVE_STATS.iterations}` +
+        `反復合計 ${CONSERVATIVE_STATS.iterations} / ` +
+        `virga 未収束 ${CONSERVATIVE_STATS.virgaNonConverged} 件` +
         `  ${CONSERVATIVE_STATS.nonConverged === 0 ? '○' : '× 収束していない解は採点しない'}`,
     );
   }
