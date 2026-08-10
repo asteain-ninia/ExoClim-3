@@ -17,6 +17,7 @@ export function computeWindBelt(
   ctx: SimContext,
   itcz: ItczResult,
   priorTemperatureC?: Float32Array[],
+  priorWetness01?: Float32Array[],
 ): WindBeltResult {
   const { grid, params, terrain, insolation, landDistToCoastKm } = ctx;
   const W = grid.widthCells;
@@ -101,6 +102,7 @@ export function computeWindBelt(
     const insMonth = insolation.monthlyByRow[m];
     const insAnnual = insolation.annualMeanByRow;
     const tMonth = priorTemperatureC?.[m];
+    const wetMonth = priorWetness01?.[m];
     for (let row = 0; row < H; row++) {
       const lat = latDegOfRow(grid, row);
       const seasonalHeating = ((insMonth?.[row] ?? 0) - (insAnnual[row] ?? 0)) / 120; // ±1 程度
@@ -152,7 +154,13 @@ export function computeWindBelt(
         // 上限は実物のシベリア高気圧(+30hPa 級)を目安に置く — EBM の外れ値が
         // そのまま風速上限まで突き抜けるのを防ぐための箍であって、機構ではない
         if (tMonth && K.thermalLowHpaPerK > 0) {
-          const dp = -K.thermalLowHpaPerK * ((tMonth[i] ?? rowMeanT) - rowMeanT);
+          // **厚みは湿りで決まる**(段 9 第 2 版)。乾いた柱の暖偏差は境界層に
+          // 閉じ込められ、気柱として軽くならないので低気圧は浅い。
+          // 湿潤対流は加熱を上まで運ぶので気柱全体が軽くなり、低気圧が深い。
+          // 第 1 版はこの区別が無く、乾いた内陸に一番深い低気圧を作っていた
+          const wet = terrain.landMask[i] ? (wetMonth?.[i] ?? 0) : 1;
+          const depth = K.thermalLowDryDepth + (1 - K.thermalLowDryDepth) * wet;
+          const dp = -K.thermalLowHpaPerK * ((tMonth[i] ?? rowMeanT) - rowMeanT) * depth;
           v += Math.max(-30, Math.min(30, dp));
         }
         p[i] = v;

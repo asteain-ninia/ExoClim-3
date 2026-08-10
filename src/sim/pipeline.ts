@@ -405,8 +405,14 @@ async function runPipelineCore(
     windBelt2 = await stage(
       'windbelt',
       'step2b_windbelt',
-      [context, itcz, temperature1, P.body],
-      () => computeWindBelt(context, itcz, temperature1.monthlyTemperatureC),
+      [context, itcz, temperature1, precipitation1, P.body],
+      () =>
+        computeWindBelt(
+          context,
+          itcz,
+          temperature1.monthlyTemperatureC,
+          precipitation1.land?.monthlyWetness01,
+        ),
       (r) => ({ windBelt: r }),
     );
     airflow2 = await stage(
