@@ -125,6 +125,12 @@ export interface EbmStaticFields {
    * 定数を振ったつもりの実験が無効になる(2026-08-02 に実際に踏んだ)。
    */
   fullCapacityYears: number;
+  /**
+   * 加速期の熱容量倍率(既定 1/16)。**同じ理由で CPU と GPU に別々に
+   * 書かない** — 2026-08-11 まで両方にベタ書きされていた。
+   * 出どころは step05_temperature.ts の EBM_SPINUP
+   */
+  spinupCapacityFraction: number;
   /** [cell] 熱容量 J/m²/K */
   heatCap: Float32Array;
   /** [cell] 標高補正込みの OLR 切片 */

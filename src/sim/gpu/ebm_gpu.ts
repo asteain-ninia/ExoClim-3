@@ -670,7 +670,7 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
         // 中断は**次の submit を積む前**に見る。積んでしまった仕事は
         // GPU 側で走り切るので、細かく見ても反応は速くならない
         if (step % TICK_STEPS === 0) throwIfCancelled(control?.signal, 'EBM');
-        const capScale = step < spinupSteps ? 1 / 16 : 1;
+        const capScale = step < spinupSteps ? fields.spinupCapacityFraction : 1;
         const yearFrac = (step % fields.stepsPerYear) / fields.stepsPerYear;
         const monthFloat = yearFrac * M;
         const m0 = Math.floor(monthFloat - 0.5 + M) % M;

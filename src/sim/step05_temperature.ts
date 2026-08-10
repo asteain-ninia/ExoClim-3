@@ -185,6 +185,26 @@ export const EBM_FULL_CAPACITY_YEARS = {
 export const SPINUP_ACCEL_YEARS = 2;
 
 /**
+ * 加速期の熱容量倍率。**名前を持たない数として CPU と GPU に 2 か所
+ * ベタ書きされていたものを 1 か所へ集めた**(2026-08-11)。
+ *
+ * この倍率は**2 つのものを同時に買っている**:
+ *   - 緩和が速くなる(時定数 τ' = τ × 倍率。1/16 なら τ' = 0.2 年)
+ *   - **反復が効かなくなる**(陰解法の対角項 C/dt が同じ比で小さくなり、
+ *     対角優位が崩れる。加速期だけが反復 512 回を要求している —
+ *     docs/実験記録_加速期だけが反復を要る_2026-08-10.md)
+ *
+ * 片方だけを見て 1/16 と決められた形跡があり、対で測られていない。
+ * 事前登録: docs/事前登録_加速期の倍率と反復回数_2026-08-11.md
+ *
+ * 掃引のために可変にしてあるが、**較正つまみではない**(物理定数ではなく
+ * 数値解法の設定で、答えは倍率に依らないことを判定 1 で確かめる)。
+ */
+export const EBM_SPINUP = {
+  capacityFraction: 1 / 16,
+};
+
+/**
  * 周期定常に達したとみなす年次ドリフトの許容差(°C)。
  * 最終年と前年の年平均の**面積重み平均** |Δ| がこれを下回れば「毎年同じ気候」。
  * 全セルの最大値ではなく面積重み平均で測るのは、許容差を時間離散化の誤差
@@ -669,7 +689,7 @@ export async function computeTemperature(
         }
         await yieldToEventLoop();
       }
-      const capScale = step < spinupSteps ? 1 / 16 : 1;
+      const capScale = step < spinupSteps ? EBM_SPINUP.capacityFraction : 1;
       const yearFrac = (step % K.ebmStepsPerYear) / K.ebmStepsPerYear;
       const monthFloat = yearFrac * MONTHS_PER_YEAR;
       const m0 = Math.floor(monthFloat - 0.5 + MONTHS_PER_YEAR) % MONTHS_PER_YEAR;
@@ -1063,6 +1083,7 @@ export async function computeTemperature(
         EBM_FULL_CAPACITY_YEARS.years > 0
           ? EBM_FULL_CAPACITY_YEARS.years
           : EBM_FULL_CAPACITY_START_YEARS,
+      spinupCapacityFraction: EBM_SPINUP.capacityFraction,
       heatCap: f32(heatCap),
       aEff: f32(aEff),
       surfAlbedoBase: f32(surfAlbedoBase),
