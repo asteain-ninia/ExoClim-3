@@ -13,3 +13,8 @@ docs/動画書き起こし/
 # 外部データの元ファイル(大きいので git には入れない — data/external/README.md 参照)
 data/external/raw/ETOPO_2022_v1_60s_surface.nc
 data/external/raw/koppen_geiger_tif_v2.zip
+
+# 利用者が置いた報告書・参考資料。ApplePie の参考 HTML が 2 万行超あり、
+# git に入れると履歴が永久に重くなるので**意図的に非追跡**にしている
+# (2026-08-10: AI が git add -A で一度巻き込んでしまい、外して戻した)。
+docs/報告/
