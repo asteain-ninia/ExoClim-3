@@ -129,6 +129,15 @@ export interface PrecipDiagnostics {
   upwindBlock: Float32Array[];
   /** その他の倍率の積(ストーム帯持上げ × 寒流沿岸 × 高温湿潤対流) */
   liftOther: Float32Array[];
+  /** 柱相対湿度による指数抑制の倍率(1 = 抑制なし。sharpness 0 なら全セル 1) */
+  crhSuppression: Float32Array[];
+  /**
+   * **保存型のときのみ**: 凝結率の係数 G = 上の全倍率の積。
+   * 保存型では降水は倍率の積では書けない(輸送方程式の解なので)。
+   * 因子分解が意味を持つのは**この G まで**であって、降水そのものではない。
+   * 非保存のときは空配列。
+   */
+  condRateG: Float32Array[];
   /** 床再配分・月ブレンド前の降水 mm/月 */
   preAdjustMm: Float32Array[];
   /**
@@ -502,7 +511,27 @@ interface PrecipDiagMonth {
   subsidenceResidual: Float32Array;
   upwindBlock: Float32Array;
   liftOther: Float32Array;
+  crhSuppression: Float32Array;
+  /** 保存型の凝結率係数 G(非保存では埋めない) */
+  condRateG: Float32Array;
   preAdjustMm: Float32Array;
+}
+
+function newDiagMonth(n: number): PrecipDiagMonth {
+  return {
+    supplyStorm: new Float32Array(n),
+    liftItcz: new Float32Array(n),
+    liftFrontal: new Float32Array(n),
+    liftOrographic: new Float32Array(n),
+    liftConvergence: new Float32Array(n),
+    convergenceIndex: new Float32Array(n),
+    subsidenceResidual: new Float32Array(n),
+    upwindBlock: new Float32Array(n),
+    liftOther: new Float32Array(n),
+    crhSuppression: new Float32Array(n),
+    condRateG: new Float32Array(n),
+    preAdjustMm: new Float32Array(n),
+  };
 }
 
 export async function computePrecipitation(
@@ -532,6 +561,8 @@ export async function computePrecipitation(
         subsidenceResidual: [],
         upwindBlock: [],
         liftOther: [],
+        crhSuppression: [],
+        condRateG: [],
         preAdjustMm: [],
         postAdjustDeltaMm: [],
         mmPerSupplyUnit:
@@ -708,6 +739,22 @@ export async function computePrecipitation(
     u: Float32Array,
     v: Float32Array,
     supply: Float32Array,
+    diagM?: PrecipDiagMonth,
+  ): Float32Array => {
+    const out = conservativeMonthCore(m, tField, u, v, supply, diagM);
+    // 因子分解の診断は**実際に走った演算子**のものでなければならない。
+    // 保存型では降水 = 凝結量なので、後処理前の値はこの戻り値そのもの
+    if (diagM) diagM.preAdjustMm.set(out);
+    return out;
+  };
+
+  const conservativeMonthCore = (
+    m: number,
+    tField: Float32Array,
+    u: Float32Array,
+    v: Float32Array,
+    supply: Float32Array,
+    diagM?: PrecipDiagMonth,
   ): Float32Array => {
     const N = grid.cellCount;
     // 凝結率の係数 G = 既存の乗数の積(この段では 1 つも外さない)
@@ -719,8 +766,11 @@ export async function computePrecipitation(
       windBelt.monthlyPolarFrontLatNDeg[m] ?? 60,
       windBelt.monthlyPolarFrontLatSDeg[m] ?? -60,
       dyKm, ocean, eastOceanKm, eastOceanSstA, meanItczCenters, crestElev,
-      coldAnomalyCache, undefined, G,
+      coldAnomalyCache, diagM, G,
     );
+    // 因子分解が意味を持つのはここまで — 保存型の降水は G の積ではなく
+    // 輸送方程式の解なので、「因子の積 = 降水」は原理的に成り立たない
+    if (diagM) diagM.condRateG.set(G);
     // 源泉 S = 海面蒸発 + 陸面蒸発散
     if (!evapCache.v) evapCache.v = computeOceanEvaporation(ctx, temperature, airflow);
     const src = new Float32Array(N);
@@ -821,12 +871,16 @@ export async function computePrecipitation(
     return cond;
   };
 
-  const monthlyConvert = (m: number, supply: Float32Array): Float32Array => {
+  const monthlyConvert = (
+    m: number,
+    supply: Float32Array,
+    diagM?: PrecipDiagMonth,
+  ): Float32Array => {
     const tField = temperature.monthlyTemperatureC[m];
     const u = airflow.monthlyWindU[m];
     const v = airflow.monthlyWindV[m];
     if (!tField || !u || !v) return new Float32Array(grid.cellCount);
-    if (K.conservativeMoisture > 0) return conservativeMonth(m, tField, u, v, supply);
+    if (K.conservativeMoisture > 0) return conservativeMonth(m, tField, u, v, supply, diagM);
     return convertToPrecip(
       ctx,
       itcz,
@@ -846,6 +900,7 @@ export async function computePrecipitation(
       meanItczCenters,
       crestElev,
       coldAnomalyCache,
+      diagM,
     );
   };
 
@@ -1000,6 +1055,8 @@ export async function computePrecipitation(
   let iterations = 0;
   let residual = Number.POSITIVE_INFINITY;
   let converged = false;
+  /** 最後に走った結合反復の因子分解(診断を採る実行でのみ埋まる) */
+  let lastDiagMonths: PrecipDiagMonth[] | null = null;
   const couplingMax =
     COUPLING_OVERRIDE.maxIterations > 0
       ? COUPLING_OVERRIDE.maxIterations
@@ -1040,8 +1097,14 @@ export async function computePrecipitation(
     }
     supplies2 = await traceAllMonths(landSources);
     const next: Float32Array[] = [];
+    // 因子分解の診断は**この反復の**変換で捕まえる。収束後に別途走らせ直すと、
+    // 保存型では輸送の初期値(温間開始)が変わって最終場と厳密には一致しない。
+    // 「最終 = 後処理前 + 後処理差分」は厳密に成り立たなければならない不変量
+    if (diag) lastDiagMonths = [];
     for (let m = 0; m < MONTHS_PER_YEAR; m++) {
-      next.push(monthlyConvert(m, blend(supplies2, m)));
+      const dm = lastDiagMonths ? newDiagMonth(grid.cellCount) : undefined;
+      next.push(monthlyConvert(m, blend(supplies2, m), dm));
+      if (lastDiagMonths && dm) lastDiagMonths.push(dm);
     }
     applyPostAdjust(next);
     residual = meanAbsChange(next, precipEst);
@@ -1082,64 +1145,21 @@ export async function computePrecipitation(
 
   for (let m = 0; m < MONTHS_PER_YEAR; m++) monthlyPrecipMm.push(precipEst[m]!);
 
-  // R1 診断: 収束後の供給からもう一度変換して因子分解を捕捉する
-  // (後処理前の値なので preAdjustMm と一致する)
+  // R1 診断: **最後の結合反復で捕まえた**因子分解をそのまま返す。
+  //
+  // 以前はここで収束後の供給から convertToPrecip を走らせ直していたが、
+  // それには 2 つの誤りがあった:
+  //   1. 保存型が既定になった後も**旧(非保存)の演算子**を呼んでいたので、
+  //      実際に走ったのと別のモデルの因子分解を報告していた(段 6 以降ずっと)
+  //   2. 走らせ直すと輸送の温間開始が変わり、最終場と厳密には一致しない
+  // 不変量「最終 = 後処理前 + 後処理差分」を厳密に保つには、反復の中で
+  // 捕まえるほかない(tests/unit/sim/precip_diag.test.ts が門になっている)
   if (diag) {
     for (let m = 0; m < MONTHS_PER_YEAR; m++) {
-      const tField = temperature.monthlyTemperatureC[m];
-      const u = airflow.monthlyWindU[m];
-      const v = airflow.monthlyWindV[m];
       const N = grid.cellCount;
-      if (!tField || !u || !v) {
-        diag.supplyOcean.push(new Float32Array(N));
-        diag.supplyLand.push(new Float32Array(N));
-        diag.supplyStorm.push(new Float32Array(N));
-        diag.liftItcz.push(new Float32Array(N));
-        diag.liftFrontal.push(new Float32Array(N));
-        diag.liftOrographic.push(new Float32Array(N));
-        diag.liftConvergence.push(new Float32Array(N));
-        diag.convergenceIndex.push(new Float32Array(N));
-        diag.subsidenceResidual.push(new Float32Array(N));
-        diag.upwindBlock.push(new Float32Array(N));
-        diag.liftOther.push(new Float32Array(N));
-        diag.preAdjustMm.push(new Float32Array(N));
-        continue;
-      }
-      const supply2 = blend(supplies2, m);
-      const diagM: PrecipDiagMonth = {
-        supplyStorm: new Float32Array(N),
-        liftItcz: new Float32Array(N),
-        liftFrontal: new Float32Array(N),
-        liftOrographic: new Float32Array(N),
-        liftConvergence: new Float32Array(N),
-        convergenceIndex: new Float32Array(N),
-        subsidenceResidual: new Float32Array(N),
-        upwindBlock: new Float32Array(N),
-        liftOther: new Float32Array(N),
-        preAdjustMm: new Float32Array(N),
-      };
-      convertToPrecip(
-        ctx,
-        itcz,
-        m,
-        tField,
-        u,
-        v,
-        supply2,
-        windBelt.monthlyRidgeLatNDeg[m] ?? 31,
-        windBelt.monthlyRidgeLatSDeg[m] ?? -31,
-        windBelt.monthlyPolarFrontLatNDeg[m] ?? 60,
-        windBelt.monthlyPolarFrontLatSDeg[m] ?? -60,
-        dyKm,
-        ocean,
-        eastOceanKm,
-        eastOceanSstA,
-        meanItczCenters,
-        crestElev,
-        coldAnomalyCache,
-        diagM,
-      );
+      const diagM = lastDiagMonths?.[m] ?? newDiagMonth(N);
       // 海洋由来 = 海のみトレース(パス 1)、陸面再循環由来 = 全供給 − 海のみ
+      const supply2 = blend(supplies2, m);
       const supply1b = blend(supplies1, m);
       const so = new Float32Array(N);
       const sl = new Float32Array(N);
@@ -1158,6 +1178,8 @@ export async function computePrecipitation(
       diag.subsidenceResidual.push(diagM.subsidenceResidual);
       diag.upwindBlock.push(diagM.upwindBlock);
       diag.liftOther.push(diagM.liftOther);
+      diag.crhSuppression.push(diagM.crhSuppression);
+      if (K.conservativeMoisture > 0) diag.condRateG.push(diagM.condRateG);
       diag.preAdjustMm.push(diagM.preAdjustMm);
     }
   }
@@ -1772,6 +1794,7 @@ function convertToPrecip(
         diagM.subsidenceResidual[i] = subsResidualF;
         diagM.upwindBlock[i] = blockFactor;
         diagM.liftOther[i] = liftStormF * coldCoastF * warmHumidF;
+        diagM.crhSuppression[i] = crhFactor;
         diagM.preAdjustMm[i] = out[i] ?? 0;
       }
     }
