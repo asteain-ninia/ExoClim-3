@@ -7,7 +7,17 @@ import { latDegOfRow, cellWidthKm } from '@/domain/grid';
 import { MODEL_CONSTANTS as K } from './constants';
 import type { ItczResult, SimContext, WindBeltResult } from './types';
 
-export function computeWindBelt(ctx: SimContext, itcz: ItczResult): WindBeltResult {
+/**
+ * @param priorTemperatureC 前パスの月別地表気温(°C)。渡すと**温度 → 気圧の
+ *   帰還**が入る(docs/事前登録_温度から気圧への帰還_2026-08-10.md)。
+ *   既存の熱的高低気圧は日射と海岸距離だけで書かれており、モデル自身の気温を
+ *   まったく見ていない。渡さなければ従来と厳密に一致する。
+ */
+export function computeWindBelt(
+  ctx: SimContext,
+  itcz: ItczResult,
+  priorTemperatureC?: Float32Array[],
+): WindBeltResult {
   const { grid, params, terrain, insolation, landDistToCoastKm } = ctx;
   const W = grid.widthCells;
   const H = grid.heightCells;
@@ -90,9 +100,19 @@ export function computeWindBelt(ctx: SimContext, itcz: ItczResult): WindBeltResu
     // 季節の熱的コントラスト: 月日射 − 年平均日射(行ごと)を規格化
     const insMonth = insolation.monthlyByRow[m];
     const insAnnual = insolation.annualMeanByRow;
+    const tMonth = priorTemperatureC?.[m];
     for (let row = 0; row < H; row++) {
       const lat = latDegOfRow(grid, row);
       const seasonalHeating = ((insMonth?.[row] ?? 0) - (insAnnual[row] ?? 0)) / 120; // ±1 程度
+      // 温度 → 気圧の帰還の基準点: **同じ緯度円の平均気温**。
+      // 緯度円からの偏差なので水惑星では自動的に 0 になり、大陸も緯度帯も
+      // 名指しせずに済む(教訓 §1 地理中立)
+      let rowMeanT = 0;
+      if (tMonth) {
+        let s = 0;
+        for (let col = 0; col < W; col++) s += tMonth[row * W + col] ?? 0;
+        rowMeanT = s / W;
+      }
       for (let col = 0; col < W; col++) {
         const i = row * W + col;
         let v = 0;
@@ -127,6 +147,14 @@ export function computeWindBelt(ctx: SimContext, itcz: ItczResult): WindBeltResu
         }
         // 極域の弱い高気圧
         if (Math.abs(lat) > 75) v += 2 * ((Math.abs(lat) - 75) / 15);
+        // 温度 → 気圧の帰還(静水圧の一次近似): 緯度円平均より暑い柱は
+        // 気圧が下がる。**既定 0 = 無効**で、そのとき従来と 1 ビットも変わらない。
+        // 上限は実物のシベリア高気圧(+30hPa 級)を目安に置く — EBM の外れ値が
+        // そのまま風速上限まで突き抜けるのを防ぐための箍であって、機構ではない
+        if (tMonth && K.thermalLowHpaPerK > 0) {
+          const dp = -K.thermalLowHpaPerK * ((tMonth[i] ?? rowMeanT) - rowMeanT);
+          v += Math.max(-30, Math.min(30, dp));
+        }
         p[i] = v;
       }
     }

@@ -45,16 +45,36 @@ export function computeAirflow(
         // ゲート付き)でも大分類 −0.2〜−0.3pt。東風→西風の反転は風上を海から
         // 陸(西隣の乾燥大陸)へ切り替えて逆効果になる。インドの A 群化の真の
         // ブロッカーは南半島の冬温度(EBM)と判明 — そちらが先。
+        //
+        // **2026-08-10(段 8)に再開**: 上の棄却理由は「風上追跡の上流が海か陸か」
+        // という**非保存の到達可能性指数の性質そのもの**であり、降水が保存型に
+        // なった今は成り立たない(docs/事前登録_保存則で無効化された過去の棄却)。
+        // 既定は `crossEquatorialMonsoon: 0` = 従来と厳密に一致。
+        //
+        // 機構: ITCZ が赤道から離れた経度では、対岸半球の貿易風が赤道を越えて
+        // 流れ込む。越えた先ではコリオリの向きが反転するので気流は曲げられ、
+        // 東風成分が西風成分へ変わる(実物の南西モンスーン)。
+        // 効くのは**赤道と ITCZ の間の帯**だけで、赤道で 0、ITCZ 線上で最大。
+        // 緯度や経度の名指しはしない — ITCZ の変位だけで決まる。
+        let crossEq = 0;
+        if (itczLat !== 0 && lat * itczLat > 0 && Math.abs(lat) < Math.abs(itczLat)) {
+          const disp = Math.min(1, Math.abs(itczLat) / K.crossEquatorialRefDeg);
+          const turn = Math.abs(lat) / Math.abs(itczLat); // 赤道 0 → ITCZ 1
+          crossEq = K.crossEquatorialMonsoon * disp * turn;
+        }
+        /** 1 で従来の東風、0 で無風、−1 で同じ強さの西風 */
+        const zonalRev = 1 - 2 * crossEq;
+
         let bu = 0;
         let bv = 0;
         if (lat > itczLat && lat <= ridgeN) {
           // 北半球貿易風(北東風 → 西南西へ吹く: u 負、v は ITCZ へ向かい負)
           const t = bandWeight(lat, itczLat, ridgeN);
-          bu = -K.tradeWindMs * t * dirSign;
+          bu = -K.tradeWindMs * t * dirSign * zonalRev;
           bv = -K.tradeWindMs * 0.4 * t;
         } else if (lat <= itczLat && lat >= ridgeS) {
           const t = bandWeight(lat, itczLat, ridgeS);
-          bu = -K.tradeWindMs * t * dirSign;
+          bu = -K.tradeWindMs * t * dirSign * zonalRev;
           bv = K.tradeWindMs * 0.4 * t;
         } else if (lat > ridgeN && lat <= pfN) {
           const t = bandWeight(lat, ridgeN, pfN);

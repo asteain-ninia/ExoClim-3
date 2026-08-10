@@ -195,11 +195,16 @@ async function runPipelineCore(
   //   蒸発帰還(∂LE/∂T)    … evapFeedbackFrac > 0
   //   陸の対流雲          … landCloudBoost > 0
   // どちらも前パスの土壌水分を読むので、必要な 2 パス目は同じ 1 回で足りる
+  // 温度 → 気圧 → 風 の帰還(段 9)。パス 1 の気温で気圧場と風を作り直し、
+  // パス 2 をその風で回す。**反復はしない**(正帰還の暴走を避けるため —
+  // 2026-08-01 の蒸発冷却フィードバックが同じ型で大破している)
+  const thermalFeedback = MODEL_CONSTANTS.thermalLowHpaPerK > 0;
   const twoPass =
     MODEL_CONSTANTS.evapCoolingWm2PerMmDay > 0 ||
     MODEL_CONSTANTS.landDryCapacityFrac < 1 ||
     MODEL_CONSTANTS.evapFeedbackFrac > 0 ||
-    MODEL_CONSTANTS.landCloudBoost > 0;
+    MODEL_CONSTANTS.landCloudBoost > 0 ||
+    thermalFeedback;
   const units: Array<{ stage: RunStage; cost: number }> = [
     { stage: 'context', cost: STAGE_COST.context },
     { stage: 'prepass', cost: STAGE_COST.prepass },
@@ -209,6 +214,12 @@ async function runPipelineCore(
     { stage: 'airflow', cost: STAGE_COST.airflow },
     { stage: 'temperature', cost: STAGE_COST.temperature },
     { stage: 'precipitation', cost: STAGE_COST.precipitation },
+    ...(thermalFeedback
+      ? [
+          { stage: 'windbelt' as const, cost: STAGE_COST.windbelt },
+          { stage: 'airflow' as const, cost: STAGE_COST.airflow },
+        ]
+      : []),
     ...(twoPass
       ? [
           { stage: 'temperature' as const, cost: STAGE_COST.temperature },
@@ -369,6 +380,30 @@ async function runPipelineCore(
   // 係数 0 のときは 2 パス目を丸ごとスキップする
   let temperature = temperature1;
   let precipitation = precipitation1;
+
+  // ---- 温度 → 気圧 → 風 の帰還(段 9)----
+  // 気圧場はここまで日射と幾何だけで作られており、モデル自身の気温を見て
+  // いなかった。パス 1 の気温で作り直す。EBM を回し直すわけではないので、
+  // 増える費用は windBelt + airflow の 1 回分だけ(全体の 1% 未満)
+  let windBelt2 = windBelt;
+  let airflow2 = airflow;
+  if (thermalFeedback) {
+    windBelt2 = await stage(
+      'windbelt',
+      'step2b_windbelt',
+      [context, itcz, temperature1, P.body],
+      () => computeWindBelt(context, itcz, temperature1.monthlyTemperatureC),
+      (r) => ({ windBelt: r }),
+    );
+    airflow2 = await stage(
+      'airflow',
+      'step4b_airflow',
+      [context, itcz, windBelt2, P.body],
+      () => computeAirflow(context, itcz, windBelt2),
+      (r) => ({ airflow: r }),
+    );
+  }
+
   if (twoPass) {
     temperature = await stage(
       'temperature',
@@ -376,9 +411,9 @@ async function runPipelineCore(
       [
         context,
         itcz,
-        windBelt,
+        windBelt2,
         ocean,
-        airflow,
+        airflow2,
         precipitation1,
         temperature1,
         P.atmosphere,
@@ -390,9 +425,9 @@ async function runPipelineCore(
         computeTemperature(
           context,
           itcz,
-          windBelt,
+          windBelt2,
           ocean,
-          airflow,
+          airflow2,
           {
             ...(precipitation1.land ? { land: precipitation1.land } : {}),
             priorTemperatureC: temperature1.monthlyTemperatureC,
@@ -409,9 +444,9 @@ async function runPipelineCore(
       precipDeps([
         context,
         itcz,
-        windBelt,
+        windBelt2,
         ocean,
-        airflow,
+        airflow2,
         temperature,
         P.atmosphere,
         ...solverKey,
@@ -420,9 +455,9 @@ async function runPipelineCore(
         computePrecipitation(
           context,
           itcz,
-          windBelt,
+          windBelt2,
           ocean,
-          airflow,
+          airflow2,
           temperature,
           precipDiagBox,
           o,
@@ -445,9 +480,11 @@ async function runPipelineCore(
   return {
     context,
     itcz,
-    windBelt,
+    // 帰還が入っているときは**最終場を作った側**(パス 2 の気圧場と風)を返す。
+    // 診断・描画・水収支がパス 1 の風を見ていたら、閉じない収支を数えてしまう
+    windBelt: windBelt2,
     ocean,
-    airflow,
+    airflow: airflow2,
     temperature,
     precipitation,
     koppen,
