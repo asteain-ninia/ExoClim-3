@@ -100,11 +100,11 @@ async function main(): Promise<void> {
   const base = K[KEY] ?? 0;
   console.log(`レバー: ${KEY}（現在値 ${base}）`);
   console.log(
-    '\n値      v3      大分類  詳細   ゲート 位相  ' +
+    '\n値      v3      大分類  詳細   ゲート 位相  気温RMSE ' +
       TARGETS.map((t) => t.split('_')[0]?.padStart(7) ?? '').join(' '),
   );
   console.log(
-    '                                            ' +
+    '                                                     ' +
       TARGETS.map(() => '  流入').join('  ') + '   ← 夏の正味流入 mm/年',
   );
 
@@ -133,7 +133,7 @@ async function main(): Promise<void> {
     console.log(
       `${value.toString().padEnd(6)} ${s.fitness.toFixed(3)}  ${s.majorPct.toFixed(2)}  ` +
         `${s.detailPct.toFixed(2)}  ${String(gates).padStart(4)}  ` +
-        `${f.precipPhaseRmseDays.toFixed(1)}  ${cols.join(' ')}`,
+        `${f.precipPhaseRmseDays.toFixed(1)}  ${f.tempRmseC.toFixed(3).padStart(7)}  ${cols.join(' ')}`,
     );
   }
   K[KEY] = base;
