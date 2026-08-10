@@ -231,6 +231,20 @@ async function runPipelineCore(
   const planner = new ProgressPlanner(units, opts?.onProgress);
 
   /**
+   * EBM の温間開始の箱。呼び出し側が渡さなければ**この実行の中だけで使う箱**を
+   * 作る。気温はパス 1 とパス 2 の 2 回解いており、パス 2 は陸面結合が付くだけで
+   * **ほぼ同じ問題**なので、パス 1 の収束場から始めれば空回しの年数が減る。
+   *
+   * 較正をまたぐ温間開始は 2026-08-06 に棄却済みだが、あれは
+   * 「定数が変われば平衡も変わるので緩和時間は戻る」という理由だった
+   * (docs/実験記録_ウォームスタート_2026-08-06.md)。**同じ実行の中のパス 2 は
+   * 事情が違う** — 平衡はほとんど動かない。
+   *
+   * 答えが初期値に依らないことは同記録の §1 で実証済み(小数 4 桁まで一致)。
+   */
+  const runWarmBox = opts?.ebmWarmStart ?? { field: null };
+
+  /**
    * 段を 1 つ走らせる。中断の確認・進捗の受け渡し・計測・キャッシュ引きを
    * ここでまとめる。段に渡す opts は **onProgress と cache を外し、その段用の
    * progress を差した**もの(段が全体進捗やキャッシュを直接触れないようにする)。
@@ -254,16 +268,16 @@ async function runPipelineCore(
   ): Promise<T> => {
     throwIfCancelled(opts?.signal, RUN_STAGE_LABELS[runStage]);
     const progress = planner.begin(runStage);
-    const stageOpts: RunOptions | undefined = opts
-      ? {
-          accel: opts.accel,
-          signal: opts.signal,
-          budget: opts.budget,
-          progress,
-          // ウォームスタートの箱は**参照のまま**渡す(段が書き戻すため)
-          ebmWarmStart: opts.ebmWarmStart,
-        }
-      : undefined;
+    const stageOpts: RunOptions = {
+      accel: opts?.accel,
+      signal: opts?.signal,
+      budget: opts?.budget,
+      progress,
+      // ウォームスタートの箱は**参照のまま**渡す(段が書き戻すため)。
+      // 呼び出し側が箱を渡さなくても runWarmBox を渡す — 気温のパス 2 が
+      // パス 1 の収束場から始められるようにするため(下の宣言を参照)
+      ebmWarmStart: runWarmBox,
+    };
     const compute = (): Promise<T> => time(label, () => fn(stageOpts));
     const out =
       opts?.cache && deps !== null

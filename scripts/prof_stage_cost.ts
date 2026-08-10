@@ -10,6 +10,7 @@
 import { runPipelineTimed } from '../src/sim/pipeline';
 import { EARTH_PARAMS } from '../src/domain/planetParams';
 import { openAccel } from './accel_cli';
+import { EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
 
 const accel = await openAccel();
 try {
@@ -27,6 +28,13 @@ try {
     );
   }
   console.log(`\n  (重みは合計 1000 に正規化した値。STAGE_COST に入れる目安)`);
+  // 費用の 88% は EBM なので、**どのパスが何年回したか**を必ず出す
+  console.log('\n=== EBM の呼び出し内訳 ===');
+  for (const [i, c] of EBM_SOLVER_STATS.calls.entries()) {
+    console.log(
+      `  パス${i + 1}  ${c.warm ? '温間開始' : '冷間開始'}  積算 ${c.years} 年  反復 ${c.iters}`,
+    );
+  }
 } finally {
   accel.close();
 }

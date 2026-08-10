@@ -239,6 +239,12 @@ export const EBM_SOLVER_STATS = {
   meanYearDriftC: 0,
   /** 全熱容量で回した年数 */
   fullCapacityYears: 0,
+  /**
+   * 呼び出し 1 回ごとの内訳。**費用の 88% がここなので、どのパスが何年
+   * 回したかを残さないと削りようがない。** 倍化の梯子は毎回ゼロから
+   * 回し直すので、`years` は最後の 1 回ぶんではなく**積算**を入れる
+   */
+  calls: [] as Array<{ warm: boolean; years: number; iters: number }>,
 };
 
 /** 診断を初期化する。パイプラインの入口で 1 回だけ呼ぶ */
@@ -251,6 +257,7 @@ export function resetEbmSolverStats(): void {
   EBM_SOLVER_STATS.maxYearDriftC = 0;
   EBM_SOLVER_STATS.meanYearDriftC = 0;
   EBM_SOLVER_STATS.fullCapacityYears = 0;
+  EBM_SOLVER_STATS.calls.length = 0;
 }
 
 interface CoarseCell {
@@ -1138,19 +1145,31 @@ export async function computeTemperature(
     // 書きもしない。手掛かりは**確定品質の記憶**なので、プレビューが読むと
     // 予算を超え、プレビューが書くと確定品質が汚れる
     const useHint = !ebmBudgetOverridden;
+    /**
+     * このパスが**収束済みの場から始まるか**。
+     *
+     * 以前はここが外部のウォームスタートの箱(`warmT`)だけを見ていた。
+     * だが**氷床判定パスの次のパスは、常に前パスの収束場から始まっている**
+     * (`integrateAny(permanentIce, pass1.finalT, …)`)。それなのに年数の
+     * 梯子は冷間の 24 年から始まっていた。2026-08-10 の内訳測定で、
+     * 1 評価あたり EBM が 4 回・計 104 年回っていることが分かって発覚した。
+     *
+     * 判定に使うのは**実際の初期場の有無**であって、箱の出どころではない。
+     */
+    const warmFrom = initialT !== undefined;
     let fullYears =
       EBM_FULL_CAPACITY_YEARS.years > 0
         ? EBM_FULL_CAPACITY_YEARS.years
         : Math.max(
             // 手掛かりは**冷間・温間で別のものを引く**(宣言部の注記を参照)
             yearAdaptive && useHint
-              ? warmT
+              ? warmFrom
                 ? budgetHint.fullYearsWarm
                 : budgetHint.fullYears
               : 0,
             // ウォームスタート時は短い出発点から試す。足りなければ従来どおり
             // 倍々に増える(判定は同じなので答えは変わらない)
-            warmT ? EBM_WARM_START_FULL_YEARS : bFullYearsStart,
+            warmFrom ? EBM_WARM_START_FULL_YEARS : bFullYearsStart,
           );
     let iters =
       EBM_SOLVER.sweeps > 0
@@ -1167,7 +1186,10 @@ export async function computeTemperature(
     let lastFraction = passFrom;
     let lastDetail = passLabel;
     const live = makeLiveTemperature();
-    const runOnce = async (): Promise<Awaited<ReturnType<typeof ebmAccel.run>>> =>
+    /** 積算の積分年数。倍化の梯子は毎回ゼロから回し直すので、足し上げる */
+    let yearsIntegrated = 0;
+    const runOnce = async (): Promise<Awaited<ReturnType<typeof ebmAccel.run>>> => (
+      (yearsIntegrated += fullYears + bSpinupAccelYears),
       ebmAccel.run(
         { ...fields, years: fullYears + bSpinupAccelYears, fullCapacityYears: fullYears },
         { ...ebmConstants, iterationsPerStep: iters },
@@ -1203,7 +1225,8 @@ export async function computeTemperature(
               }
             : undefined,
         },
-      );
+      )
+    );
     let r = await runOnce();
     while (adaptive && !r.converged && iters < bMaxIterations) {
       iters *= 2;
@@ -1247,9 +1270,9 @@ export async function computeTemperature(
     }
     if (useHint && yearAdaptive && r.meanYearDriftC <= EBM_PERIODIC_TOLERANCE_C) {
       // 半減の下限も冷間・温間で別(温間は 4 年まで下げられる)
-      const floorYears = warmT ? EBM_WARM_START_FULL_YEARS : EBM_FULL_CAPACITY_START_YEARS;
-      const easyKey = warmT ? 'easyYearsWarm' : 'easyYears';
-      const hintKey = warmT ? 'fullYearsWarm' : 'fullYears';
+      const floorYears = warmFrom ? EBM_WARM_START_FULL_YEARS : EBM_FULL_CAPACITY_START_YEARS;
+      const easyKey = warmFrom ? 'easyYearsWarm' : 'easyYears';
+      const hintKey = warmFrom ? 'fullYearsWarm' : 'fullYears';
       budgetHint[hintKey] = fullYears;
       if (yearsEscalated) budgetHint[easyKey] = 0;
       else if (++budgetHint[easyKey] >= HINT_DECAY_AFTER) {
@@ -1257,6 +1280,7 @@ export async function computeTemperature(
         budgetHint[easyKey] = 0;
       }
     }
+    EBM_SOLVER_STATS.calls.push({ warm: warmFrom, years: yearsIntegrated, iters });
     EBM_SOLVER_STATS.maxYearDriftC = Math.max(EBM_SOLVER_STATS.maxYearDriftC, r.maxYearDriftC);
     EBM_SOLVER_STATS.meanYearDriftC = Math.max(EBM_SOLVER_STATS.meanYearDriftC, r.meanYearDriftC);
     EBM_SOLVER_STATS.fullCapacityYears = fullYears;
