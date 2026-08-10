@@ -1192,8 +1192,16 @@ export async function computeTemperature(
                 : budgetHint.fullYears
               : 0,
             // ウォームスタート時は短い出発点から試す。足りなければ従来どおり
-            // 倍々に増える(判定は同じなので答えは変わらない)
-            warmFrom ? EBM_WARM_START_FULL_YEARS : bFullYearsStart,
+            // 倍々に増える(判定は同じなので答えは変わらない)。
+            //
+            // **倍化できるときだけ短く始めてよい**(2026-08-11 に実害)。
+            // 較正は `EBM_SOLVER.adaptive = false` で倍化を切っている
+            // (収束しにくい定数領域は「高くつく」のではなく失格にする設計)。
+            // そこで温間開始を 4 年から始めると、**倍化されないまま周期定常に
+            // 届かず全評価が失格**になる。実際に較正 v19 の 7 評価が
+            // 全部 fit = -1000000 で落ちた。短く始める最適化は、
+            // 足りなかったときに救う経路とセットでなければ成立しない。
+            warmFrom && yearAdaptive ? EBM_WARM_START_FULL_YEARS : bFullYearsStart,
           );
     let iters =
       EBM_SOLVER.sweeps > 0

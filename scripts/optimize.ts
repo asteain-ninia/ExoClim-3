@@ -16,7 +16,7 @@ import { runPipeline } from '../src/sim/pipeline';
 import { openAccel } from './accel_cli';
 import { MODEL_CONSTANTS } from '../src/sim/constants';
 import { EARTH_PARAMS } from '../src/domain/planetParams';
-import { SPACE, evaluateResult, type Scores } from './optimize_lib';
+import { SPACE, UNSOLVED_FITNESS, evaluateResult, type Scores } from './optimize_lib';
 import { loadStateStrict, nextEvalNumber, readEvalLog, saveStateAtomic } from './optimize_store';
 
 const OUT_DIR = path.join(process.cwd(), 'out', 'optimize');
@@ -297,6 +297,20 @@ async function main(): Promise<void> {
 
   if (state.bestFit === -Infinity) {
     const [s] = await backend.evalBatch([{ tag: 'baseline', vector: state.best }]);
+    // **出発点が解けないなら、そこから先は全部無駄**(2026-08-11 に実害)。
+    // 温間開始の年数を短くした変更が較正の「倍化しない」設定と噛み合わず、
+    // 周期定常に届かず全評価が失格になった。それに気づいたのは 7 評価
+    // (35 分)後で、放っておけば 10 時間まるごと捨てていた。
+    // 基準が失格なら**即座に止める**。較正の失格は定数ベクトルの問題だが、
+    // 基準ベクトルの失格は**実装か設定の問題**なので、探索を続けても直らない。
+    if (s && s.fitness <= UNSOLVED_FITNESS) {
+      throw new Error(
+        '基準ベクトルが失格した(予算内で収束していない)。' +
+          '定数ではなく実装か収束予算の設定を疑うこと。' +
+          `大分類 ${s.majorPct.toFixed(2)} / 詳細 ${s.detailPct.toFixed(2)} まで出ているので、` +
+          '計算そのものは走っている。out/optimize/log の ebmYears・ebmIters を見ること',
+      );
+    }
     if (s) {
       state.bestFit = s.fitness;
       state.bestScores = s;
