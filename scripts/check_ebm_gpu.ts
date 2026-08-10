@@ -21,6 +21,11 @@ import { areaWeightOfRow } from '../src/domain/grid';
 import type { PipelineResult } from '../src/sim/types';
 
 const ITERS = Number(process.argv[2] ?? EBM_GPU_ITERATIONS);
+// 格子を引数にする。CPU 経路は 1° で反復固定だと数時間かかるので、
+// 「GPU と CPU が同じ答えを出すか」だけを見たいときは粗い格子で足りる
+// (2026-08-11: 較正を回しながら確かめる必要が出たため追加)
+const RES = Number(process.argv[3] ?? EARTH_PARAMS.gridResolutionDeg);
+const P = { ...EARTH_PARAMS, gridResolutionDeg: RES };
 
 const compare = (a: PipelineResult, b: PipelineResult, label: string): void => {
   const grid = a.context.grid;
@@ -51,7 +56,7 @@ if (!accel.enabled) {
 EBM_SOLVER.sweeps = ITERS; // GPU 側の反復回数もこれを見る
 EBM_SOLVER_STATS.maxResidualC = 0;
 let t0 = performance.now();
-const gpu = await runPipeline(EARTH_PARAMS, accel.opts);
+const gpu = await runPipeline(P, accel.opts);
 const gpuMs = performance.now() - t0;
 const gpuResidual = EBM_SOLVER_STATS.maxResidualC;
 const sg = evaluateResult(gpu);
@@ -70,7 +75,7 @@ console.log(
 EBM_SOLVER.order = 'gauss-seidel';
 EBM_SOLVER.sweeps = ITERS;
 t0 = performance.now();
-const cpu = await runPipeline(EARTH_PARAMS);
+const cpu = await runPipeline(P);
 const cpuMs = performance.now() - t0;
 const sc = evaluateResult(cpu);
 console.log(
