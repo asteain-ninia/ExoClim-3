@@ -223,6 +223,12 @@ export interface EbmAccelResult {
   finalIce: Float32Array;
   /** 全時間ステップを通じた最大残差(°C)。許容差を超えたら収束していない */
   maxResidualC: number;
+  /**
+   * [step] 各時間ステップの残差(°C)。**最大値だけでは「全ステップが
+   * 一番苦しい 1 ステップに引きずられている」かどうかが分からない。**
+   * 反復回数を削れるかの判断に使う(scripts/diag_ebm_step_residual.ts)
+   */
+  stepResidualsC?: Float32Array | undefined;
   /** 全ステップで許容差を満たしたか。false なら反復回数が足りない */
   converged: boolean;
   /** 最終年と前年の年平均の最大差(°C)。参考値(極の小さなセルに支配される) */

@@ -627,6 +627,29 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
       const lastYearStart = (fields.years - 1) * fields.stepsPerYear;
       const prevYearStart = Math.max(0, (fields.years - 2) * fields.stepsPerYear);
       const iters = Math.max(1, Math.round(k.iterationsPerStep));
+      /**
+       * 加速期を抜けた後の反復回数(2026-08-10)。
+       *
+       * **全ステップが「一番苦しいステップ」に引きずられていた。**
+       * ステップ別の残差を測ると(`scripts/diag_ebm_step_residual.ts`)、
+       * 反復 128 回で許容差 1e-3 を満たすステップが 81.7% あり、
+       * **未達のステップは 1 つ残らず加速期の中**にあった:
+       *
+       *   反復 128・8 年(加速 2 + 全熱容量 6)・2400 ステップ
+       *     残差 ≤1e-4  67.6%   ≤1e-3  13.5%   >1e-3  18.4%
+       *     未達の位置: ステップ 0〜479(加速期は 0〜599)
+       *
+       * 理由は物理でつく。加速期は熱容量を 1/16 にして緩和を早めるので、
+       * 陰解法の対角項 C/dt が 16 分の 1 になり**対角優位が崩れる**。
+       * 反復が効かないのは加速期だけで、全熱容量に戻れば 128 回で足りる。
+       * 温間開始でも分布は同じだった(冷間開始の過渡ではない)。
+       *
+       * 4 分の 1 に落とす根拠は上の測定。残差の 3 分の 2 が許容差の
+       * **10 分の 1 以下**なので余裕がある。それでも足りない惑星は
+       * 毎ステップの残差検査が捕まえ、外側の倍化が `iters` ごと引き上げる
+       * (加速期・後期の比は保たれる)。**しきい値は緩めていない。**
+       */
+      const itersLate = Math.max(1, iters >> 2);
       const monthCount = new Array<number>(M).fill(0);
       const polarGroups = Math.ceil(CH / GPU_WORKGROUP_SIZE);
 
@@ -660,10 +683,12 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
         const monthIndex = Math.min(M - 1, Math.floor(yearFrac * M));
         if (accumSlot === 1) monthCount[monthIndex] = (monthCount[monthIndex] ?? 0) + 1;
 
+        // 加速期は対角優位が崩れるので反復を減らせない(上の注記)
+        const itersNow = step < spinupSteps ? iters : itersLate;
         pu[0] = CW;
         pu[1] = CH;
         pu[2] = N;
-        pu[3] = iters;
+        pu[3] = itersNow;
         pu[4] = m0;
         pu[5] = m1;
         pu[6] = monthIndex;
@@ -714,9 +739,9 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
         };
         run(pipePrepA, cellGroups);
         run(pipePrepB, cellGroups);
-        for (let it = 0; it < iters; it++) {
+        for (let it = 0; it < itersNow; it++) {
           // 最終反復の直前に控えを取り、合成作用素 1 回ぶんの変化量を残差にする
-          if (it === iters - 1) enc.copyBufferToBuffer(bufTemp, 0, bufPrev, 0, N * 4);
+          if (it === itersNow - 1) enc.copyBufferToBuffer(bufTemp, 0, bufPrev, 0, N * 4);
           run(pipeRed, cellGroups);
           run(pipeBlack, cellGroups);
           run(pipePolar, polarGroups);
@@ -768,8 +793,12 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
       for (let m = 0; m < M; m++) monthAccum.push(flat.slice(m * N, (m + 1) * N));
       const finalT = flat.slice(2 * M * N, 2 * M * N + N);
       let maxResidualC = 0;
+      // 反復が本当に何回要るかは**ステップごとに違う**。全体の最大だけを見ると
+      // 「一番苦しい 1 ステップ」に全ステップが引きずられる。分布も返す
+      const stepResidualsC = new Float32Array(totalSteps);
       for (let s = 0; s < totalSteps; s++) {
         const v = flat[2 * M * N + N + s] ?? 0;
+        stepResidualsC[s] = v;
         if (v > maxResidualC) maxResidualC = v;
       }
       // 許容差を満たしたかを**返す**。渡された許容差を使わずに残差を記録する
@@ -807,6 +836,7 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
         finalT,
         finalIce: flat.slice(2 * M * N + N + MAX_STEPS, 2 * M * N + N + MAX_STEPS + N),
         maxResidualC,
+        stepResidualsC,
         converged: maxResidualC <= k.solveToleranceC,
         maxYearDriftC,
         meanYearDriftC,

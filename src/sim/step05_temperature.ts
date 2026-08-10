@@ -245,6 +245,8 @@ export const EBM_SOLVER_STATS = {
    * 回し直すので、`years` は最後の 1 回ぶんではなく**積算**を入れる
    */
   calls: [] as Array<{ warm: boolean; years: number; iters: number }>,
+  /** [step] 最後のパスのステップ別残差(GPU 経路のみ)。診断で使う */
+  stepResidualsC: null as Float32Array | null,
 };
 
 /** 診断を初期化する。パイプラインの入口で 1 回だけ呼ぶ */
@@ -258,6 +260,7 @@ export function resetEbmSolverStats(): void {
   EBM_SOLVER_STATS.meanYearDriftC = 0;
   EBM_SOLVER_STATS.fullCapacityYears = 0;
   EBM_SOLVER_STATS.calls.length = 0;
+  EBM_SOLVER_STATS.stepResidualsC = null;
 }
 
 interface CoarseCell {
@@ -1285,6 +1288,10 @@ export async function computeTemperature(
     EBM_SOLVER_STATS.meanYearDriftC = Math.max(EBM_SOLVER_STATS.meanYearDriftC, r.meanYearDriftC);
     EBM_SOLVER_STATS.fullCapacityYears = fullYears;
     EBM_SOLVER_STATS.maxResidualC = Math.max(EBM_SOLVER_STATS.maxResidualC, r.maxResidualC);
+    // 最後のパスのステップ別残差を残す(反復回数を削れるかの判断材料)
+    if ('stepResidualsC' in r && r.stepResidualsC) {
+      EBM_SOLVER_STATS.stepResidualsC = r.stepResidualsC;
+    }
     if (iters > EBM_SOLVER_STATS.maxSweeps) EBM_SOLVER_STATS.maxSweeps = iters;
     // 予算内で収束しなかった / 周期定常に達しなかったら診断に残す。
     // 較正はこれを見て評価そのものを失格にする(黙って採用しない)
