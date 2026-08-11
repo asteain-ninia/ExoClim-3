@@ -785,6 +785,10 @@ export async function computePrecipitation(
       windBelt.monthlyPolarFrontLatSDeg[m] ?? -60,
       dyKm, ocean, eastOceanKm, eastOceanSstA, meanItczCenters, crestElev,
       coldAnomalyCache, diagM, G,
+      // **前反復が解いた W** を渡す(前線の判定に使う。既定では見られない)。
+      // G は W を決める方程式の係数なので、同じ反復の W は原理的に使えない。
+      // 結合反復が収束すれば前反復と当反復の W は一致するので自己整合する
+      warmStart[m] ?? undefined,
     );
     // 因子分解が意味を持つのはここまで — 保存型の降水は G の積ではなく
     // 輸送方程式の解なので、「因子の積 = 降水」は原理的に成り立たない
@@ -1510,6 +1514,14 @@ function convertToPrecip(
    * (docs/計画_保存則の段階的置換_2026-08-09.md)。
    */
   condRateOut?: Float32Array,
+  /**
+   * **前反復が解いた可降水量 W**(保存型のときだけ渡す)。
+   * 前線の判定はこれまで `supply`(風上追跡で作った到達可能性の代理場)の
+   * 南北勾配で行っていたが、保存型では実際の水は W である。
+   * 段 6 の移行で置き忘れていた疑い。
+   * 事前登録: docs/事前登録_前線の判定を保存量で_2026-08-11.md
+   */
+  waterMm?: Float32Array,
 ): Float32Array {
   const { grid, params, terrain } = ctx;
   const W = grid.widthCells;
@@ -1574,7 +1586,18 @@ function convertToPrecip(
         const south2 = row < H - 1 ? (row + 1) * W + col : i;
         const eqNb = lat >= 0 ? south2 : north2;
         const polNb = lat >= 0 ? north2 : south2;
-        const gradPoleward = Math.max(0, (supply[eqNb] ?? 0) - (supply[polNb] ?? 0));
+        // **何の勾配で前線を判定するか。** 既定は従来どおり供給の代理場だが、
+        // 保存型では実際の水は W(輸送が解いた可降水量)である。
+        // 代理場は風上追跡の到達可能性でしかなく、東アジアでは
+        // 東から +1139mm/年 の水が入っているのに勾配が 0.103 しか立たない
+        // (docs/実験記録_前線の窓_2026-08-11.md)
+        const gField = K.frontalGradientUsesWater > 0 && waterMm ? waterMm : supply;
+        const gScale =
+          K.frontalGradientUsesWater > 0 && waterMm ? K.frontalWaterGradientNorm : 1;
+        const gradPoleward = Math.max(
+          0,
+          ((gField[eqNb] ?? 0) - (gField[polNb] ?? 0)) / gScale,
+        );
         const vPoleward = lat >= 0 ? (v[i] ?? 0) : -(v[i] ?? 0);
         const aLat0 = Math.abs(lat);
         if (
