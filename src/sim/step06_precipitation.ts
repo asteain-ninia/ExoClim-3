@@ -1580,7 +1580,7 @@ function convertToPrecip(
         if (
           vPoleward > 0 &&
           gradPoleward > 0 &&
-          aLat0 > Math.abs(ridge) - 6 &&
+          aLat0 > Math.abs(ridge) - K.frontalWindowEquatorwardDeg &&
           aLat0 < Math.abs(pf)
         ) {
           const frontW = Math.min(1.5, (vPoleward / 4) * gradPoleward);

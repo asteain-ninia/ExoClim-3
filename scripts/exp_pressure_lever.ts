@@ -91,6 +91,45 @@ function meanRate(
   return s / Math.max(1e-9, w);
 }
 
+/**
+ * 地域の年降水を観測比で返す(1.00 = 観測どおり)。
+ * **運ぶ機構は正味流入、降らせる機構は降水そのもので判定する。**
+ * 観測は 2° の気候値なので最近傍で引く
+ */
+function regionPrecipRatio(r: PipelineResult, cells: number[]): string {
+  const grid = r.context.grid;
+  const clim = getClimObs();
+  let mp = 0;
+  let op = 0;
+  let w = 0;
+  for (const i of cells) {
+    const row = Math.floor(i / grid.widthCells);
+    const col = i % grid.widthCells;
+    const cw = Math.cos((latDegOfRow(grid, row) * Math.PI) / 180);
+    const cr = Math.min(clim.heightCells - 1, Math.round((row / grid.heightCells) * clim.heightCells));
+    const cc = Math.min(clim.widthCells - 1, Math.round((col / grid.widthCells) * clim.widthCells));
+    const ci = cr * clim.widthCells + cc;
+    let o = 0;
+    let bad = false;
+    for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+      const v = clim.monthlyPrecipitationMm[m]?.[ci];
+      if (v === undefined || v <= -9000) {
+        bad = true;
+        break;
+      }
+      o += v;
+    }
+    if (bad) continue;
+    let p = 0;
+    for (let m = 0; m < MONTHS_PER_YEAR; m++) p += r.precipitation.monthlyPrecipMm[m]?.[i] ?? 0;
+    mp += cw * p;
+    op += cw * o;
+    w += cw;
+  }
+  if (w <= 0 || op <= 0) return '  —  ';
+  return (mp / op).toFixed(2).padStart(5);
+}
+
 async function main(): Promise<void> {
   const K = MODEL_CONSTANTS as unknown as Record<string, number>;
   if (!(KEY in K)) {
@@ -121,6 +160,7 @@ async function main(): Promise<void> {
     const f = fieldScore(r, getClimObs());
     const gates = scoreRegionGates(r).filter((g) => g.pass).length;
     const cols: string[] = [];
+    const obsRatio: string[] = [];
     for (const id of TARGETS) {
       const cells = regionCells(r, id);
       const gate = REGION_GATES.find((g) => g.id === id);
@@ -129,12 +169,17 @@ async function main(): Promise<void> {
       const p = meanRate(r, r.precipitation.monthlyPrecipMm, cells, summer);
       const e = meanRate(r, r.precipitation.land?.monthlyEtMm, cells, summer);
       cols.push((p - e).toFixed(0).padStart(7));
+      // **降水そのものも観測比で出す**(2026-08-11)。段 10 で「降らせる側の機構を
+      // 運ぶ側の物差し(正味流入)だけで判定して、何が起きたか分からなくなった」
+      // 反省。運ぶ機構と降らせる機構では見るべき量が違う
+      obsRatio.push(regionPrecipRatio(r, cells));
     }
     console.log(
       `${value.toString().padEnd(6)} ${s.fitness.toFixed(3)}  ${s.majorPct.toFixed(2)}  ` +
         `${s.detailPct.toFixed(2)}  ${String(gates).padStart(4)}  ` +
         `${f.precipPhaseRmseDays.toFixed(1)}  ${f.tempRmseC.toFixed(3).padStart(7)}  ${cols.join(' ')}`,
     );
+    console.log(`       年降水／観測: ${obsRatio.join('  ')}`);
   }
   K[KEY] = base;
   console.log(
