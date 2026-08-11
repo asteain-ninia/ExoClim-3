@@ -18,3 +18,5 @@ data/external/raw/koppen_geiger_tif_v2.zip
 # git に入れると履歴が永久に重くなるので**意図的に非追跡**にしている
 # (2026-08-10: AI が git add -A で一度巻き込んでしまい、外して戻した)。
 docs/報告/
+
+out_lever_*.log
