@@ -23,6 +23,15 @@ import { openAccel } from './accel_cli';
 import type { PipelineResult } from '../src/sim/types';
 
 const GATE = process.argv[2] ?? 'patagonia_rainshadow';
+// 定数を 1 つだけ上書きして測れるようにする（例: CONST=channelnessLinear VAL=1）
+{
+  const key = process.env['CONST'];
+  const val = process.env['VAL'];
+  if (key && val !== undefined) {
+    (K as unknown as Record<string, number>)[key] = Number(val);
+    console.log(`上書き: ${key} = ${val}`);
+  }
+}
 
 async function main(): Promise<void> {
   const accel = await openAccel(true);

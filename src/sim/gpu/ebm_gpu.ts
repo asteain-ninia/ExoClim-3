@@ -209,10 +209,13 @@ fn prepB(@builtin(global_invocation_id) gid : vec3<u32>) {
   if (lat >= 0.0) { ridgeAbs = P.ridgeAbsN; }
   let phiEdgeN = (lat + P.resDeg * 0.5) * 0.017453292519943295;
   let phiEdgeS = (lat - P.resDeg * 0.5) * 0.017453292519943295;
-  var chanN = 1.0;
-  if (rowF(2u, r) >= 0.5 || (r > 0u && rowF(2u, r - 1u) >= 0.5)) { chanN = P.chanFactor; }
-  var chanS = 1.0;
-  if (rowF(2u, r) >= 0.5 || (r < H - 1u && rowF(2u, r + 1u) >= 0.5)) { chanS = P.chanFactor; }
+  // 海峡らしさは 0〜1 の重み。二値のときは 0/1 なので従来と厳密に一致する
+  var chW_N = rowF(2u, r);
+  if (r > 0u) { chW_N = max(chW_N, rowF(2u, r - 1u)); }
+  var chanN = 1.0 - (1.0 - P.chanFactor) * chW_N;
+  var chW_S = rowF(2u, r);
+  if (r < H - 1u) { chW_S = max(chW_S, rowF(2u, r + 1u)); }
+  var chanS = 1.0 - (1.0 - P.chanFactor) * chW_S;
   // 南北の面伝導度は**面の量**。ハドレー増強は緯度で変わるので、自セルの緯度で
   // 評価すると i→j と j→i が食い違う(Codex レビュー 2026-08-02)。
   // 面の値 = 両側セルの実効南北拡散係数の平均。cosC で割るのは体積規格化
@@ -251,8 +254,8 @@ fn prepB(@builtin(global_invocation_id) gid : vec3<u32>) {
   if (uMs >= 0.0) { upwindU = west; }
   var upwindV = north;
   if (vMs >= 0.0) { upwindV = south; }
-  var chanV = 1.0;
-  if (rowF(2u, r) >= 0.5 || rowF(2u, upwindV / W) >= 0.5) { chanV = P.chanFactor; }
+  let chW_V = max(rowF(2u, r), rowF(2u, upwindV / W));
+  var chanV = 1.0 - (1.0 - P.chanFactor) * chW_V;
   let landGrip = 0.25 + 0.75 * cellF(6u, i);
   var advCv = 0.0;
   if (upwindV != i) {

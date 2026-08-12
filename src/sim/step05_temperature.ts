@@ -366,12 +366,25 @@ export async function computeTemperature(
   const insolation = computeInsolation(cg, params.orbital, params.body.axialTiltDeg);
 
   // 周極海峡: ほぼ陸に遮られない緯度行(地衡流水路 = 南北隔離 + 深い鉛直混合)
-  const rowIsChannel = new Uint8Array(CH);
+  //
+  // **二値では細い大陸を巻き込む**(2026-08-12)。南米南部が乗る行は陸割合
+  // 1.7〜3.3% で閾値 4% を下回るため、パタゴニアが「遮られていない海峡」と
+  // 判定されていた。海峡行は 南北拡散 0.48 倍・雲 +54%・混合層 3 倍を同時に
+  // 受け、**3 つとも冷やす向き**。最暖月が 6°C 低い原因の第一候補である。
+  // 遮蔽の物理は「流れが陸に当たる割合」なので、陸割合に連続に効くのが筋。
+  // `channelnessLinear` が 0 のときは従来の階段(0/1)で厳密に一致する
+  const rowIsChannel = new Float32Array(CH);
   for (let row = 0; row < CH; row++) {
     if (Math.abs(latDegOfRow(cg, row)) > K.channelMaxAbsLatDeg) continue;
     let landSum = 0;
     for (let col = 0; col < CW; col++) landSum += coarse[row * CW + col]?.landFrac ?? 0;
-    rowIsChannel[row] = landSum / CW < K.channelLandFracMax ? 1 : 0;
+    const frac = landSum / CW;
+    rowIsChannel[row] =
+      K.channelnessLinear > 0
+        ? Math.max(0, 1 - frac / Math.max(1e-9, K.channelLandFracMax))
+        : frac < K.channelLandFracMax
+          ? 1
+          : 0;
   }
 
   // ---- セル定数 ----
@@ -413,7 +426,7 @@ export async function computeTemperature(
         0.5 * (atm.surfacePressureBar - 1),
     );
     let oceanDepth = atm.oceanMixedLayerDepthM + 2.4 * atm.surfacePressureBar;
-    if (rowIsChannel[row]) oceanDepth *= K.channelMixedLayerBoost;
+    oceanDepth *= 1 + (K.channelMixedLayerBoost - 1) * (rowIsChannel[row] ?? 0);
     heatCap[i] = RHO_C_WATER * (c.landFrac * landDepth + (1 - c.landFrac) * oceanDepth);
     const h = c.landFrac * Math.max(0, c.meanLandElevM);
     elevM[i] = h;
@@ -501,7 +514,7 @@ export async function computeTemperature(
         const scDeck =
           sstA < 0 ? K.stratocumulusBoostPerNegC * Math.min(1.5, -sstA / 2) * oceanFrac : 0;
         // 周極海峡行は常時ストーム雲(南大洋型。上限も少し引き上げる)
-        const chanCloud = rowIsChannel[row] ? K.channelCloudBoost * oceanFrac : 0;
+        const chanCloud = K.channelCloudBoost * oceanFrac * (rowIsChannel[row] ?? 0);
         // 陸の対流・前線雲。**海側の項がすべて oceanFrac 倍で入っている**ため、
         // これが無いと中高緯度の夏の大陸は月 100mm 降っていても雲が基準値のまま。
         // 供給を飽和させるので、降水が過大な場所でも雲は上限で止まる
@@ -519,7 +532,7 @@ export async function computeTemperature(
           scDeck +
           chanCloud +
           landCloud;
-        const capMax = K.cloudAlbedoMax + (rowIsChannel[row] ? 0.08 : 0);
+        const capMax = K.cloudAlbedoMax + 0.08 * (rowIsChannel[row] ?? 0);
         field[i] = Math.min(capMax, Math.max(0.04, atm.cloudAlbedo * factor));
       }
     }
@@ -823,14 +836,14 @@ export async function computeTemperature(
           const ridgeAbs = lat >= 0 ? ridgeAbsN : ridgeAbsS;
           const phiEdgeN = ((lat + cg.resolutionDeg / 2) * Math.PI) / 180;
           const phiEdgeS = ((lat - cg.resolutionDeg / 2) * Math.PI) / 180;
-          const chanN =
-            rowIsChannel[row] || (row > 0 && rowIsChannel[row - 1])
-              ? K.circumpolarChannelFactor
-              : 1;
-          const chanS =
-            rowIsChannel[row] || (row < CH - 1 && rowIsChannel[row + 1])
-              ? K.circumpolarChannelFactor
-              : 1;
+          // 海峡らしさは 0〜1 の重み。二値のときは 0/1 なので従来と厳密に一致
+          const chWN = Math.max(rowIsChannel[row] ?? 0, row > 0 ? (rowIsChannel[row - 1] ?? 0) : 0);
+          const chWS = Math.max(
+            rowIsChannel[row] ?? 0,
+            row < CH - 1 ? (rowIsChannel[row + 1] ?? 0) : 0,
+          );
+          const chanN = 1 - (1 - K.circumpolarChannelFactor) * chWN;
+          const chanS = 1 - (1 - K.circumpolarChannelFactor) * chWS;
           // 南北の面伝導度は**面の量**でなければならない。ハドレー増強は緯度で
           // 変わるので、自セルの緯度で評価すると i→j と j→i が食い違う
           // (リッジ付近の 32°/30° 界面で約 4.6%。Codex レビュー 2026-08-02)。
@@ -884,7 +897,9 @@ export async function computeTemperature(
             // (b) 陸で強く外洋で弱い(海面温度への大気移流の掴みは小さい)
             const upwindVRow = Math.floor(upwindV / CW);
             const chanV =
-              rowIsChannel[row] || rowIsChannel[upwindVRow] ? K.circumpolarChannelFactor : 1;
+              1 -
+              (1 - K.circumpolarChannelFactor) *
+                Math.max(rowIsChannel[row] ?? 0, rowIsChannel[upwindVRow] ?? 0);
             const landGrip = 0.25 + 0.75 * (coarse[i]?.landFrac ?? 0);
             const advCv =
               upwindV === i
