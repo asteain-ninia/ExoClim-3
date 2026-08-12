@@ -1632,8 +1632,19 @@ function convertToPrecip(
       const west = row * W + wrapCol(grid, col - 1);
       const north = row > 0 ? (row - 1) * W + col : i;
       const south = row < H - 1 ? (row + 1) * W + col : i;
-      const dhdx = (Math.max(0, elev[east] ?? 0) - Math.max(0, elev[west] ?? 0)) / (2 * dxKm);
-      const dhdy = (Math.max(0, elev[north] ?? 0) - Math.max(0, elev[south] ?? 0)) / (2 * dyKm);
+      // **気流は峰を越えるのであって、セルの平均標高を越えるのではない。**
+      // 1° 平均ではパタゴニアのアンデスが実際の峰の 6 割の高さになる
+      // (平均 718m / セル内 p95 1187m — scripts/diag_crest_vs_mean.ts)。
+      // 平均で作った勾配では風上で水を絞り切れず、保存則からの雨陰が出ない。
+      // 既定 0 = 従来と厳密に一致。**峰の場は気温には使わない**(用途で分ける)
+      const liftElev = (n: number): number => {
+        const m = Math.max(0, elev[n] ?? 0);
+        if (K.orographicCrestBlend <= 0) return m;
+        const c = Math.max(m, crestElev[n] ?? 0);
+        return m + K.orographicCrestBlend * (c - m);
+      };
+      const dhdx = (liftElev(east) - liftElev(west)) / (2 * dxKm);
+      const dhdy = (liftElev(north) - liftElev(south)) / (2 * dyKm);
       const uu = u[i] ?? 0;
       const vv = v[i] ?? 0;
       const upslopeMPerKmPerS = uu * dhdx + vv * dhdy; // m/km × m/s
