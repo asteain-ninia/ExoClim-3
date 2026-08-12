@@ -1639,7 +1639,12 @@ function convertToPrecip(
       // 既定 0 = 従来と厳密に一致。**峰の場は気温には使わない**(用途で分ける)
       const liftElev = (n: number): number => {
         const m = Math.max(0, elev[n] ?? 0);
-        if (K.orographicCrestBlend <= 0) return m;
+        // **海セルには峰を立てない。** セル内 p95 は 1° の海セルに含まれる
+        // 小島を拾うので、1541 セルで峰 > 50m、最大 2465m ある
+        // (scripts/check_crest_field.ts)。そのまま混ぜると海の真ん中に
+        // 2.5km の山が生えて偽の地形性上昇と雨陰が出る。
+        // 海として扱っているセルに総観規模の障壁を置くのは筋が通らない
+        if (K.orographicCrestBlend <= 0 || !terrain.landMask[n]) return m;
         const c = Math.max(m, crestElev[n] ?? 0);
         return m + K.orographicCrestBlend * (c - m);
       };

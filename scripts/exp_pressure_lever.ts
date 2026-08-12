@@ -37,14 +37,26 @@ import type { PipelineResult } from '../src/sim/types';
 const KEY = process.argv[2] ?? 'monsoonTroughDeepening';
 const VALUES = (process.argv[3] ?? '0,0.5,1,1.5').split(',').map(Number);
 
-/** 見る地域(未達 3 件 + 対照 2 件) */
-const TARGETS = [
-  'india_tropical',
-  'us_southeast_humid',
-  'east_asia_humid',
-  'congo_tropical',
-  'europe_russia_continental',
-];
+/**
+ * 見る地域。既定は未達 3 件 + 対照 2 件。
+ *
+ * **判定に要る地域は、測る前に足しておくこと。** 段 10 で「降らせる側の機構を
+ * 運ぶ側の物差しだけで判定して、何が起きたか分からなくなった」失敗をした。
+ * 環境変数 `LEVER_TARGETS`(カンマ区切りのゲート id)で差し替えられる。
+ */
+const TARGETS = (process.env['LEVER_TARGETS'] ?? '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+if (TARGETS.length === 0) {
+  TARGETS.push(
+    'india_tropical',
+    'us_southeast_humid',
+    'east_asia_humid',
+    'congo_tropical',
+    'europe_russia_continental',
+  );
+}
 
 /** 地域の陸セル(格子番号) */
 function regionCells(r: PipelineResult, id: string): number[] {
