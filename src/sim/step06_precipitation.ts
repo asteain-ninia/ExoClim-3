@@ -1653,7 +1653,12 @@ function convertToPrecip(
       const uu = u[i] ?? 0;
       const vv = v[i] ?? 0;
       const upslopeMPerKmPerS = uu * dhdx + vv * dhdy; // m/km × m/s
-      const refSlope = 800; // 基準: 8 m/s × 100 m/km
+      // 基準: 8 m/s × 100 m/km。**この 100 m/km は 1° 格子では作れない**
+      // (2026-08-12 実測: パタゴニアのアンデスで 4.6 m/km、峰を使っても 7.6、
+      //  チベットの峰でも 29.4)。比が 0.05 前後にしかならないので、
+      // 地形性上昇は 5% の効果しか持たず、上限 2.5 には遠く及ばない。
+      // **格子の粗さが機構を殺している**ので、基準を定数にして測る
+      const refSlope = K.orographicRefSlope;
       let liftOroF = 1;
       if (upslopeMPerKmPerS > 0) {
         liftOroF = 1 + K.orographicBoost * Math.min(2.5, upslopeMPerKmPerS / refSlope);
