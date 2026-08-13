@@ -1842,11 +1842,33 @@ function convertToPrecip(
       // どちらもその惑星の気温場から出るので、地球固有の量は入らない。
       let crhFactor = 1;
       if (K.crhSuppressionSharpness > 0) {
-        const qSatLocal = saturationVaporPressureHpa(tField[i] ?? 0) / q0Local;
-        const crh = Math.min(
-          1,
-          (supply[i] ?? 0) / Math.max(1e-6, K.crhSupplyNormPerQSat * qSatLocal),
-        );
+        let crh: number;
+        if (K.crhFromWater > 0 && waterMm) {
+          // **保存型では柱相対湿度が厳密に計算できる。** W は輸送方程式の解、
+          // W_sat は気温と気圧から決まる飽和柱水量。代理場も正規化定数も要らない
+          // (`crhSupplyNormPerQSat` という自由度が 1 つ消える)。
+          //
+          // なぜ厳密な CRH が要るか(2026-08-13 の考察):
+          //   P = λ·G·W なので λ と G の平均は互いに縮退している。意味を持つのは
+          //   **G の空間的な幅**だけだが、モデルの G は 3.8 倍しか動かない
+          //   (実物のコンゴ/サハラの降水比は 57 倍)。
+          //   指数抑制 exp(s(crh−1)) は常に 1 以下なので、**幅を作りながら
+          //   平均を自動的に下げる** — 段 19 の「平均だけ下げる」とは別物である。
+          //
+          //   独立の証拠: 全球平均の可降水量 W が 3.36mm（実物 25mm）しかない。
+          //   W は採点にも目的関数にも入っていないので、較正では動かせない量
+          const wSat = saturatedColumnMm(
+            tField[i] ?? 0,
+            params.atmosphere.surfacePressureBar * 1013.25,
+          );
+          crh = Math.min(1, (waterMm[i] ?? 0) / Math.max(1e-6, wSat));
+        } else {
+          const qSatLocal = saturationVaporPressureHpa(tField[i] ?? 0) / q0Local;
+          crh = Math.min(
+            1,
+            (supply[i] ?? 0) / Math.max(1e-6, K.crhSupplyNormPerQSat * qSatLocal),
+          );
+        }
         crhFactor = Math.exp(K.crhSuppressionSharpness * (crh - 1));
       }
 

@@ -32,6 +32,7 @@ import { MONTHS_PER_YEAR } from '../src/domain/insolation';
 import { latDegOfRow, lonDegOfCol } from '../src/domain/grid';
 import { evaluateResult } from './optimize_lib';
 import { fieldScore, getClimObs, REGION_GATES, scoreRegionGates } from './scoring';
+import { CONSERVATIVE_STATS } from '../src/sim/step06_precipitation';
 import { openAccel } from './accel_cli';
 import type { PipelineResult } from '../src/sim/types';
 
@@ -171,6 +172,7 @@ async function main(): Promise<void> {
       accel.close();
     }
     const sec = (performance.now() - t0) / 1000;
+    const wMm = CONSERVATIVE_STATS.meanWaterMm / Math.max(1, CONSERVATIVE_STATS.waterSamples);
     const s = evaluateResult(r);
     const f = fieldScore(r, getClimObs());
     const gates = scoreRegionGates(r).filter((g) => g.pass).length;
@@ -190,7 +192,7 @@ async function main(): Promise<void> {
       obsRatio.push(regionPrecipRatio(r, cells));
     }
     console.log(
-      `${value.toString().padEnd(6)} ${sec.toFixed(0).padStart(4)}s ${s.fitness.toFixed(3)}  ${s.majorPct.toFixed(2)}  ` +
+      `${value.toString().padEnd(6)} ${sec.toFixed(0).padStart(4)}s W${wMm.toFixed(1).padStart(5)} ${s.fitness.toFixed(3)}  ${s.majorPct.toFixed(2)}  ` +
         `${s.detailPct.toFixed(2)}  ${String(gates).padStart(4)}  ` +
         `${f.precipPhaseRmseDays.toFixed(1)}  ${f.tempRmseC.toFixed(3).padStart(7)}  ${cols.join(' ')}`,
     );
