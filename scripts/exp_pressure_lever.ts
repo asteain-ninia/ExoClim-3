@@ -24,6 +24,7 @@
 //   例: npx tsx scripts/exp_pressure_lever.ts monsoonTroughDeepening 0,0.5,1,1.5
 //       npx tsx scripts/exp_pressure_lever.ts continentalThermalHpa 9,14,20
 
+import { performance } from 'node:perf_hooks';
 import { runPipeline } from '../src/sim/pipeline';
 import { EARTH_PARAMS } from '../src/domain/planetParams';
 import { MODEL_CONSTANTS } from '../src/sim/constants';
@@ -162,12 +163,14 @@ async function main(): Promise<void> {
   for (const value of VALUES) {
     K[KEY] = value;
     const accel = await openAccel(true);
+    const t0 = performance.now();
     let r: PipelineResult;
     try {
       r = await runPipeline(EARTH_PARAMS, accel.opts);
     } finally {
       accel.close();
     }
+    const sec = (performance.now() - t0) / 1000;
     const s = evaluateResult(r);
     const f = fieldScore(r, getClimObs());
     const gates = scoreRegionGates(r).filter((g) => g.pass).length;
@@ -187,7 +190,7 @@ async function main(): Promise<void> {
       obsRatio.push(regionPrecipRatio(r, cells));
     }
     console.log(
-      `${value.toString().padEnd(6)} ${s.fitness.toFixed(3)}  ${s.majorPct.toFixed(2)}  ` +
+      `${value.toString().padEnd(6)} ${sec.toFixed(0).padStart(4)}s ${s.fitness.toFixed(3)}  ${s.majorPct.toFixed(2)}  ` +
         `${s.detailPct.toFixed(2)}  ${String(gates).padStart(4)}  ` +
         `${f.precipPhaseRmseDays.toFixed(1)}  ${f.tempRmseC.toFixed(3).padStart(7)}  ${cols.join(' ')}`,
     );
