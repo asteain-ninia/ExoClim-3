@@ -68,6 +68,16 @@ export const CONSERVATIVE_STATS = {
   iterations: 0,
   /** virga の外側反復が収束しなかった月の数 */
   virgaNonConverged: 0,
+  /**
+   * **全球の可降水量 W の面積重み平均(mm)**。実物は約 25mm。
+   *
+   * P = λ·G·W なので、λ と G の平均は**互いに縮退している**
+   * (αG と λ/α は同じ方程式を与える)。したがって「滞留時間 1/(λG)」を
+   * 独立に検証する道は 1 つしかない — **W の絶対値**である。
+   * 実物の 25mm と比べれば、λ·G の全球平均が正しいかが分かる(2026-08-13)
+   */
+  meanWaterMm: 0,
+  waterSamples: 0,
 };
 
 /**
@@ -828,6 +838,20 @@ export async function computePrecipitation(
       },
     );
     warmStart[m] = r.waterMm;
+    {
+      // 全球平均の可降水量を積む（実物 25mm との比較用）
+      let sw = 0;
+      let ww = 0;
+      for (let row = 0; row < grid.heightCells; row++) {
+        const cw = Math.cos((latDegOfRow(grid, row) * Math.PI) / 180);
+        for (let col = 0; col < grid.widthCells; col++) {
+          sw += cw * (r.waterMm[row * grid.widthCells + col] ?? 0);
+          ww += cw;
+        }
+      }
+      CONSERVATIVE_STATS.meanWaterMm += sw / Math.max(1e-9, ww);
+      CONSERVATIVE_STATS.waterSamples++;
+    }
     // **収束していない解を黙って採用しない**
     if (!r.converged) {
       CONSERVATIVE_STATS.nonConverged++;
