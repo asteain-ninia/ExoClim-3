@@ -17,13 +17,19 @@ import { REGION_GATES } from './scoring';
 import { openAccel } from './accel_cli';
 import type { PipelineResult } from '../src/sim/types';
 
-const TARGETS = [
-  'east_asia_humid',
-  'us_southeast_humid',
-  'india_tropical',
-  'west_europe_temperate',
-  'congo_tropical',
-];
+const TARGETS = (process.env['LEVER_TARGETS'] ?? '')
+  .split(',')
+  .map((x) => x.trim())
+  .filter(Boolean);
+if (TARGETS.length === 0) {
+  TARGETS.push(
+    'east_asia_humid',
+    'us_southeast_humid',
+    'india_tropical',
+    'west_europe_temperate',
+    'congo_tropical',
+  );
+}
 
 function regionCells(r: PipelineResult, id: string): number[] {
   const gate = REGION_GATES.find((g) => g.id === id);
