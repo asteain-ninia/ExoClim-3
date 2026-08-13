@@ -290,6 +290,32 @@ async function main(): Promise<void> {
   const budgetMin = arg('--minutes', 45);
   const parallel = Math.max(1, Math.round(arg('--parallel', 1)));
   const deadline = Date.now() + budgetMin * 60_000;
+  /**
+   * **停滞での自動終了**(2026-08-13 追加)。最良が この回数だけ連続で
+   * 更新されなければ、時間が残っていても終わる。
+   *
+   * なぜ要るか: 終了条件が時間だけだったので、頭打ちになった探索に GPU を
+   * 使い続けていた。2026-08-13 の v22 は 421 評価で最良に達したあと
+   * 618 評価まで 1 度も更新せずに回り続けた。
+   *
+   * **124 の根拠は過去のログの再生**(新しい実験はしていない):
+   *   v22（618 評価、最終 85.259）
+   *     N=60  → 評価 248 で停止、最良 85.048（**0.211 損**。攻めすぎ）
+   *     N=124 → 評価 543 で停止、最良 85.259（**損失ゼロ**、75 評価を節約）
+   *     N=200 → 停止せず
+   *   v20（586 評価、最終 84.437）
+   *     N=60〜300 いずれも停止せず（**最後まで伸びていたので止めないのが正解**）
+   *
+   * 124 = 探索空間 62 定数 × 2 方向 = 座標降下のスイープ 1 周。
+   * **これより短くしてはいけない**: 座標降下は谷を渡れないので、
+   * 停滞してから摂動で抜けることがある(教訓 §9)。スイープ 1 周ぶんは
+   * 待たないと、抜けられたはずの谷を捨てる。N=60 の 0.211 損はまさにこれ。
+   */
+  const stallLimit = Math.max(0, Math.round(arg('--stall', 124)));
+  /** 最良を最後に更新した評価番号。**再開時はその時点から数え直す**
+   *  (前回の走行での停滞をこの走行へ持ち込まない) */
+  let lastBestEvalNo = 0;
+  let lastBestFit = -Infinity;
   const state = loadState();
   initEvalCounter(state);
   const rand = mulberry32(state.seed + state.sweep * 977 + state.evals);
@@ -342,6 +368,25 @@ async function main(): Promise<void> {
         /* 消せなくても止まることを優先する */
       }
       break;
+    }
+
+    // 停滞での自動終了。**感度スクリーニングの間は数えない** — あの段階は
+    // 最良を更新するのが目的ではなく、感度を測るために全定数を 1 度ずつ
+    // 振る工程だからである(更新しないのが正常)
+    if (stallLimit > 0 && state.phase === 'descent') {
+      if (state.bestFit > lastBestFit) {
+        lastBestFit = state.bestFit;
+        lastBestEvalNo = state.evals;
+      }
+      const evalsSinceBest = state.evals - lastBestEvalNo;
+      if (evalsSinceBest >= stallLimit) {
+        console.log(
+          `停滞で終了: 最良 ${state.bestFit.toFixed(3)} が ${evalsSinceBest} 評価` +
+            `連続で更新されていない(上限 ${stallLimit})。時間は ` +
+            `${Math.round((deadline - Date.now()) / 60_000)} 分残っている`,
+        );
+        break;
+      }
     }
 
     if (state.phase === 'screen') {
