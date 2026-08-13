@@ -1687,7 +1687,10 @@ function convertToPrecip(
       const blockFactor = upwindMountainFactor(ctx, elev, crestElev, u, v, row, col, dxKm, dyKm);
 
       // 亜熱帯沈降: 下降枝の全域(リッジ −16° 〜 +5°)を抑制。ITCZ 影響下は防護
-      const descLo = Math.abs(ridge) - 16;
+      // 赤道側の広がり。**16 は名前を持たない数だった**(2026-08-13 に命名)。
+      // 21° 幅あるので 7 月のリッジ 37°N に対し帯は 21〜42°N となり、
+      // east_asia(25〜40°N)が丸ごと入る。凝結率が半減する原因
+      const descLo = Math.abs(ridge) - K.subsidenceBandEquatorwardDeg;
       const descHi = Math.abs(ridge) + 5;
       let descW: number;
       if (aLat >= descLo && aLat <= descHi) {
