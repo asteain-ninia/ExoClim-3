@@ -27,8 +27,10 @@ export function computeAirflow(
     const v = new Float32Array(grid.cellCount);
     const p = windBelt.monthlyPressureAnomalyHpa[m];
     const centers = itcz.monthlyCenterLatDegByCol[m];
-    const ridgeN = windBelt.monthlyRidgeLatNDeg[m] ?? 31;
-    const ridgeS = windBelt.monthlyRidgeLatSDeg[m] ?? -31;
+    const ridgeBaseN = windBelt.monthlyRidgeLatNDeg[m] ?? 31;
+    const ridgeBaseS = windBelt.monthlyRidgeLatSDeg[m] ?? -31;
+    // リッジは経度で動く(段 16)。押し上げ量 0 のときは従来と厳密に一致する
+    const ridgeShiftCol = windBelt.monthlyRidgeShiftDegByCol[m];
     const pfN = windBelt.monthlyPolarFrontLatNDeg[m] ?? 60;
     const pfS = windBelt.monthlyPolarFrontLatSDeg[m] ?? -60;
 
@@ -38,6 +40,9 @@ export function computeAirflow(
       for (let col = 0; col < W; col++) {
         const i = row * W + col;
         const itczLat = centers?.[col] ?? 0;
+        const rShift = ridgeShiftCol?.[col] ?? 0;
+        const ridgeN = ridgeBaseN + rShift;
+        const ridgeS = ridgeBaseS - rShift;
 
         // --- 帯状卓越風 ---
         // 注(WL#29 赤道越えモンスーン): 2 度実装して 2 度撤回(較正記録参照)。

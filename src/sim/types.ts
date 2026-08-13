@@ -46,6 +46,15 @@ export interface WindBeltResult {
   /** [month] 北半球・南半球の亜熱帯高圧帯(ハドレー端)緯度(度、N は正) */
   monthlyRidgeLatNDeg: number[];
   monthlyRidgeLatSDeg: number[];
+  /**
+   * [month][col] 亜熱帯リッジの**経度別の極向き押し上げ量**(度、0 以上)。
+   * 実物の夏は大陸上でリッジが極側へ押し上げられる(チベット高気圧)一方、
+   * 海上のリッジは低緯度に留まる。帯状一様なリッジだと中緯度東岸が
+   * 夏でも沈降帯の下に入りっぱなしになる。
+   * 既定 0(`ridgeLandShiftDeg = 0`)で従来と厳密に一致。
+   * 事前登録: docs/事前登録_リッジの経度依存_2026-08-13.md
+   */
+  monthlyRidgeShiftDegByCol: Float32Array[];
   /** [month] 極前線緯度 */
   monthlyPolarFrontLatNDeg: number[];
   monthlyPolarFrontLatSDeg: number[];

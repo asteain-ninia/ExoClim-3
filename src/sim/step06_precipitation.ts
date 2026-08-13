@@ -785,10 +785,12 @@ export async function computePrecipitation(
       windBelt.monthlyPolarFrontLatSDeg[m] ?? -60,
       dyKm, ocean, eastOceanKm, eastOceanSstA, meanItczCenters, crestElev,
       coldAnomalyCache, diagM, G,
+      // 前反復が解いた W と、リッジの経度別の押し上げ量を渡す
       // **前反復が解いた W** を渡す(前線の判定に使う。既定では見られない)。
       // G は W を決める方程式の係数なので、同じ反復の W は原理的に使えない。
       // 結合反復が収束すれば前反復と当反復の W は一致するので自己整合する
       warmStart[m] ?? undefined,
+      windBelt.monthlyRidgeShiftDegByCol[m],
     );
     // 因子分解が意味を持つのはここまで — 保存型の降水は G の積ではなく
     // 輸送方程式の解なので、「因子の積 = 降水」は原理的に成り立たない
@@ -923,6 +925,9 @@ export async function computePrecipitation(
       crestElev,
       coldAnomalyCache,
       diagM,
+      undefined,
+      undefined,
+      windBelt.monthlyRidgeShiftDegByCol[m],
     );
   };
 
@@ -1522,6 +1527,8 @@ function convertToPrecip(
    * 事前登録: docs/事前登録_前線の判定を保存量で_2026-08-11.md
    */
   waterMm?: Float32Array,
+  /** [col] リッジの経度別の押し上げ量（度、段 16）。未指定なら帯状一様 */
+  ridgeShiftByCol?: Float32Array,
 ): Float32Array {
   const { grid, params, terrain } = ctx;
   const W = grid.widthCells;
@@ -1541,7 +1548,7 @@ function convertToPrecip(
   for (let row = 0; row < H; row++) {
     const lat = latDegOfRow(grid, row);
     const dxKm = Math.max(20, cellWidthKm(grid, row, params.body.radiusKm));
-    const ridge = lat >= 0 ? ridgeN : ridgeS;
+    const ridgeZonal = lat >= 0 ? ridgeN : ridgeS;
     const pf = lat >= 0 ? pfN : pfS;
     // 冬の深さ(0〜1、至点で最大)。二値の寒候期ブーストは秋分直後から全開に
     // なり 10 月にスパイクを作る(秋こぶ — 西シベリア Dsa の源)。初回試験は
@@ -1554,6 +1561,12 @@ function convertToPrecip(
     for (let col = 0; col < W; col++) {
       const i = row * W + col;
       let lift = 1;
+
+      // リッジは経度で動く(段 16)。沈降帯・前線の窓・ストーム帯がすべて
+      // これを見ているので、東アジアが夏に沈降帯から外れるかどうかを決める。
+      // 押し上げ量 0 のときは従来と厳密に一致
+      const ridge =
+        ridgeZonal + (lat >= 0 ? 1 : -1) * (ridgeShiftByCol?.[col] ?? 0);
 
       // ITCZ 収束。傘は「湿潤収束が海洋起源のときだけ開く」— 供給の乏しい
       // 乾燥内陸ではトラフ直下でも雨にならない(実物のアラビア熱低は乾いた

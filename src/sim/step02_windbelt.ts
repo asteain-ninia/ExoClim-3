@@ -34,6 +34,7 @@ export function computeWindBelt(
 
   const monthlyRidgeLatNDeg: number[] = [];
   const monthlyRidgeLatSDeg: number[] = [];
+  const monthlyRidgeShiftDegByCol: Float32Array[] = [];
   const monthlyPolarFrontLatNDeg: number[] = [];
   const monthlyPolarFrontLatSDeg: number[] = [];
   const monthlyPressureAnomalyHpa: Float32Array[] = [];
@@ -93,6 +94,20 @@ export function computeWindBelt(
     const ridgeS = -ridgeBase + shift;
     monthlyRidgeLatNDeg.push(ridgeN);
     monthlyRidgeLatSDeg.push(ridgeS);
+    // **リッジの経度別の押し上げ**(段 16)。夏半球でのみ、その経度列の
+    // 熱帯陸割合に比例して極側へ動かす。実物では大陸上の亜熱帯高圧帯が
+    // 熱的低気圧に置き換わってリッジが極側へ逃げる(チベット高気圧)一方、
+    // 海上のリッジは低緯度に留まる。帯状一様だと中緯度東岸が夏でも
+    // 沈降帯の下に入りっぱなしになり、凝結率が半減する(2026-08-12 の診断)。
+    // 使うのは troughLandFrac だけで、緯度も経度も名指ししない
+    const ridgeShift = new Float32Array(W);
+    if (K.ridgeLandShiftDeg > 0) {
+      const summer = Math.min(1, Math.abs(declNorm));
+      for (let col = 0; col < W; col++) {
+        ridgeShift[col] = K.ridgeLandShiftDeg * (troughLandFrac[col] ?? 0) * summer;
+      }
+    }
+    monthlyRidgeShiftDegByCol.push(ridgeShift);
     monthlyPolarFrontLatNDeg.push(polarFrontBase + shift * 0.8);
     monthlyPolarFrontLatSDeg.push(-polarFrontBase + shift * 0.8);
 
@@ -120,8 +135,9 @@ export function computeWindBelt(
         let v = 0;
         // 亜熱帯高気圧(海上で強い)。離散セル化(WL#29): 帯を一様にせず、
         // 海盆の東縁(自転方向の東に大陸が近い側 = 寒流側)ほど強いセルにする
-        const dN = (lat - ridgeN) / 7;
-        const dS = (lat - ridgeS) / 7;
+        const shiftCol = ridgeShift[col] ?? 0;
+        const dN = (lat - (ridgeN + shiftCol)) / 7;
+        const dS = (lat - (ridgeS - shiftCol)) / 7;
         let oceanW: number;
         if (terrain.landMask[i]) {
           oceanW = 0.35;
@@ -172,6 +188,7 @@ export function computeWindBelt(
   return {
     monthlyRidgeLatNDeg,
     monthlyRidgeLatSDeg,
+    monthlyRidgeShiftDegByCol,
     monthlyPolarFrontLatNDeg,
     monthlyPolarFrontLatSDeg,
     monthlyPressureAnomalyHpa,
