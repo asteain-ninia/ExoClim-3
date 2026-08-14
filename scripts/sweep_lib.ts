@@ -28,7 +28,12 @@ import { latDegOfRow, lonDegOfCol } from '../src/domain/grid';
 import { openAccel } from './accel_cli';
 import { evaluateResult } from './optimize_lib';
 import { fieldScore, getClimObs, REGION_GATES, scoreRegionGates } from './scoring';
-import { COND_RATE_NORMALIZE, CONSERVATIVE_STATS, CRH_INNER } from '../src/sim/step06_precipitation';
+import {
+  COND_RATE_NORMALIZE,
+  CONSERVATIVE_STATS,
+  CONVERGENCE_SMOOTH,
+  CRH_INNER,
+} from '../src/sim/step06_precipitation';
 import { EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
 import type { RunOptions } from '../src/sim/accel';
 import type { PipelineResult } from '../src/sim/types';
@@ -40,6 +45,10 @@ import type { PipelineResult } from '../src/sim/types';
 if (process.env['CRH_INNER'] === '1') CRH_INNER.enabled = true;
 // 段 28: 地形性上昇を面積平均 1 へ正規化する
 if (process.env['COND_RATE_NORMALIZE'] === '1') COND_RATE_NORMALIZE.enabled = true;
+// 段 30: 収束を作るときの供給場の平滑幅（度）。0 = 既定 1.5
+if (process.env['CONVERGENCE_SMOOTH_DEG']) {
+  CONVERGENCE_SMOOTH.deg = Number(process.env['CONVERGENCE_SMOOTH_DEG']);
+}
 
 /** 既定で見る地域。未達 3 件 + 対照 2 件 */
 export const DEFAULT_TARGETS = [

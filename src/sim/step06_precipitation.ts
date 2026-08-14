@@ -382,6 +382,25 @@ export interface PrecipDiagBox {
 //    無次元化し、飽和関数 x/(1+x) で [0,1) に収める。
 //  - 発散演算の中で自転方向を掛けない(風場が既に反転済み)。
 const DIVERGENCE_SMOOTH_DEG = 1.5;
+/**
+ * **収束を作るときの供給場の平滑幅の上書き(段 30、2026-08-15)。**
+ * 0 = 既定の `DIVERGENCE_SMOOTH_DEG`(1.5°)を使う。
+ *
+ * 2026-08-15 に、収束指数の空間相関長が **100〜170km** しかないと分かった
+ * (1 セル 0.571、2 セル 0.066)。実物の温帯低気圧の収束帯は 1000km 級で
+ * **1 桁足りない**。1.5° は 40° 付近で約 130km で、**測った相関長と一致する** —
+ * つまり**この平滑幅が収束の空間スケールをそのまま決めている**。
+ *
+ * 平滑そのものは必要である(供給場は経路差で不連続に跳ぶので、
+ * そのまま微分すると偽の収束線ができる)。問題は幅が
+ * 「偽を消す最小限」であって「実物の収束帯の広がり」ではないこと。
+ *
+ * **固定角なので緯度で実距離が変わる。** 採用するなら度のままではなく
+ * 惑星の大きさ・自転から決まる形(変形半径)にしてから入れること。
+ *
+ * 事前登録: docs/事前登録_収束の平滑幅_2026-08-15.md
+ */
+export const CONVERGENCE_SMOOTH = { deg: 0 };
 /** 収束指数を供給と同じ単位へ戻す時間スケール(基準長 1000km / 基準風速 5m/s) */
 const CONVERGENCE_TIME_SCALE_S = 1_000_000 / 5;
 
@@ -417,7 +436,11 @@ export function moistureConvergenceIndex(
   const W = grid.widthCells;
   const H = grid.heightCells;
   const out = new Float32Array(grid.cellCount);
-  const q = smoothAngular(grid, supply, DIVERGENCE_SMOOTH_DEG);
+  const q = smoothAngular(
+    grid,
+    supply,
+    CONVERGENCE_SMOOTH.deg > 0 ? CONVERGENCE_SMOOTH.deg : DIVERGENCE_SMOOTH_DEG,
+  );
   const aM = radiusKm * 1000;
   const dPhi = (grid.resolutionDeg * Math.PI) / 180;
   const dLam = (grid.resolutionDeg * Math.PI) / 180;
