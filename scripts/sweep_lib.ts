@@ -76,6 +76,16 @@ export interface LevelReport {
     /** 年降水／観測。観測が引けない地域は null */
     obsRatio: number | null;
   }>;
+  /**
+   * **乾いた端の分位**(南極 60S 以南を除く陸、面積重みつき、mm/年)。
+   *
+   * 2026-08-15 に、モデルは「本当に乾いた場所」を作れないと分かった
+   * (docs/診断_乾いた端が作れない_2026-08-15.md)。1% 分位はモデル 64mm に対し
+   * 観測 9mm、5% は 88 対 47。一方で中位は乾かしすぎ(50% で 468 対 593)。
+   * **降水を配り直す機構は、この 3 点を見ないと効いたかどうか分からない。**
+   * 事前登録の条件には、それを機械的に読み出す出力を対にすること(教訓 §9)。
+   */
+  dryTail: { p01: number; p05: number; p50: number; obsP01: number; obsP05: number; obsP50: number };
   /** 輸送の未収束月数 */
   transportNonConverged: number;
   virgaNonConverged: number;
@@ -178,6 +188,67 @@ function regionPrecipRatio(r: PipelineResult, cells: number[]): number | null {
 }
 
 /**
+ * 乾いた端の分位を採る(南極 60S 以南を除く陸、面積重みつき)。
+ *
+ * **重みと南極の扱いを外さないこと。** 1° 格子では南極が陸セルの 28.3% を
+ * 占めるが面積では 9.5% で、重み無しだと極が分位を買い占める。
+ * 南極は観測もモデルも一律 EF なので、降水が 30 倍外れても成績に出ない
+ * (2026-08-15 に自分で踏んだ。docs/教訓.md §9)。
+ */
+function dryTailOf(r: PipelineResult): LevelReport['dryTail'] {
+  const grid = r.context.grid;
+  const clim = getClimObs();
+  const land = r.context.terrain.landMask;
+  const model: Array<[number, number]> = [];
+  const obs: Array<[number, number]> = [];
+  for (let row = 0; row < grid.heightCells; row++) {
+    const lat = latDegOfRow(grid, row);
+    if (lat <= -60) continue;
+    const cw = Math.cos((lat * Math.PI) / 180);
+    const cr = Math.min(clim.heightCells - 1, Math.round((row / grid.heightCells) * clim.heightCells));
+    for (let col = 0; col < grid.widthCells; col++) {
+      const i = row * grid.widthCells + col;
+      if (!land[i]) continue;
+      const cc = Math.min(clim.widthCells - 1, Math.round((col / grid.widthCells) * clim.widthCells));
+      const ci = cr * clim.widthCells + cc;
+      let o = 0;
+      let bad = false;
+      for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+        const v = clim.monthlyPrecipitationMm[m]?.[ci];
+        if (v === undefined || v <= -9000) {
+          bad = true;
+          break;
+        }
+        o += v;
+      }
+      if (bad) continue;
+      let p = 0;
+      for (let m = 0; m < MONTHS_PER_YEAR; m++) p += r.precipitation.monthlyPrecipMm[m]?.[i] ?? 0;
+      model.push([p, cw]);
+      obs.push([o, cw]);
+    }
+  }
+  const q = (pairs: Array<[number, number]>, p: number): number => {
+    const a = [...pairs].sort((x, y) => x[0] - y[0]);
+    const total = a.reduce((s, [, w]) => s + w, 0);
+    let acc = 0;
+    for (const [v, w] of a) {
+      acc += w;
+      if (acc >= p * total) return v;
+    }
+    return a[a.length - 1]?.[0] ?? 0;
+  };
+  return {
+    p01: q(model, 0.01),
+    p05: q(model, 0.05),
+    p50: q(model, 0.5),
+    obsP01: q(obs, 0.01),
+    obsP05: q(obs, 0.05),
+    obsP50: q(obs, 0.5),
+  };
+}
+
+/**
  * 1 水準を測る。**呼ぶ側は定数を戻す責任を持つ**(ワーカーは 1 プロセス
  * 1 水準なので戻す必要がない。同一プロセスで続けて呼ぶ側は戻すこと)。
  */
@@ -224,6 +295,7 @@ export async function measureLevel(
     precipPhaseRmseDays: f.precipPhaseRmseDays,
     tempRmseC: f.tempRmseC,
     targets: rows,
+    dryTail: dryTailOf(r),
     transportNonConverged: CONSERVATIVE_STATS.nonConverged,
     virgaNonConverged: CONSERVATIVE_STATS.virgaNonConverged,
     worstResidual: CONSERVATIVE_STATS.worstResidual,
@@ -433,6 +505,10 @@ export function formatLevel(p: LevelReport): string {
     `${String(p.gates).padStart(4)}  ${p.precipPhaseRmseDays.toFixed(1)}  ` +
     `${p.tempRmseC.toFixed(3).padStart(7)}  ${cols.join(' ')}\n` +
     `       年降水／観測: ${obsRatio.join('  ')}\n` +
+    `       乾いた端(南極を除く陸・面積重み mm/年): ` +
+    ` 1% ${p.dryTail.p01.toFixed(0).padStart(5)}(観測 ${p.dryTail.obsP01.toFixed(0)})` +
+    `  5% ${p.dryTail.p05.toFixed(0).padStart(5)}(観測 ${p.dryTail.obsP05.toFixed(0)})` +
+    `  50% ${p.dryTail.p50.toFixed(0).padStart(5)}(観測 ${p.dryTail.obsP50.toFixed(0)})\n` +
     `       収束: 輸送 未収束 ${String(p.transportNonConverged).padStart(3)} 件` +
     ` / virga 未収束 ${String(p.virgaNonConverged).padStart(3)} 件` +
     ` / 最悪残差 ${p.worstResidual.toExponential(2)}` +
