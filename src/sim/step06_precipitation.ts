@@ -156,6 +156,18 @@ export interface PrecipDiagnostics {
    * 非保存のときは空配列。
    */
   condRateG: Float32Array[];
+  /**
+   * **保存型のときのみ**: 輸送方程式が解いた可降水量 W(mm)。
+   * virga の外側反復があるときは**最後に解いた W**(凝結量と対になるもの)。
+   *
+   * なぜ要るか(2026-08-15): 保存型の降水は `P = λ·G·W` で、λ と G の平均は
+   * 互いに縮退している。したがってこの 3 つを分けて論じるには W の**場**が
+   * 要るのに、これまで出せたのは全球平均(CONSERVATIVE_STATS.meanWaterMm)
+   * だけだった。「モデルの大気は実物の 7 分の 1 しか水を持っていない」
+   * (W 3.4mm 対 25mm)という残る本丸は、どこの W が足りないのかを
+   * 見ないと先へ進めない。非保存のときは空配列。
+   */
+  waterMm: Float32Array[];
   /** 床再配分・月ブレンド前の降水 mm/月 */
   preAdjustMm: Float32Array[];
   /**
@@ -550,6 +562,8 @@ interface PrecipDiagMonth {
   crhSuppression: Float32Array;
   /** 保存型の凝結率係数 G(非保存では埋めない) */
   condRateG: Float32Array;
+  /** 保存型の可降水量 W mm(非保存では埋めない) */
+  waterMm: Float32Array;
   preAdjustMm: Float32Array;
 }
 
@@ -566,6 +580,7 @@ function newDiagMonth(n: number): PrecipDiagMonth {
     liftOther: new Float32Array(n),
     crhSuppression: new Float32Array(n),
     condRateG: new Float32Array(n),
+    waterMm: new Float32Array(n),
     preAdjustMm: new Float32Array(n),
   };
 }
@@ -599,6 +614,7 @@ export async function computePrecipitation(
         liftOther: [],
         crhSuppression: [],
         condRateG: [],
+        waterMm: [],
         preAdjustMm: [],
         postAdjustDeltaMm: [],
         mmPerSupplyUnit:
@@ -880,7 +896,13 @@ export async function computePrecipitation(
     // 失われる割合は P に依存する(弱い雨ほど多く失われる)ので非線形。
     // **外側反復**で解く。相対湿度は保存型では W/W_sat で直接得られる —
     // 供給の代用ではなく、輸送が解いた水蒸気量そのものである。
-    if (K.subCloudEvapCoef <= 0) return r.condensationMm;
+    // **W は凝結量と対で残す。** virga の外側反復は rate を書き換えて解き直すので、
+    // 「どの W からこの凝結量が出たか」は抜ける口ごとに違う。
+    // 診断だけの代入で、通常実行(diagM なし)では 1 命令も走らない
+    if (K.subCloudEvapCoef <= 0) {
+      if (diagM) diagM.waterMm.set(r.waterMm);
+      return r.condensationMm;
+    }
 
     const pressureHpa = ctx.params.atmosphere.surfacePressureBar * 1013.25;
     const rateEff = new Float32Array(N);
@@ -920,10 +942,14 @@ export async function computePrecipitation(
       CONSERVATIVE_STATS.iterations += last.iterations;
       cond = last.condensationMm;
       water = last.waterMm;
-      if (maxChange < VIRGA_TOLERANCE) return cond;
+      if (maxChange < VIRGA_TOLERANCE) {
+        if (diagM) diagM.waterMm.set(water);
+        return cond;
+      }
     }
     // 外側反復が収束しなかった月も**黙って通さない**
     CONSERVATIVE_STATS.virgaNonConverged++;
+    if (diagM) diagM.waterMm.set(water);
     return cond;
   };
 
@@ -1238,7 +1264,10 @@ export async function computePrecipitation(
       diag.upwindBlock.push(diagM.upwindBlock);
       diag.liftOther.push(diagM.liftOther);
       diag.crhSuppression.push(diagM.crhSuppression);
-      if (K.conservativeMoisture > 0) diag.condRateG.push(diagM.condRateG);
+      if (K.conservativeMoisture > 0) {
+        diag.condRateG.push(diagM.condRateG);
+        diag.waterMm.push(diagM.waterMm);
+      }
       diag.preAdjustMm.push(diagM.preAdjustMm);
     }
   }

@@ -8,6 +8,7 @@ import { runPipeline, runPipelineWithPrecipDiag } from '../../../src/sim/pipelin
 import type { PipelineResult } from '../../../src/sim/types';
 import type { PrecipDiagnostics } from '../../../src/sim/step06_precipitation';
 import { MODEL_CONSTANTS } from '../../../src/sim/constants';
+import { SECONDS_PER_MONTH } from '../../../src/sim/moisture_transport';
 import { digestOf } from '../../helpers/numericWalk';
 
 const P2 = { ...EARTH_PARAMS, gridResolutionDeg: 2 };
@@ -98,6 +99,44 @@ describe('降水内部要因の診断(R1)', () => {
       }
     }
     expect(landDeltaCells).toBeGreaterThan(0); // 後処理が実在することの確認
+  });
+
+  // **W は凝結量と対でなければ意味がない**(2026-08-15 に W の場を診断へ出した)。
+  // 保存型では閾値凝結を渡していないので `C = rate·W` が厳密に成り立ち、
+  // rate は `max(0.05, λ·G)` を virga が (1−失われる割合) 倍したものである。
+  // したがって **含意される rate が λ·G の下限つきの値を超えてはならない**。
+  // 別の反復の W を掴むと(virga を入れた途端に起こりうる)この不等式が破れる。
+  it('可降水量 W は凝結量と対（含意される凝結率が λ·G を超えない）', async () => {
+    const d = diagRun.precipDiag;
+    if (MODEL_CONSTANTS.conservativeMoisture <= 0) return;
+    expect(d.waterMm.length).toBe(12);
+    const land = diagRun.result.context.terrain.landMask;
+    const travelKmPerMonth =
+      (MODEL_CONSTANTS.condensationRefWindMs * SECONDS_PER_MONTH) / 1000;
+    let checked = 0;
+    let worstRatio = 0;
+    for (let m = 0; m < 12; m++) {
+      const w = d.waterMm[m]!;
+      const pre = d.preAdjustMm[m]!;
+      const g = d.condRateG[m]!;
+      expect(w.length).toBe(pre.length);
+      for (let i = 0; i < w.length; i += 11) {
+        const water = w[i] ?? 0;
+        expect(Number.isFinite(water)).toBe(true);
+        expect(water).toBeGreaterThanOrEqual(0);
+        if (water <= 1e-6) continue;
+        const lKm = land[i]
+          ? MODEL_CONSTANTS.moistureDecayLandKm
+          : MODEL_CONSTANTS.moistureDecayOceanKm;
+        const rate = Math.max(0.05, (travelKmPerMonth / Math.max(1, lKm)) * (g[i] ?? 0));
+        const implied = (pre[i] ?? 0) / water;
+        worstRatio = Math.max(worstRatio, implied / Math.max(1e-9, rate));
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(10000);
+    // virga が無効(subCloudEvapCoef = 0)ならこの比は 1。有効なら 1 未満へ下がる
+    expect(worstRatio).toBeLessThan(1 + 1e-3);
   });
 
   it('倍率は物理的に妥当な範囲(遮蔽・沈降残存は (0,1]、持上げは ≥1 または雨陰下限以上)', async () => {
