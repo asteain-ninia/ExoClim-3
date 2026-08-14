@@ -49,9 +49,20 @@ import { openAccel } from './accel_cli';
 
 const K = MODEL_CONSTANTS as unknown as Record<string, number>;
 
-/** 分位(単純分位。面積重みは平均にだけ使う) */
-function quantile(sorted: number[], p: number): number {
-  return sorted[Math.min(sorted.length - 1, Math.floor(p * (sorted.length - 1)))] ?? 0;
+/**
+ * **面積重みつき分位。** 値と重みの組を渡す(並べ替えは内部で行う)。
+ * 重み無しで採ると 1° 格子では極のセル数が過大に効く
+ * (南極は陸セルの 28.3% だが面積では 9.5%)。
+ */
+function wquantile(pairs: Array<[number, number]>, p: number): number {
+  const a = [...pairs].sort((x, y) => x[0] - y[0]);
+  const total = a.reduce((s, [, w]) => s + w, 0);
+  let acc = 0;
+  for (const [v, w] of a) {
+    acc += w;
+    if (acc >= p * total) return v;
+  }
+  return a[a.length - 1]?.[0] ?? 0;
 }
 
 /** 対数標準偏差(底 10)。0 以下は floor で潰す */
@@ -65,24 +76,51 @@ function logVals(vals: number[], floor: number): number[] {
   return vals.map((v) => Math.log10(Math.max(floor, v)));
 }
 
-function variance(l: number[]): number {
-  const m = l.reduce((a, b) => a + b, 0) / l.length;
-  return l.reduce((a, b) => a + (b - m) * (b - m), 0) / l.length;
-}
-
-function covariance(a: number[], b: number[]): number {
-  const ma = a.reduce((x, y) => x + y, 0) / a.length;
-  const mb = b.reduce((x, y) => x + y, 0) / b.length;
+/**
+ * 分散・共分散・相関は**面積重みつき**で採る。
+ *
+ * **重みを外すと極が支配する(2026-08-15 に実害)。** 1° 格子では南極が
+ * 陸セルの 28.3% を占めるが、面積では 9.5% でしかない。重み無しで測ると
+ * 「陸の下位 25% が壊滅的に乾いている」という結論が出るが、
+ * その正体はほぼ南極のセル数である
+ * (docs/診断_降水の分布_2026-08-13.md も重み無しで、同じ偏りを持つ)。
+ * 比較のため重み無しも併記する。
+ */
+function variance(l: number[], w?: number[]): number {
+  if (!w) {
+    const m = l.reduce((a, b) => a + b, 0) / l.length;
+    return l.reduce((a, b) => a + (b - m) * (b - m), 0) / l.length;
+  }
+  const ws = w.reduce((a, b) => a + b, 0);
+  let m = 0;
+  for (let i = 0; i < l.length; i++) m += (w[i] ?? 0) * (l[i] ?? 0);
+  m /= ws;
   let s = 0;
-  for (let i = 0; i < a.length; i++) s += ((a[i] ?? 0) - ma) * ((b[i] ?? 0) - mb);
-  return s / a.length;
+  for (let i = 0; i < l.length; i++) s += (w[i] ?? 0) * ((l[i] ?? 0) - m) * ((l[i] ?? 0) - m);
+  return s / ws;
 }
 
-function correlation(a: number[], b: number[]): number {
-  const va = variance(a);
-  const vb = variance(b);
+function covariance(a: number[], b: number[], w?: number[]): number {
+  const ws = w ? w.reduce((x, y) => x + y, 0) : a.length;
+  const wi = (i: number): number => (w ? (w[i] ?? 0) : 1);
+  let ma = 0;
+  let mb = 0;
+  for (let i = 0; i < a.length; i++) {
+    ma += wi(i) * (a[i] ?? 0);
+    mb += wi(i) * (b[i] ?? 0);
+  }
+  ma /= ws;
+  mb /= ws;
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += wi(i) * ((a[i] ?? 0) - ma) * ((b[i] ?? 0) - mb);
+  return s / ws;
+}
+
+function correlation(a: number[], b: number[], w?: number[]): number {
+  const va = variance(a, w);
+  const vb = variance(b, w);
   if (va <= 0 || vb <= 0) return 0;
-  return covariance(a, b) / Math.sqrt(va * vb);
+  return covariance(a, b, w) / Math.sqrt(va * vb);
 }
 
 async function main(): Promise<void> {
@@ -207,61 +245,97 @@ async function main(): Promise<void> {
       `   W ${wmean((c) => c.water).toFixed(2)} mm   実効 G ${wmean((c) => c.g).toFixed(3)}`,
   );
 
-  // ---- 1. 分布 ----
-  const sortedG = cells.map((c) => c.g).sort((a, b) => a - b);
-  const sortedW = cells.map((c) => c.water).sort((a, b) => a - b);
-  const sortedP = cells.map((c) => c.p).sort((a, b) => a - b);
-  const sortedO = cells.map((c) => c.obs).sort((a, b) => a - b);
-  console.log('\n【1】全陸セルの分布');
+  // ---- 1. 分布(面積重みつき)----
+  const pg = cells.map((c) => [c.g, c.w] as [number, number]);
+  const pw = cells.map((c) => [c.water, c.w] as [number, number]);
+  const pp = cells.map((c) => [c.p, c.w] as [number, number]);
+  const po = cells.map((c) => [c.obs, c.w] as [number, number]);
+  console.log('\n【1】全陸セルの分布（**面積重みつき**分位）');
   console.log('分位      実効G        W(mm)     降水モデル   降水観測');
   for (const q of [0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99]) {
     console.log(
-      `${(q * 100).toFixed(0).padStart(3)}%  ${quantile(sortedG, q).toExponential(3).padStart(11)}` +
-        `  ${quantile(sortedW, q).toFixed(3).padStart(10)}` +
-        `  ${quantile(sortedP, q).toFixed(0).padStart(9)}` +
-        `  ${quantile(sortedO, q).toFixed(0).padStart(9)}`,
+      `${(q * 100).toFixed(0).padStart(3)}%  ${wquantile(pg, q).toExponential(3).padStart(11)}` +
+        `  ${wquantile(pw, q).toFixed(3).padStart(10)}` +
+        `  ${wquantile(pp, q).toFixed(0).padStart(9)}` +
+        `  ${wquantile(po, q).toFixed(0).padStart(9)}`,
     );
   }
-  const g99 = quantile(sortedG, 0.99);
-  const g01 = quantile(sortedG, 0.01);
+  const g99 = wquantile(pg, 0.99);
+  const g01 = wquantile(pg, 0.01);
   console.log(
     `\n実効 G の 1〜99% 幅   ${(g99 / Math.max(1e-12, g01)).toFixed(1)} 倍` +
-      `   （最大/最小 ${((sortedG[sortedG.length - 1] ?? 0) / Math.max(1e-12, sortedG[0] ?? 0)).toFixed(1)} 倍）`,
+      `     W の 1〜99% 幅  ${(wquantile(pw, 0.99) / Math.max(1e-12, wquantile(pw, 0.01))).toFixed(1)} 倍`,
+  );
+  const awAll = cells.map((c) => c.w);
+  const lstdW = (f: (c: Cell) => number, floor: number): string =>
+    Math.sqrt(variance(logVals(cells.map(f), floor), awAll)).toFixed(3);
+  console.log(
+    `対数標準偏差(面積重み)   実効G ${lstdW((c) => c.g, 1e-9)}` +
+      `   W ${lstdW((c) => c.water, 1e-6)}` +
+      `   降水モデル ${lstdW((c) => c.p, 1)}` +
+      `   降水観測 ${lstdW((c) => c.obs, 1)}`,
   );
   console.log(
-    `対数標準偏差   実効G ${logStd(cells.map((c) => c.g), 1e-9).toFixed(3)}` +
+    `対数標準偏差(重み無し)   実効G ${logStd(cells.map((c) => c.g), 1e-9).toFixed(3)}` +
       `   W ${logStd(cells.map((c) => c.water), 1e-6).toFixed(3)}` +
       `   降水モデル ${logStd(cells.map((c) => c.p), 1).toFixed(3)}` +
-      `   降水観測 ${logStd(cells.map((c) => c.obs), 1).toFixed(3)}`,
+      `   降水観測 ${logStd(cells.map((c) => c.obs), 1).toFixed(3)}` +
+      '   ← 診断_降水の分布_2026-08-13 はこちら',
   );
 
   // ---- 2. 分散分解 ----
   // log P = log λ + log G + log W。λ は陸で定数なので分散に効かない
   const lg = logVals(cells.map((c) => c.g), 1e-9);
   const lw = logVals(cells.map((c) => c.water), 1e-6);
-  const lp = logVals(cells.map((c) => c.p), 1);
-  const vg = variance(lg);
-  const vw = variance(lw);
-  const cgw = covariance(lg, lw);
-  const vTotal = vg + vw + 2 * cgw;
+  const aw = cells.map((c) => c.w);
   console.log('\n【2】分散分解  Var(log P) = Var(log G) + Var(log W) + 2Cov(log G, log W)');
-  console.log(`  Var(log G)          ${vg.toFixed(4)}   (${((100 * vg) / vTotal).toFixed(1)}%)`);
-  console.log(`  Var(log W)          ${vw.toFixed(4)}   (${((100 * vw) / vTotal).toFixed(1)}%)`);
-  console.log(`  2Cov(log G, log W)  ${(2 * cgw).toFixed(4)}   (${((100 * 2 * cgw) / vTotal).toFixed(1)}%)`);
-  console.log(`  合計                ${vTotal.toFixed(4)}   （床再配分前。実測 Var(log P) = ${variance(lp).toFixed(4)}）`);
-  console.log(`  相関 corr(log G, log W) = ${correlation(lg, lw).toFixed(3)}`);
+  for (const [label, w] of [
+    ['面積重みつき（こちらを主に読む）', aw],
+    ['重み無し（セル数。極が過大に効く — 比較用）', undefined],
+  ] as Array<[string, number[] | undefined]>) {
+    const vg = variance(lg, w);
+    const vw = variance(lw, w);
+    const cgw = covariance(lg, lw, w);
+    const vTotal = vg + vw + 2 * cgw;
+    console.log(`  ${label}`);
+    console.log(`    Var(log G)          ${vg.toFixed(4)}   (${((100 * vg) / vTotal).toFixed(1)}%)`);
+    console.log(`    Var(log W)          ${vw.toFixed(4)}   (${((100 * vw) / vTotal).toFixed(1)}%)`);
+    console.log(
+      `    2Cov(log G, log W)  ${(2 * cgw).toFixed(4)}   (${((100 * 2 * cgw) / vTotal).toFixed(1)}%)`,
+    );
+    console.log(`    合計 = Var(log P)   ${vTotal.toFixed(4)}   相関 ${correlation(lg, lw, w).toFixed(3)}`);
+  }
+  // **南極を除いた分解も出す。** 成績を南極抜きでも見るのと同じ理由で、
+  // 一様に EF を返す大陸が結論を独占していないかを確かめる
+  const noAq = cells.filter((c) => latDegOfRow(grid, Math.floor(c.i / WC)) > -60);
+  {
+    const g2 = logVals(noAq.map((c) => c.g), 1e-9);
+    const w2 = logVals(noAq.map((c) => c.water), 1e-6);
+    const a2 = noAq.map((c) => c.w);
+    const vg = variance(g2, a2);
+    const vw = variance(w2, a2);
+    const cgw = covariance(g2, w2, a2);
+    const vTotal = vg + vw + 2 * cgw;
+    console.log(`  南極(60S 以南)を除く・面積重みつき  セル ${noAq.length}`);
+    console.log(`    Var(log G)          ${vg.toFixed(4)}   (${((100 * vg) / vTotal).toFixed(1)}%)`);
+    console.log(`    Var(log W)          ${vw.toFixed(4)}   (${((100 * vw) / vTotal).toFixed(1)}%)`);
+    console.log(
+      `    2Cov(log G, log W)  ${(2 * cgw).toFixed(4)}   (${((100 * 2 * cgw) / vTotal).toFixed(1)}%)`,
+    );
+    console.log(`    合計 = Var(log P)   ${vTotal.toFixed(4)}   相関 ${correlation(g2, w2, a2).toFixed(3)}`);
+  }
 
   // ---- 3. 観測に合わせるのに要る補正 ----
   // W を固定した一次の見積り。G_req/G = P_obs/P
   const ratio = cells.map((c) => c.obs / Math.max(1, c.p));
   const lr = logVals(ratio, 1e-3);
-  const sortedR = [...ratio].sort((a, b) => a - b);
+  const pr = cells.map((c, k) => [ratio[k] ?? 0, c.w] as [number, number]);
   console.log('\n【3】観測に合わせるのに要る G の補正 G_req/G = P_obs/P（W 固定の一次見積り）');
-  console.log('分位      補正倍率');
+  console.log('分位      補正倍率（面積重みつき）');
   for (const q of [0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99]) {
-    console.log(`${(q * 100).toFixed(0).padStart(3)}%  ${quantile(sortedR, q).toFixed(3).padStart(10)}`);
+    console.log(`${(q * 100).toFixed(0).padStart(3)}%  ${wquantile(pr, q).toFixed(3).padStart(10)}`);
   }
-  console.log(`対数標準偏差  ${logStd(ratio, 1e-3).toFixed(3)}`);
+  console.log(`対数標準偏差  ${Math.sqrt(variance(lr, awAll)).toFixed(3)}`);
   console.log(
     '  読み: この対数標準偏差が 0 に近ければ「G の**形**は合っており、\n' +
       '  足りないのは全体の水準だけ」。大きければ形が違う。',
@@ -278,9 +352,66 @@ async function main(): Promise<void> {
     ['実効 G', (c) => c.g],
     ['可降水量 W', (c) => c.water],
   ];
+  console.log('  （面積重みつき。( ) 内は南極 60S 以南を除いた値）');
+  const idxNoAq = cells
+    .map((c, k) => [c, k] as [Cell, number])
+    .filter(([c]) => latDegOfRow(grid, Math.floor(c.i / WC)) > -60);
+  const lrNoAq = idxNoAq.map(([, k]) => lr[k] ?? 0);
+  const awNoAq = idxNoAq.map(([c]) => c.w);
   for (const [name, f] of factors) {
     const lf = logVals(cells.map(f), 1e-9);
-    console.log(`  ${name.padEnd(34)} corr = ${correlation(lr, lf).toFixed(3).padStart(7)}`);
+    const lfNoAq = idxNoAq.map(([, k]) => lf[k] ?? 0);
+    console.log(
+      `  ${name.padEnd(34)} corr = ${correlation(lr, lf, awAll).toFixed(3).padStart(7)}` +
+        `  (${correlation(lrNoAq, lfNoAq, awNoAq).toFixed(3).padStart(6)})`,
+    );
+  }
+
+  // ---- 4b. 南極を除いた分布(**ここが判断の要**)----
+  //
+  // 南極はケッペン判定では観測もモデルも一律 EF なので、降水が 30 倍外れても
+  // 成績には出ない(docs/診断_枯渇しているのは南極だけ_2026-08-15.md)。
+  // **伸びしろのある陸で、モデルの散らばりが観測より広いのか狭いのか**が
+  // 方針を決める。広いなら幅を削る話、狭いなら幅を作る話になる。
+  console.log('\n【4b】南極(60S 以南)を除いた分布（面積重みつき）');
+  const awNo = noAq.map((c) => c.w);
+  const lstdNo = (f: (c: Cell) => number, floor: number): number =>
+    Math.sqrt(variance(logVals(noAq.map(f), floor), awNo));
+  console.log(
+    `  対数標準偏差   降水モデル ${lstdNo((c) => c.p, 1).toFixed(3)}` +
+      `   降水観測 ${lstdNo((c) => c.obs, 1).toFixed(3)}` +
+      `   W ${lstdNo((c) => c.water, 1e-6).toFixed(3)}` +
+      `   実効G ${lstdNo((c) => c.g, 1e-9).toFixed(3)}`,
+  );
+  console.log(
+    '  ↑ 降水モデル > 降水観測 なら**広すぎる**、< なら**狭すぎる**。\n' +
+      '    全陸（南極込み）では 0.709 対 0.560 で広すぎた。南極を抜くとどうか。',
+  );
+  const pwNo = noAq.map((c) => [c.water, c.w] as [number, number]);
+  const pgNo = noAq.map((c) => [c.g, c.w] as [number, number]);
+  const ppNo = noAq.map((c) => [c.p, c.w] as [number, number]);
+  const poNo = noAq.map((c) => [c.obs, c.w] as [number, number]);
+  console.log('  分位      実効G        W(mm)     降水モデル   降水観測');
+  for (const q of [0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99]) {
+    console.log(
+      `  ${(q * 100).toFixed(0).padStart(3)}%  ${wquantile(pgNo, q).toExponential(3).padStart(11)}` +
+        `  ${wquantile(pwNo, q).toFixed(3).padStart(10)}` +
+        `  ${wquantile(ppNo, q).toFixed(0).padStart(9)}` +
+        `  ${wquantile(poNo, q).toFixed(0).padStart(9)}`,
+    );
+  }
+  console.log(
+    `  1〜99% 幅   実効G ${(wquantile(pgNo, 0.99) / Math.max(1e-12, wquantile(pgNo, 0.01))).toFixed(1)} 倍` +
+      `   W ${(wquantile(pwNo, 0.99) / Math.max(1e-12, wquantile(pwNo, 0.01))).toFixed(1)} 倍` +
+      `   降水モデル ${(wquantile(ppNo, 0.99) / Math.max(1e-12, wquantile(ppNo, 0.01))).toFixed(1)} 倍` +
+      `   降水観測 ${(wquantile(poNo, 0.99) / Math.max(1e-12, wquantile(poNo, 0.01))).toFixed(1)} 倍`,
+  );
+  {
+    const rNo = noAq.map((c) => c.obs / Math.max(1, c.p));
+    console.log(
+      `  要る補正 P_obs/P の対数標準偏差 ${Math.sqrt(variance(logVals(rNo, 1e-3), awNo)).toFixed(3)}` +
+        `   中央 ${wquantile(noAq.map((c, k) => [rNo[k] ?? 0, c.w] as [number, number]), 0.5).toFixed(3)}`,
+    );
   }
 
   // ---- 5. 7 点の地域平均(考察_凝結率の意味 との突合)----
