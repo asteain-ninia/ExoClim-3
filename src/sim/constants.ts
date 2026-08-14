@@ -478,7 +478,7 @@ export const MODEL_CONSTANTS = {
    * ただしここで使う CRH は供給場からの代理量なので、15.6 をそのまま入れる
    * 根拠は無い。**較正で決める**(文献値は上限の目安)。
    */
-  crhSuppressionSharpness: 0,
+  crhSuppressionSharpness: 4,
   /**
    * 柱相対湿度を**保存型の解 W から厳密に作る**か(0 = 従来の代理場、1 = W/W_sat)。
    * **0 のとき従来と厳密に一致。**
