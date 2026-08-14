@@ -28,10 +28,16 @@ import { latDegOfRow, lonDegOfCol } from '../src/domain/grid';
 import { openAccel } from './accel_cli';
 import { evaluateResult } from './optimize_lib';
 import { fieldScore, getClimObs, REGION_GATES, scoreRegionGates } from './scoring';
-import { CONSERVATIVE_STATS } from '../src/sim/step06_precipitation';
+import { CONSERVATIVE_STATS, CRH_INNER } from '../src/sim/step06_precipitation';
 import { EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
 import type { RunOptions } from '../src/sim/accel';
 import type { PipelineResult } from '../src/sim/types';
+
+// **CRH を輸送の内部で解くか(段 25)を環境変数で切り替える。**
+// `CRH_INNER=1` で有効。ここに置くと `measureLevel` を使う全経路
+// (ワーカーも直列も)に効く。既定は従来どおり外側で代入する。
+// 鋭さ 0 では CRH が恒等的に 1 なので、どちらでも答えは同じ。
+if (process.env['CRH_INNER'] === '1') CRH_INNER.enabled = true;
 
 /** 既定で見る地域。未達 3 件 + 対照 2 件 */
 export const DEFAULT_TARGETS = [
@@ -424,7 +430,7 @@ export async function runSweep(
       shell: true,
       stdio: ['pipe', 'pipe', 'inherit'],
       cwd: process.cwd(),
-      env: { ...process.env, LEVER_TARGETS: targets.join(',') },
+      env: { ...process.env, LEVER_TARGETS: targets.join(',') },  // CRH_INNER も引き継がれる
     });
     lanes.push({ proc, rl: readline.createInterface({ input: proc.stdout! }) });
   }

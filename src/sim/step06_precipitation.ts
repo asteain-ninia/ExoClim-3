@@ -713,6 +713,28 @@ export const COUPLING_MAX_ITERATIONS = 24;
  *
  * 事前登録: docs/事前登録_結合反復のAnderson加速_2026-08-15.md
  */
+/**
+ * **CRH を輸送の内部で解く(段 25、2026-08-15)。**
+ *
+ * 既定 `enabled = false` = 従来どおり、CRH は前の結合反復が解いた W から作られ、
+ * G に畳み込まれて輸送へ渡る。つまり解いている式は
+ * `P_k = λ·G(W_{k−1})·W_k` という **1 段遅れの帰還**である。
+ *
+ * 遅延つき帰還は 2 周期振動を生む典型的な形で、段 24 で実測した
+ * 「残差が偶奇 2 系列に分裂する」という形と正確に一致する
+ * (深さ・緩和を変えても必ず割れた。Anderson の実装は線形問題で検証済み)。
+ *
+ * 有効にすると、G から CRH を外し(`G_base`)、virga と同じ外側反復の中で
+ * **いま解いている W** から CRH を作り直して解き直す。
+ *
+ * **不動点は変わらない** — 収束解では `W_k = W_{k−1}` なので同じ方程式である。
+ * したがって物理の変更ではなく、式の解き方の変更。
+ * **鋭さ 0 では CRH が恒等的に 1 なので、有効にしても答えは 1 ビットも動かない。**
+ *
+ * 事前登録: docs/事前登録_CRHを輸送の内部で解く_2026-08-15.md
+ */
+export const CRH_INNER = { enabled: false };
+
 export const COUPLING_ANDERSON = {
   /** 履歴の深さ。0 = 無効(既定)。1 で割線法 / Aitken と等価 */
   depth: 0,
@@ -1020,6 +1042,16 @@ export async function computePrecipitation(
     const N = grid.cellCount;
     // 凝結率の係数 G = 既存の乗数の積(この段では 1 つも外さない)
     const G = new Float32Array(N);
+    /**
+     * **CRH を輸送の内部で解くための受け皿(段 25)。**
+     * `CRH_INNER = 0`(既定)なら null で、従来どおり G に畳み込まれる。
+     * 有効なときは G から CRH が外れ、下の外側反復で W から作り直される。
+     * **鋭さ 0 では CRH が恒等的に 1 なので、どちらでも答えは同じ。**
+     */
+    const crhInner =
+      CRH_INNER.enabled && K.crhSuppressionSharpness > 0 && K.crhFromWater > 0
+        ? new Float32Array(N)
+        : null;
     convertToPrecip(
       ctx, itcz, m, tField, u, v, supply,
       windBelt.monthlyRidgeLatNDeg[m] ?? 31,
@@ -1034,10 +1066,18 @@ export async function computePrecipitation(
       // 結合反復が収束すれば前反復と当反復の W は一致するので自己整合する
       warmStart[m] ?? undefined,
       windBelt.monthlyRidgeShiftDegByCol[m],
+      // **CRH を輸送の内部で解く(段 25)。** 渡すと G から CRH が外れる。
+      // 鋭さ 0 では CRH が恒等的に 1 なので、渡しても渡さなくても同じ値になる
+      crhInner ?? undefined,
     );
-    // 因子分解が意味を持つのはここまで — 保存型の降水は G の積ではなく
-    // 輸送方程式の解なので、「因子の積 = 降水」は原理的に成り立たない
-    if (diagM) diagM.condRateG.set(G);
+    // 内部で解く場合、G には CRH が掛かっていないので、診断には掛け戻す
+    if (diagM) {
+      if (crhInner) {
+        for (let i = 0; i < N; i++) diagM.condRateG[i] = (G[i] ?? 0) * (crhInner[i] ?? 1);
+      } else {
+        diagM.condRateG.set(G);
+      }
+    }
     // 源泉 S = 海面蒸発 + 陸面蒸発散
     if (!evapCache.v) evapCache.v = computeOceanEvaporation(ctx, temperature, airflow);
     const src = new Float32Array(N);
@@ -1108,7 +1148,8 @@ export async function computePrecipitation(
     // **W は凝結量と対で残す。** virga の外側反復は rate を書き換えて解き直すので、
     // 「どの W からこの凝結量が出たか」は抜ける口ごとに違う。
     // 診断だけの代入で、通常実行(diagM なし)では 1 命令も走らない
-    if (K.subCloudEvapCoef <= 0) {
+    // **CRH を内部で解くときも外側反復が要る(段 25)。** virga と同じループを使う
+    if (K.subCloudEvapCoef <= 0 && !crhInner) {
       if (diagM) diagM.waterMm.set(r.waterMm);
       return r.condensationMm;
     }
@@ -1153,7 +1194,18 @@ export async function computePrecipitation(
           const rh = Math.min(1, (water[i] ?? 0) / Math.max(1e-6, wSat));
           lost = Math.min(K.subCloudEvapMaxFrac, (K.subCloudEvapCoef * (1 - rh)) / Math.sqrt(p));
         }
-        const target = (rate[i] ?? 0) * (1 - lost);
+        // **CRH を「いま解いている W」から作り直す(段 25)。**
+        // 外側で `G(W_{k−1})` と代入すると 1 段遅れの帰還になり、
+        // 2 周期振動を生む(段 24 で偶奇分裂として実測した)。
+        // ここで作れば遅延が無くなり、G と W が同じ方程式の中で釣り合う。
+        let crhNow = 1;
+        if (crhInner) {
+          const wSatC = saturatedColumnMm(tField[i] ?? 0, pressureHpa);
+          const crh = Math.min(1, (water[i] ?? 0) / Math.max(1e-6, wSatC));
+          crhNow = Math.exp(K.crhSuppressionSharpness * (crh - 1));
+          crhInner[i] = crhNow;
+        }
+        const target = (rate[i] ?? 0) * crhNow * (1 - lost);
         // 減衰つきで更新する(P ↓ → 失われる割合 ↑ の帰還が振動しうる)
         const prev = outer === 0 ? (rate[i] ?? 0) : (rateEff[i] ?? 0);
         const next = prev + virgaAlpha * (target - prev);
@@ -1911,6 +1963,13 @@ function convertToPrecip(
   waterMm?: Float32Array,
   /** [col] リッジの経度別の押し上げ量（度、段 16）。未指定なら帯状一様 */
   ridgeShiftByCol?: Float32Array,
+  /**
+   * **CRH の抑制倍率を別に返す口(段 25)**。渡すと `condRateOut` からは
+   * CRH が外れる(`G_base`)ので、呼び出し側が輸送の内部で
+   * 「W が更新されるたびに CRH を作り直す」ことができる。
+   * 渡さなければ従来どおり G に畳み込まれる。
+   */
+  crhOut?: Float32Array,
 ): Float32Array {
   const { grid, params, terrain } = ctx;
   const W = grid.widthCells;
@@ -2265,7 +2324,16 @@ function convertToPrecip(
         precipMm *= 1 - lostFrac;
       }
       out[i] = precipMm;
-      if (condRateOut) condRateOut[i] = blockFactor * lift * crhFactor;
+      // **CRH を分けて返せるようにする(段 25)。**
+      // `crhOut` を渡した呼び出しでは G から CRH を外し、CRH は別に返す。
+      // こうすると輸送の内部で「W が更新されるたびに CRH を作り直す」ことができ、
+      // `P = λ·G(W_{k−1})·W_k` という**1 段遅れの帰還**を外せる。
+      // 遅延つき帰還は 2 周期振動を生む形で、実測の偶奇分裂と一致する
+      // (docs/事前登録_CRHを輸送の内部で解く_2026-08-15.md)。
+      //
+      // **鋭さ 0 では crhFactor が恒等的に 1 なので、どちらでも同じ値になる。**
+      if (condRateOut) condRateOut[i] = blockFactor * lift * (crhOut ? 1 : crhFactor);
+      if (crhOut) crhOut[i] = crhFactor;
       if (diagM) {
         diagM.supplyStorm[i] = stormSupply;
         diagM.liftItcz[i] = liftItczF;
