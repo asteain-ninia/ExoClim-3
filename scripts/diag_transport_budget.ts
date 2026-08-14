@@ -94,7 +94,10 @@ async function main(): Promise<void> {
         const fW = 0.5 * (((u[i] ?? 0) * (w[i] ?? 0)) + ((u[iW] ?? 0) * (w[iW] ?? 0))) * kx;
         const fN = 0.5 * (((v[i] ?? 0) * (w[i] ?? 0)) + ((v[iN] ?? 0) * (w[iN] ?? 0))) * kx;
         const fS = 0.5 * (((v[i] ?? 0) * (w[i] ?? 0)) + ((v[iS] ?? 0) * (w[iS] ?? 0))) * kx;
-        adv += -((fE - fW) / (2 * dxKm) + (fN - fS) / (2 * dyKm));
+        // **面フラックスの発散は面どうしの距離で割る(2dx ではない)。**
+        // fE/fW は東面・西面の値なので隔たりは dx(セル 1 個分)。
+        // 最初 2dx で割って移流が半分になり、収支の符号が反転した(2026-08-15)
+        adv += -((fE - fW) / dxKm + (fN - fS) / dyKm);
         // 拡散流入 D∇²W
         const lap =
           ((w[iE] ?? 0) + (w[iW] ?? 0) - 2 * (w[i] ?? 0)) / (dxKm * dxKm) +
