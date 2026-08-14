@@ -124,7 +124,12 @@ export const VIRGA_OVERRIDE = {
  * 到達しなかった解は診断で適用範囲外にする(黙って採用しない)。
  */
 export const TRANSPORT_MAX_ITERATIONS = 20000;
-const VIRGA_RELAXATION = 0.6;
+// 旧定数 `VIRGA_RELAXATION = 0.6`(固定緩和)は 2026-08-15 に**適応緩和へ置き換えた**。
+// 固定 0.6 は「P ↓ → 失われる割合 ↑ の帰還が振動しうる」ことへの備えとして
+// 置かれたが、実測の壊れ方は振動ではなく**緩慢**が主で、0.6 は足を引っ張っていた
+// (204 呼び出し中の収束が 78 件 → α=1 なら 184 件)。
+// ただし少数の月は本当に振動するので、単一の α では救えない。
+// 適応の実装は下の外側反復にある。固定したいときは `VIRGA_OVERRIDE.relaxation`。
 const VIRGA_TOLERANCE = 5e-3;
 
 export function resetConservativeStats(): void {
@@ -946,10 +951,29 @@ export async function computePrecipitation(
       VIRGA_OVERRIDE.maxIterations > 0 ? VIRGA_OVERRIDE.maxIterations : VIRGA_OUTER_ITERATIONS;
     const trail: number[] | null = VIRGA_OVERRIDE.trace ? [] : null;
     if (trail) VIRGA_OVERRIDE.series.push(trail);
-    const virgaAlpha =
-      VIRGA_OVERRIDE.relaxation > 0 ? VIRGA_OVERRIDE.relaxation : VIRGA_RELAXATION;
+    // ---- 緩和は**適応**にする(2026-08-15)----
+    //
+    // 固定の α = 0.6 では 204 呼び出し中 78 件しか収束せず、α = 1.0 では 184 件
+    // 収束するが**最悪の月は逆に停滞する**。実測で、壊れ方が 2 種類**同じ実行の
+    // 中に共存している**と分かった(docs/診断_virgaの外側反復は緩慢_2026-08-15.md):
+    //
+    //   ほとんどの月 = 緩慢（比 0.9 前後で単調に縮む）→ α を下げると**逆効果**
+    //   少数の月     = 振動（比が 1 を超えて跳ねる）  → α を下げるのが**効く**
+    //
+    // **単一の α ではどちらかしか救えない。** そこで α = 1 から始め、
+    // 残差が増えた回だけ半減させる(標準的な減衰つきピカール)。
+    // 増えなければ 1 へ戻していく — 振動が収まった後まで遅いままにしない。
+    //
+    // **緩和は不動点を変えない**ので、これは物理の変更ではなく解き方の変更である。
+    // virga は既定で無効(`subCloudEvapCoef = 0`)なので、出荷時の答えは 1 ビットも
+    // 動かない(この関数はその手前で return する)。
+    // `VIRGA_OVERRIDE.relaxation > 0` を指定したときだけ、従来どおり α を固定する。
+    const fixedAlpha = VIRGA_OVERRIDE.relaxation > 0 ? VIRGA_OVERRIDE.relaxation : 0;
+    let alpha = fixedAlpha > 0 ? fixedAlpha : 1;
+    let prevChange = Number.POSITIVE_INFINITY;
     for (let outer = 0; outer < virgaMax; outer++) {
       let maxChange = 0;
+      const virgaAlpha = alpha;
       for (let i = 0; i < N; i++) {
         const p = cond[i] ?? 0;
         let lost = 0;
@@ -982,6 +1006,12 @@ export async function computePrecipitation(
       cond = last.condensationMm;
       water = last.waterMm;
       trail?.push(maxChange);
+      // 残差が増えた回だけ半減、減った回は 1 へ戻す(下限 0.1)。
+      // 固定 α を指定されているときは触らない
+      if (fixedAlpha <= 0) {
+        alpha = maxChange > prevChange ? Math.max(0.1, alpha * 0.5) : Math.min(1, alpha * 1.5);
+      }
+      prevChange = maxChange;
       if (maxChange < VIRGA_TOLERANCE) {
         if (diagM) diagM.waterMm.set(water);
         return cond;
