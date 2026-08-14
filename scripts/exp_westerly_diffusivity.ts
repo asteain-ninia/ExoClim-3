@@ -22,14 +22,18 @@ const DIFFS = (process.argv[2] ?? '2977275.937980041,2000000,1500000,1000000')
 const WESTERLY = Number(process.argv[3] ?? 9.0);
 /** 段 34: 収束持上げも同時に固定する（0 = 触らない） */
 const CONV = Number(process.argv[4] ?? 0);
+/** 段 37: 前線持上げも固定する（0 = 触らない） */
+const FRONT = Number(process.argv[5] ?? 0);
 const K = MODEL_CONSTANTS as unknown as Record<string, number>;
 
 async function main(): Promise<void> {
   const targets = resolveTargets();
   const baseW = K['westerlyWindMs'] ?? 6.5;
   const baseC = K['convergenceLiftBoost'] ?? 0;
+  const baseF = K['frontalLiftBoost'] ?? 0;
   K['westerlyWindMs'] = WESTERLY;
   if (CONV > 0) K['convergenceLiftBoost'] = CONV;
+  if (FRONT > 0) K['frontalLiftBoost'] = FRONT;
   console.log(
     `westerlyWindMs = ${WESTERLY}` +
       (CONV > 0 ? ` / convergenceLiftBoost = ${CONV}` : '') +
@@ -47,6 +51,7 @@ async function main(): Promise<void> {
   } finally {
     K['westerlyWindMs'] = baseW;
     K['convergenceLiftBoost'] = baseC;
+    K['frontalLiftBoost'] = baseF;
     accel.close();
   }
   console.log(
