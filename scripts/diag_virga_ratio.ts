@@ -36,24 +36,31 @@ EBM_FULL_CAPACITY_YEARS.years = 2;
 const VALUES = (process.argv[2] ?? '1,3,6,12').split(',').map(Number);
 const MAX_IT = Number(process.argv[3] ?? 40);
 const RES = Number(process.argv[4] ?? 4);
+/** 緩和の上書き(0 = 既定の 0.6)。**不動点を変えないので答えは同じ** */
+const ALPHA = Number(process.argv[5] ?? 0);
 /** 許容差(step06 の VIRGA_TOLERANCE と同じ値) */
 const TOL = 5e-3;
 
 async function main(): Promise<void> {
   const K = MODEL_CONSTANTS as unknown as Record<string, number>;
   const base = K['subCloudEvapCoef'] ?? 0;
-  console.log(`格子 ${RES}°、外側反復の上限 ${MAX_IT}、許容差 ${TOL}、EBM は短縮`);
+  console.log(
+    `格子 ${RES}°、外側反復の上限 ${MAX_IT}、許容差 ${TOL}、EBM は短縮` +
+      `、緩和 ${ALPHA > 0 ? ALPHA : '既定 0.6'}`,
+  );
   console.log('各水準について、外側反復の maxChange の列と隣接比を出す。\n');
 
   for (const c of VALUES) {
     K['subCloudEvapCoef'] = c;
     VIRGA_OVERRIDE.maxIterations = MAX_IT;
+    VIRGA_OVERRIDE.relaxation = ALPHA;
     VIRGA_OVERRIDE.trace = true;
     VIRGA_OVERRIDE.series = [];
     await runPipeline({ ...EARTH_PARAMS, gridResolutionDeg: RES });
     const series = VIRGA_OVERRIDE.series;
     VIRGA_OVERRIDE.trace = false;
     VIRGA_OVERRIDE.maxIterations = 0;
+    VIRGA_OVERRIDE.relaxation = 0;
 
     // **最も収束しにくかった呼び出し**を代表に採る。平均を採ると
     // 「ほとんどの月は 2 回で収束する」に埋もれて、落ちている月が見えない

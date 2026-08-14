@@ -104,6 +104,18 @@ const VIRGA_OUTER_ITERATIONS = 6;
  */
 export const VIRGA_OVERRIDE = {
   maxIterations: 0,
+  /**
+   * 緩和の上書き(0 = 既定の `VIRGA_RELAXATION` を使う)。
+   *
+   * **緩和は不動点を変えない** — `x = (1−α)x + αF(x)` は `x = F(x)` と同値なので、
+   * 収束したときの答えは α に依らない。したがってこれは**物理の変更ではなく
+   * 解き方の変更**であり、較正のつまみにしてはならない。
+   *
+   * 既定の 0.6 は「P ↓ → 失われる割合 ↑ の帰還が振動しうる」ことへの備えとして
+   * 入っているが、**実測の壊れ方は振動ではなく緩慢**だった(2026-08-15)。
+   * 緩慢に対して α < 1 は実効比を `1 − α(1 − L)` にするので**逆効果**である。
+   */
+  relaxation: 0,
   trace: false,
   series: [] as number[][],
 };
@@ -934,6 +946,8 @@ export async function computePrecipitation(
       VIRGA_OVERRIDE.maxIterations > 0 ? VIRGA_OVERRIDE.maxIterations : VIRGA_OUTER_ITERATIONS;
     const trail: number[] | null = VIRGA_OVERRIDE.trace ? [] : null;
     if (trail) VIRGA_OVERRIDE.series.push(trail);
+    const virgaAlpha =
+      VIRGA_OVERRIDE.relaxation > 0 ? VIRGA_OVERRIDE.relaxation : VIRGA_RELAXATION;
     for (let outer = 0; outer < virgaMax; outer++) {
       let maxChange = 0;
       for (let i = 0; i < N; i++) {
@@ -947,7 +961,7 @@ export async function computePrecipitation(
         const target = (rate[i] ?? 0) * (1 - lost);
         // 減衰つきで更新する(P ↓ → 失われる割合 ↑ の帰還が振動しうる)
         const prev = outer === 0 ? (rate[i] ?? 0) : (rateEff[i] ?? 0);
-        const next = prev + VIRGA_RELAXATION * (target - prev);
+        const next = prev + virgaAlpha * (target - prev);
         maxChange = Math.max(maxChange, Math.abs(next - prev) / Math.max(1e-6, rate[i] ?? 1));
         rateEff[i] = next;
       }
