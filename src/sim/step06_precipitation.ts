@@ -99,6 +99,14 @@ export function resetConservativeStats(): void {
   CONSERVATIVE_STATS.worstResidual = 0;
   CONSERVATIVE_STATS.iterations = 0;
   CONSERVATIVE_STATS.virgaNonConverged = 0;
+  // **W の積算も必ずここで消す(2026-08-14)。**
+  // 消し忘れていたため、同一プロセスで複数回パイプラインを回す掃引
+  // (scripts/exp_pressure_lever.ts)では W が「その水準の値」ではなく
+  // 「それまでの全水準の累積平均」になっていた。段 20 の看板だった
+  // 「鋭さ 4 で W が 29.1mm、実物 25mm に着地」はこの汚染の産物である。
+  // 単発で測る scripts/diag_water_vapor.ts は自前で 0 にしていたので無傷。
+  CONSERVATIVE_STATS.meanWaterMm = 0;
+  CONSERVATIVE_STATS.waterSamples = 0;
 }
 
 /** 飽和水蒸気圧 hPa(Magnus 式)。水蒸気供給のスケールとして使用 */

@@ -197,6 +197,20 @@ async function main(): Promise<void> {
         `${f.precipPhaseRmseDays.toFixed(1)}  ${f.tempRmseC.toFixed(3).padStart(7)}  ${cols.join(' ')}`,
     );
     console.log(`       年降水／観測: ${obsRatio.join('  ')}`);
+    // **収束の状態を必ず並べる(2026-08-14)。**
+    // 段 20 の掃引は未収束の件数を出しておらず、鋭さ 8 以上で W が 328mm・462mm
+    // という物理的にありえない値を「解」として表に載せてしまった。
+    // 「反復の打ち切りが答えを決める」型の欠陥は EBM で 3 件踏んでいる
+    // (docs/教訓.md)。未収束の解は黙って採用しない。
+    const nc = CONSERVATIVE_STATS.nonConverged;
+    const vnc = CONSERVATIVE_STATS.virgaNonConverged;
+    console.log(
+      `       収束: 未収束 ${String(nc).padStart(3)} 件` +
+        ` / virga 未収束 ${String(vnc).padStart(3)} 件` +
+        ` / 最悪残差 ${CONSERVATIVE_STATS.worstResidual.toExponential(2)}` +
+        ` / 反復 ${CONSERVATIVE_STATS.iterations}` +
+        `${nc + vnc > 0 ? '   ← **この行は適用範囲外。解として読まない**' : ''}`,
+    );
   }
   K[KEY] = base;
   console.log(
