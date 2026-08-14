@@ -76,6 +76,17 @@ if [ -n "$sid" ]; then
       printf '{"systemMessage":"追跡中の背景ジョブがあるので停止を許可しました(完了時に呼び戻されます)"}\n'
       exit 0
     fi
+    # 出力を out/ へリダイレクトしたジョブは、走っていてもタスク出力が
+    # 0 バイトのまま古びる。更新時刻だけで判定すると**動いているのに
+    # 寝落ちと誤判定**する(2026-08-14 に実害。利用者の指摘で発覚)。
+    # 追跡タスクが 1 件でもあるうえで、実物の計算プロセスを数える。
+    if [ -n "$(find "$tasks" -type f 2>/dev/null | head -1)" ] && [ -f "$d/hooks/busy.ps1" ]; then
+      busy=$(powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$d/hooks/busy.ps1" 2>/dev/null || echo "$d/hooks/busy.ps1")" 2>/dev/null | tr -cd '0-9')
+      if [ -n "$busy" ] && [ "$busy" -gt 0 ] 2>/dev/null; then
+        printf '{"systemMessage":"このリポジトリの計算が %s プロセス走っているので停止を許可しました"}\n' "$busy"
+        exit 0
+      fi
+    fi
     break
   done
 fi
