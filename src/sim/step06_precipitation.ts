@@ -87,6 +87,27 @@ export const CONSERVATIVE_STATS = {
  */
 const VIRGA_OUTER_ITERATIONS = 6;
 /**
+ * virga の外側反復の打ち切りを実験で振るための上書き口(既定 0 = 上の定数)。
+ *
+ * `COUPLING_OVERRIDE` と同じ役目。**反復の打ち切りが答えを決めていた例を
+ * EBM で 3 件、結合反復で 1 件踏んでいる**ので、ここも同じ疑いで検査できる
+ * ようにしておく。通常経路の既定は変えない。
+ *
+ * 2026-08-15 に実害が出た: `subCloudEvapCoef = 1` で外側反復が
+ * **216 か月ぶん未収束**になり、掃引の行が丸ごと適用範囲外になった。
+ * 6 回で足りるかは一度も確かめられていなかった
+ * (docs/事前登録_乾いた端_2026-08-15.md)。
+ *
+ * `trace` を有効にすると、呼び出しごとの maxChange の列が `series` に積まれる。
+ * **収束しないと分かったら、次に見るのは成績ではなく残差の列と隣接比**である
+ * (docs/教訓.md §9)。検査: scripts/diag_virga_ratio.ts
+ */
+export const VIRGA_OVERRIDE = {
+  maxIterations: 0,
+  trace: false,
+  series: [] as number[][],
+};
+/**
  * 水蒸気輸送の反復上限。**答えを決めてはならない量**なので、
  * 到達しなかった解は診断で適用範囲外にする(黙って採用しない)。
  */
@@ -909,7 +930,11 @@ export async function computePrecipitation(
     let cond = r.condensationMm;
     let water = r.waterMm;
     let last = r;
-    for (let outer = 0; outer < VIRGA_OUTER_ITERATIONS; outer++) {
+    const virgaMax =
+      VIRGA_OVERRIDE.maxIterations > 0 ? VIRGA_OVERRIDE.maxIterations : VIRGA_OUTER_ITERATIONS;
+    const trail: number[] | null = VIRGA_OVERRIDE.trace ? [] : null;
+    if (trail) VIRGA_OVERRIDE.series.push(trail);
+    for (let outer = 0; outer < virgaMax; outer++) {
       let maxChange = 0;
       for (let i = 0; i < N; i++) {
         const p = cond[i] ?? 0;
@@ -942,6 +967,7 @@ export async function computePrecipitation(
       CONSERVATIVE_STATS.iterations += last.iterations;
       cond = last.condensationMm;
       water = last.waterMm;
+      trail?.push(maxChange);
       if (maxChange < VIRGA_TOLERANCE) {
         if (diagM) diagM.waterMm.set(water);
         return cond;
