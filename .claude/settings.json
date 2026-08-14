@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-e:/WORKSPACE/ExoClim-3}/.claude/hooks/stop_guard.sh\"",
+            "timeout": 15,
+            "statusMessage": "自走の確認中"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-e:/WORKSPACE/ExoClim-3}/.claude/hooks/reset_guard.sh\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-e:/WORKSPACE/ExoClim-3}/.claude/hooks/reset_guard.sh\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

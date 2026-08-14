@@ -20,3 +20,8 @@ data/external/raw/koppen_geiger_tif_v2.zip
 docs/報告/
 
 out_lever_*.log
+
+# Stop フックの作業札(docs/教訓.md §11)。実行時の状態であって成果物ではない
+.claude/.自走カウンタ
+.claude/裁定待ち.md
+.claude/停止

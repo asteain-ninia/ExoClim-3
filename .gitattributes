@@ -1,0 +1,5 @@
+# この環境は core.autocrlf=true なので、放っておくと .sh が CRLF で
+# チェックアウトされ、Git Bash が実行時に `$'\r': command not found` で死ぬ。
+# Stop フック(.claude/hooks/)が黙って壊れるのを防ぐため LF に固定する。
+# 2026-08-14、docs/教訓.md §11
+*.sh text eol=lf
