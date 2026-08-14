@@ -778,6 +778,31 @@ export const CRH_INNER = { enabled: false };
  */
 export const COND_RATE_NORMALIZE = { enabled: false };
 
+/**
+ * **ストームトラックの混合を「拡散の場」として保存型へ繋ぐ(段 36、2026-08-15)。**
+ *
+ * 既定 0 = 無効(拡散はスカラーのまま = 従来と厳密に一致)。
+ *
+ * `stormMoistureSupply` は非保存の降水式にしか入っておらず、
+ * **保存型では完全に死んでいた**(段 6 の移行漏れ。掃引が全水準ビット一致して
+ * 発覚)。しかも較正の探索空間に入っており、**答えに 1 ビットも影響しない定数を
+ * 82% まで上げていた**。
+ *
+ * 繋ぎ直すとき「源泉 `src` に足す」のは**誤り**である。その機構は
+ * 「移動性低気圧が**海の水を陸へ運ぶ**」もので、源泉に足すと陸で水が湧き出す
+ * (海から引かないので収支が閉じない)。
+ *
+ * **正しくは拡散を場所依存にする** — 混合は月平均で見れば実効的な拡散であり、
+ * **拡散は保存的なので水は湧かない**:
+ * ```
+ *   D(i) = D₀ × (1 + boost × supplyW × exp(−coastKm / decayKm))
+ * ```
+ * 緯度重み `supplyW` と海岸減衰は、既存の `stormSupply` の形をそのまま使う。
+ *
+ * 設計: docs/設計_ストーム供給を保存型へ繋ぐ_2026-08-15.md
+ */
+export const STORM_DIFFUSION = { boost: 0 };
+
 export const COUPLING_ANDERSON = {
   /** 履歴の深さ。0 = 無効(既定)。1 で割線法 / Aitken と等価 */
   depth: 0,
@@ -1097,6 +1122,8 @@ export async function computePrecipitation(
         : null;
     /** 地形性上昇を面積平均 1 へ正規化するための受け皿(段 28) */
     const oroNorm = COND_RATE_NORMALIZE.enabled ? new Float32Array(N) : null;
+    /** ストーム混合を拡散の場へ繋ぐための受け皿(段 36) */
+    const stormMix = STORM_DIFFUSION.boost > 0 ? new Float32Array(N) : null;
     convertToPrecip(
       ctx, itcz, m, tField, u, v, supply,
       windBelt.monthlyRidgeLatNDeg[m] ?? 31,
@@ -1115,6 +1142,7 @@ export async function computePrecipitation(
       // 鋭さ 0 では CRH が恒等的に 1 なので、渡しても渡さなくても同じ値になる
       crhInner ?? undefined,
       oroNorm ?? undefined,
+      stormMix ?? undefined,
     );
     // 内部で解く場合、G には CRH が掛かっていないので、診断には掛け戻す
     // **地形性上昇を面積平均 1 へ正規化してから G へ掛け戻す(段 28)。**
@@ -1162,6 +1190,19 @@ export async function computePrecipitation(
       // 0 のセルは水蒸気が溜まり続けるので下限を置く(輸送側でも安全側に効く)
       rate[i] = Math.max(0.05, (travelKmPerMonth / Math.max(1, lKm)) * (G[i] ?? 0));
     }
+    // **ストーム混合を拡散の場として組む(段 36)。**
+    // D(i) = D₀ × (1 + boost × supplyW × exp(−coastKm/decayKm))
+    // **拡散は保存的なので水は湧かない**(源泉に足すのとは違う)。
+    // boost = 0（既定）なら null のままで、従来どおりスカラーが渡る
+    let diffField: Float32Array | null = null;
+    if (stormMix) {
+      diffField = new Float32Array(N);
+      for (let i = 0; i < N; i++) {
+        diffField[i] =
+          K.moistureEddyDiffusivityM2PerS * (1 + STORM_DIFFUSION.boost * (stormMix[i] ?? 0));
+      }
+    }
+    const diffOpt: number | Float32Array = diffField ?? K.moistureEddyDiffusivityM2PerS;
     const r = solveMoistureTransport(
       grid,
       ctx.params.body.radiusKm,
@@ -1170,7 +1211,7 @@ export async function computePrecipitation(
       src,
       rate,
       {
-        diffusivityM2PerS: K.moistureEddyDiffusivityM2PerS,
+        diffusivityM2PerS: diffOpt,
         // **上限が答えを決めないところまで上げる。** 既定 4000 では 84 か月分が
         // 未収束のまま残った(2026-08-09)。EBM で 3 回踏んだ隠しパラメータと
         // 同じ型なので、収束を確かめてから採点する
@@ -1309,7 +1350,7 @@ export async function computePrecipitation(
         rateEff[i] = next;
       }
       last = solveMoistureTransport(grid, ctx.params.body.radiusKm, u, v, src, rateEff, {
-        diffusivityM2PerS: K.moistureEddyDiffusivityM2PerS,
+        diffusivityM2PerS: diffOpt,
         maxIterations: TRANSPORT_MAX_ITERATIONS,
         initialGuessMm: water,
       });
@@ -2071,6 +2112,12 @@ function convertToPrecip(
    * 地形性上昇が外れるので、呼び出し側が面積平均で正規化してから掛け直せる。
    */
   oroOut?: Float32Array,
+  /**
+   * **ストーム混合の強さを返す口(段 36)**。
+   * `supplyW × exp(−coastKm/decayKm)` の形で 0〜1。
+   * 呼び出し側が拡散の場を作るのに使う(降水式には影響しない)。
+   */
+  stormMixOut?: Float32Array,
 ): Float32Array {
   const { grid, params, terrain } = ctx;
   const W = grid.widthCells;
@@ -2335,12 +2382,12 @@ function convertToPrecip(
         }
         const onshore01 = oceanSteps / 5;
         const decayKm = K.stormMoistureDecayKm * (0.5 + 0.5 * onshore01);
+        const reach = Math.exp(-coastKm / decayKm);
         stormSupply =
-          K.stormMoistureSupply *
-          supplyW *
-          qRel *
-          Math.exp(-coastKm / decayKm) *
-          (1 + 0.55 * winterDepth01);
+          K.stormMoistureSupply * supplyW * qRel * reach * (1 + 0.55 * winterDepth01);
+        // **保存型はこの混合を「拡散の場」として受け取る(段 36)。**
+        // 降水式には触らない — ここは非保存の経路のままである
+        if (stormMixOut) stormMixOut[i] = supplyW * reach;
       }
 
       // ---- 柱相対湿度による指数的な抑制(2026-08-04)----

@@ -33,6 +33,7 @@ import {
   CONSERVATIVE_STATS,
   CONVERGENCE_SMOOTH,
   CRH_INNER,
+  STORM_DIFFUSION,
 } from '../src/sim/step06_precipitation';
 import { EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
 import type { RunOptions } from '../src/sim/accel';
@@ -48,6 +49,10 @@ if (process.env['COND_RATE_NORMALIZE'] === '1') COND_RATE_NORMALIZE.enabled = tr
 // 段 30: 収束を作るときの供給場の平滑幅（度）。0 = 既定 1.5
 if (process.env['CONVERGENCE_SMOOTH_DEG']) {
   CONVERGENCE_SMOOTH.deg = Number(process.env['CONVERGENCE_SMOOTH_DEG']);
+}
+// 段 36: ストーム混合を拡散の場として繋ぐ強さ（0 = 無効）
+if (process.env['STORM_DIFFUSION_BOOST']) {
+  STORM_DIFFUSION.boost = Number(process.env['STORM_DIFFUSION_BOOST']);
 }
 
 /** 既定で見る地域。未達 3 件 + 対照 2 件 */

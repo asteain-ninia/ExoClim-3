@@ -30,7 +30,18 @@ export const SECONDS_PER_MONTH = 30.44 * 86400;
 
 export interface MoistureTransportOptions {
   /** 水平拡散係数 m²/s(渦による混合。0 で純移流) */
-  diffusivityM2PerS?: number;
+  /**
+   * 渦拡散 m²/s。**スカラーか、セルごとの場**を渡せる(2026-08-15)。
+   *
+   * 場を渡せるようにしたのは、ストームトラックの混合を保存的に表すため。
+   * 移動性低気圧が海と陸を混ぜるのは月平均で見れば実効的な拡散であり、
+   * **拡散は保存的なので水が湧かない**。源泉に足すと陸で水が湧き出す
+   * (docs/設計_ストーム供給を保存型へ繋ぐ_2026-08-15.md)。
+   *
+   * **面の値は両側セルの平均**にする(共有面で一意 = 保存的)。
+   * スカラーを渡したときは全セル同値なので、従来と厳密に一致する。
+   */
+  diffusivityM2PerS?: number | ArrayLike<number>;
   /**
    * 収束判定: **方程式の残差** max|S − C(W) − ∇·(WV)| を平均 S で割った値。
    * 2026-08-09 まで「1 反復あたりの変化量」だったが、緩和の遅い系で
@@ -137,7 +148,14 @@ export function solveMoistureTransport(
   const W = grid.widthCells;
   const H = grid.heightCells;
   const N = grid.cellCount;
-  const diffusivity = (options.diffusivityM2PerS ?? 0) * SECONDS_PER_MONTH; // m²/月
+  // m²/月。スカラーでも場でも同じ口で引けるようにする
+  const diffSrc = options.diffusivityM2PerS ?? 0;
+  const diffIsField = typeof diffSrc !== 'number';
+  const diffAt = (idx: number): number =>
+    (diffIsField ? ((diffSrc as ArrayLike<number>)[idx] ?? 0) : (diffSrc as number)) *
+    SECONDS_PER_MONTH;
+  /** 場でも「どこかで拡散が効くか」の判定に使う(全ゼロなら分岐を省ける) */
+  const diffusivity = diffIsField ? 1 : (diffSrc as number) * SECONDS_PER_MONTH;
   const tolerance = options.tolerance ?? 1e-5;
   const maxIterations = options.maxIterations ?? 4000;
   // 逐次過緩和の係数。**不動点は変わらない**(収束したとき w = wGs なので
@@ -235,26 +253,31 @@ export function solveMoistureTransport(
       faceW[i] = unW;
       faceN[i] = unN;
       faceS[i] = unS;
+      // **面ごとの拡散(共有面で両側の平均 = 保存的)。**
+      // スカラーを渡したときは 4 面とも同値なので、従来と厳密に一致する
+      const dC = diffusivity ? diffAt(i) : 0;
+      const dE = diffusivity ? 0.5 * (dC + diffAt(iE)) : 0;
+      const dW = diffusivity ? 0.5 * (dC + diffAt(iW)) : 0;
+      const dN = diffusivity && iN >= 0 ? 0.5 * (dC + diffAt(iN)) : 0;
+      const dS = diffusivity && iS >= 0 ? 0.5 * (dC + diffAt(iS)) : 0;
       const outRate =
         (lenMeridionalM * (Math.max(0, unE) + Math.max(0, -unW)) +
           lenN * Math.max(0, unN) +
           lenS * Math.max(0, -unS)) /
           area +
         (diffusivity
-          ? (2 * lenMeridionalM * diffusivity) / (area * dxC) +
-            ((lenN + lenS) * diffusivity) / (area * dyCenterM)
+          ? (lenMeridionalM * (dE + dW)) / (area * dxC) +
+            (lenN * dN + lenS * dS) / (area * dyCenterM)
           : 0);
       outRateArr[i] = outRate;
 
       // 係数を隣ごとに分けて持つ。方程式は
       //   diag·w_i − cE·w_E − cW·w_W − cN·w_N − cS·w_S = S_i
       // で、diag = rate + ex + outRate。**すべて反復不変**である
-      const diffX = diffusivity ? (lenMeridionalM * diffusivity) / dxC : 0;
-      const diffY = diffusivity ? diffusivity / dyCenterM : 0;
-      cEArr[i] = (lenMeridionalM * Math.max(0, -unE) + diffX) / area;
-      cWArr[i] = (lenMeridionalM * Math.max(0, unW) + diffX) / area;
-      cNArr[i] = iN >= 0 ? (lenN * (Math.max(0, -unN) + diffY)) / area : 0;
-      cSArr[i] = iS >= 0 ? (lenS * (Math.max(0, unS) + diffY)) / area : 0;
+      cEArr[i] = (lenMeridionalM * (Math.max(0, -unE) + dE / dxC)) / area;
+      cWArr[i] = (lenMeridionalM * (Math.max(0, unW) + dW / dxC)) / area;
+      cNArr[i] = iN >= 0 ? (lenN * (Math.max(0, -unN) + dN / dyCenterM)) / area : 0;
+      cSArr[i] = iS >= 0 ? (lenS * (Math.max(0, unS) + dS / dyCenterM)) / area : 0;
       const rateI = Math.max(1e-6, condensationRatePerMonth[i] ?? 0);
       const exI = vExport ? Math.max(0, vExport[i] ?? 0) : 0;
       rateArr[i] = rateI;
