@@ -28,7 +28,7 @@ import { latDegOfRow, lonDegOfCol } from '../src/domain/grid';
 import { openAccel } from './accel_cli';
 import { evaluateResult } from './optimize_lib';
 import { fieldScore, getClimObs, REGION_GATES, scoreRegionGates } from './scoring';
-import { CONSERVATIVE_STATS, CRH_INNER } from '../src/sim/step06_precipitation';
+import { COND_RATE_NORMALIZE, CONSERVATIVE_STATS, CRH_INNER } from '../src/sim/step06_precipitation';
 import { EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
 import type { RunOptions } from '../src/sim/accel';
 import type { PipelineResult } from '../src/sim/types';
@@ -38,6 +38,8 @@ import type { PipelineResult } from '../src/sim/types';
 // (ワーカーも直列も)に効く。既定は従来どおり外側で代入する。
 // 鋭さ 0 では CRH が恒等的に 1 なので、どちらでも答えは同じ。
 if (process.env['CRH_INNER'] === '1') CRH_INNER.enabled = true;
+// 段 28: 地形性上昇を面積平均 1 へ正規化する
+if (process.env['COND_RATE_NORMALIZE'] === '1') COND_RATE_NORMALIZE.enabled = true;
 
 /** 既定で見る地域。未達 3 件 + 対照 2 件 */
 export const DEFAULT_TARGETS = [

@@ -735,6 +735,26 @@ export const COUPLING_MAX_ITERATIONS = 24;
  */
 export const CRH_INNER = { enabled: false };
 
+/**
+ * **地形性上昇の倍率を面積平均 1 へ正規化する(段 28、2026-08-15)。**
+ *
+ * 既定 false = 従来どおり。
+ *
+ * なぜ要るか: 2026-08-15 に 4 つの機構を測って、**すべて同じ落ち方**をした。
+ * 滞留時間(段 19)・virga(段 22)・CRH(段 25)は λ·G の面積平均を**下げ**、
+ * 地形性上昇の基準勾配(段 27)は**上げ**たが、**どちらでも中位の陸が痩せた**。
+ * 中位の陸は「水が通り過ぎる場所」で、平均をどちらへ動かしても損をする。
+ *
+ * そこで地形性上昇を**再配分だけの演算子**にする — 面積重み平均を 1 に
+ * 正規化すれば、場所ごとの相対差は残しつつ全球の凝結率水準を動かさない。
+ * **物理としても筋が通る**(地形は水を配り直すが惑星の凝結効率は変えない)。
+ *
+ * 基準は「その惑星・その月の平均」なので、地球の観測を計算層へ持ち込まない。
+ *
+ * 事前登録: docs/事前登録_凝結率の正規化_2026-08-15.md
+ */
+export const COND_RATE_NORMALIZE = { enabled: false };
+
 export const COUPLING_ANDERSON = {
   /** 履歴の深さ。0 = 無効(既定)。1 で割線法 / Aitken と等価 */
   depth: 0,
@@ -1052,6 +1072,8 @@ export async function computePrecipitation(
       CRH_INNER.enabled && K.crhSuppressionSharpness > 0 && K.crhFromWater > 0
         ? new Float32Array(N)
         : null;
+    /** 地形性上昇を面積平均 1 へ正規化するための受け皿(段 28) */
+    const oroNorm = COND_RATE_NORMALIZE.enabled ? new Float32Array(N) : null;
     convertToPrecip(
       ctx, itcz, m, tField, u, v, supply,
       windBelt.monthlyRidgeLatNDeg[m] ?? 31,
@@ -1069,8 +1091,31 @@ export async function computePrecipitation(
       // **CRH を輸送の内部で解く(段 25)。** 渡すと G から CRH が外れる。
       // 鋭さ 0 では CRH が恒等的に 1 なので、渡しても渡さなくても同じ値になる
       crhInner ?? undefined,
+      oroNorm ?? undefined,
     );
     // 内部で解く場合、G には CRH が掛かっていないので、診断には掛け戻す
+    // **地形性上昇を面積平均 1 へ正規化してから G へ掛け戻す(段 28)。**
+    // こうすると地形は「場所ごとの相対差」だけを作り、全球の凝結率水準を
+    // 動かさない。今日 4 つの機構がすべて「平均を動かして中位を痩せさせた」
+    // ので、平均を保つ制約そのものを試している。
+    if (oroNorm) {
+      let sw = 0;
+      let ww = 0;
+      for (let row = 0; row < grid.heightCells; row++) {
+        const cw = Math.cos((latDegOfRow(grid, row) * Math.PI) / 180);
+        for (let col = 0; col < grid.widthCells; col++) {
+          sw += cw * (oroNorm[row * grid.widthCells + col] ?? 1);
+          ww += cw;
+        }
+      }
+      const mean = sw / Math.max(1e-9, ww);
+      for (let i = 0; i < N; i++) G[i] = (G[i] ?? 0) * ((oroNorm[i] ?? 1) / Math.max(1e-9, mean));
+    }
+
+    // 診断の G は「実際に走った演算子」でなければならない。
+    // 内部で外した因子(CRH・地形性上昇)は掛け戻す。
+    // **正規化を有効にしたときは G に既に正規化後の oro が入っている**ので
+    // ここでは掛けない(oroNorm の分岐は上の正規化で済んでいる)
     if (diagM) {
       if (crhInner) {
         for (let i = 0; i < N; i++) diagM.condRateG[i] = (G[i] ?? 0) * (crhInner[i] ?? 1);
@@ -1998,6 +2043,11 @@ function convertToPrecip(
    * 渡さなければ従来どおり G に畳み込まれる。
    */
   crhOut?: Float32Array,
+  /**
+   * **地形性上昇の倍率を別に返す口(段 28)**。渡すと `condRateOut` からは
+   * 地形性上昇が外れるので、呼び出し側が面積平均で正規化してから掛け直せる。
+   */
+  oroOut?: Float32Array,
 ): Float32Array {
   const { grid, params, terrain } = ctx;
   const W = grid.widthCells;
@@ -2360,8 +2410,9 @@ function convertToPrecip(
       // (docs/事前登録_CRHを輸送の内部で解く_2026-08-15.md)。
       //
       // **鋭さ 0 では crhFactor が恒等的に 1 なので、どちらでも同じ値になる。**
-      if (condRateOut) condRateOut[i] = blockFactor * lift * (crhOut ? 1 : crhFactor);
+      if (condRateOut) condRateOut[i] = (blockFactor * lift * (crhOut ? 1 : crhFactor)) / (oroOut ? liftOroF : 1);
       if (crhOut) crhOut[i] = crhFactor;
+      if (oroOut) oroOut[i] = liftOroF;
       if (diagM) {
         diagM.supplyStorm[i] = stormSupply;
         diagM.liftItcz[i] = liftItczF;
