@@ -46,7 +46,7 @@ async function main(): Promise<void> {
   const base = K['subCloudEvapCoef'] ?? 0;
   console.log(
     `格子 ${RES}°、外側反復の上限 ${MAX_IT}、許容差 ${TOL}、EBM は短縮` +
-      `、緩和 ${ALPHA > 0 ? ALPHA : '既定 0.6'}`,
+      `、緩和 ${ALPHA > 0 ? `固定 ${ALPHA}` : '適応（既定）'}`,
   );
   console.log('各水準について、外側反復の maxChange の列と隣接比を出す。\n');
 
