@@ -1148,6 +1148,27 @@ export async function computePrecipitation(
     // **W は凝結量と対で残す。** virga の外側反復は rate を書き換えて解き直すので、
     // 「どの W からこの凝結量が出たか」は抜ける口ごとに違う。
     // 診断だけの代入で、通常実行(diagM なし)では 1 命令も走らない
+    /**
+     * 診断を**外側反復の結果で締める**(2026-08-15)。
+     *
+     * `condRateG` と `crhSuppression` は `convertToPrecip` が
+     * **外側反復の前**に書いた値(前の結合反復の W 由来)である。
+     * CRH を内部で解くと外側反復の中で CRH が更新されるので、
+     * **そのまま返すと診断の G と、実際に解いた凝結率がずれる**。
+     * 段 25 の不変量テスト(含意される凝結率が λ·G を超えない)が
+     * 3% の超過として捕まえた。**診断は実際に走った演算子のものでなければ
+     * ならない**(2026-08-10 に同じ型の取り違えを踏んでいる)。
+     */
+    const finishDiag = (w: Float32Array): void => {
+      if (!diagM) return;
+      diagM.waterMm.set(w);
+      if (!crhInner) return;
+      for (let i = 0; i < N; i++) {
+        diagM.crhSuppression[i] = crhInner[i] ?? 1;
+        diagM.condRateG[i] = (G[i] ?? 0) * (crhInner[i] ?? 1);
+      }
+    };
+
     // **CRH を内部で解くときも外側反復が要る(段 25)。** virga と同じループを使う
     if (K.subCloudEvapCoef <= 0 && !crhInner) {
       if (diagM) diagM.waterMm.set(r.waterMm);
@@ -1209,7 +1230,14 @@ export async function computePrecipitation(
         // 減衰つきで更新する(P ↓ → 失われる割合 ↑ の帰還が振動しうる)
         const prev = outer === 0 ? (rate[i] ?? 0) : (rateEff[i] ?? 0);
         const next = prev + virgaAlpha * (target - prev);
-        maxChange = Math.max(maxChange, Math.abs(next - prev) / Math.max(1e-6, rate[i] ?? 1));
+        // **収束は「緩和前の差」で測る(2026-08-15 に実測で発覚)。**
+        // 以前は `next − prev = α(target − prev)` で測っていたので、
+        // **α が小さいほど「収束した」ことになってしまっていた**。
+        // 適応緩和で α が 0.1 まで下がると、実際には 5% ずれていても
+        // 許容 5e-3 を満たす。段 25 の不変量テスト
+        // (含意される凝結率が λ·G を超えない)が 3% の超過として捕まえた。
+        // **収束判定が解き方のパラメータに依存してはならない。**
+        maxChange = Math.max(maxChange, Math.abs(target - prev) / Math.max(1e-6, rate[i] ?? 1));
         rateEff[i] = next;
       }
       last = solveMoistureTransport(grid, ctx.params.body.radiusKm, u, v, src, rateEff, {
@@ -1236,13 +1264,13 @@ export async function computePrecipitation(
       }
       prevChange = maxChange;
       if (maxChange < VIRGA_TOLERANCE) {
-        if (diagM) diagM.waterMm.set(water);
+        finishDiag(water);
         return cond;
       }
     }
     // 外側反復が収束しなかった月も**黙って通さない**
     CONSERVATIVE_STATS.virgaNonConverged++;
-    if (diagM) diagM.waterMm.set(water);
+    finishDiag(water);
     return cond;
   };
 
