@@ -20,13 +20,21 @@ const DIFFS = (process.argv[2] ?? '2977275.937980041,2000000,1500000,1000000')
   .split(',')
   .map(Number);
 const WESTERLY = Number(process.argv[3] ?? 9.0);
+/** 段 34: 収束持上げも同時に固定する（0 = 触らない） */
+const CONV = Number(process.argv[4] ?? 0);
 const K = MODEL_CONSTANTS as unknown as Record<string, number>;
 
 async function main(): Promise<void> {
   const targets = resolveTargets();
   const baseW = K['westerlyWindMs'] ?? 6.5;
+  const baseC = K['convergenceLiftBoost'] ?? 0;
   K['westerlyWindMs'] = WESTERLY;
-  console.log(`westerlyWindMs = ${WESTERLY} に固定し、渦拡散を振る。`);
+  if (CONV > 0) K['convergenceLiftBoost'] = CONV;
+  console.log(
+    `westerlyWindMs = ${WESTERLY}` +
+      (CONV > 0 ? ` / convergenceLiftBoost = ${CONV}` : '') +
+      ' に固定し、渦拡散を振る。',
+  );
   console.log('**主判定: 中位 500 以上 かつ 1% が 64 以下。**\n');
   const accel = await openAccel(true);
   try {
@@ -38,6 +46,7 @@ async function main(): Promise<void> {
     }
   } finally {
     K['westerlyWindMs'] = baseW;
+    K['convergenceLiftBoost'] = baseC;
     accel.close();
   }
   console.log(
