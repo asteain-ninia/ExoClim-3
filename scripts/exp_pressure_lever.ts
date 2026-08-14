@@ -33,6 +33,7 @@ import { latDegOfRow, lonDegOfCol } from '../src/domain/grid';
 import { evaluateResult } from './optimize_lib';
 import { fieldScore, getClimObs, REGION_GATES, scoreRegionGates } from './scoring';
 import { CONSERVATIVE_STATS } from '../src/sim/step06_precipitation';
+import { EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
 import { openAccel } from './accel_cli';
 import type { PipelineResult } from '../src/sim/types';
 
@@ -215,12 +216,26 @@ async function main(): Promise<void> {
         ` / 最悪残差 ${CONSERVATIVE_STATS.worstResidual.toExponential(2)}` +
         ` / 反復 ${CONSERVATIVE_STATS.iterations}`,
     );
+    // **収束を要する反復は 5 系統ある**(2026-08-14 に数え上げた):
+    //   輸送 / virga の外側反復 / 結合反復 / 土壌の周期定常 / EBM の周期定常。
+    // 3 系統しか見ていなかったため、結合反復が発散している解を健全と読んだ。
+    // 1 つ通ったことは他が通ったことを意味しない。
+    const soil = r.precipitation.soil;
+    const soilBad = soil ? !soil.converged : false;
+    const ebmBad = EBM_SOLVER_STATS.capHits > 0;
+    const anyBad = bad || soilBad || ebmBad;
     console.log(
       `             結合反復 ${cp.converged ? '収束' : '**未収束**'}` +
         ` ${cp.iterations}/${cp.maxIterations} 回` +
         ` / 残差 ${cp.finalResidualMmPerMonth.toFixed(3)} mm/月` +
-        `(許容 ${cp.toleranceMmPerMonth})` +
-        `${bad ? '   ← **この行は適用範囲外。解として読まない**' : ''}`,
+        `(許容 ${cp.toleranceMmPerMonth})`,
+    );
+    console.log(
+      `             土壌 ${soil ? (soil.converged ? '収束' : '**未収束**') : '—'}` +
+        `${soil ? `（年貯水ドリフト 平均 ${soil.meanAnnualStorageDriftMm.toFixed(2)} / 最大 ${soil.maxAnnualStorageDriftMm.toFixed(2)} mm）` : ''}` +
+        ` / EBM 上限到達 ${EBM_SOLVER_STATS.capHits} 回` +
+        ` / 最大残差 ${EBM_SOLVER_STATS.maxResidualC.toFixed(4)}°C` +
+        `${anyBad ? '   ← **この行は適用範囲外。解として読まない**' : ''}`,
     );
   }
   K[KEY] = base;
