@@ -204,12 +204,23 @@ async function main(): Promise<void> {
     // (docs/教訓.md)。未収束の解は黙って採用しない。
     const nc = CONSERVATIVE_STATS.nonConverged;
     const vnc = CONSERVATIVE_STATS.virgaNonConverged;
+    // **結合反復も必ず出す(2026-08-14)。** 輸送だけ見ていたので、
+    // 事前登録が要求する「輸送**と**結合反復が収束する」の片方が抜けていた。
+    // 鋭さ 4 は輸送が収束していても結合反復が上限に当たる(テストで判明)。
+    const cp = r.precipitation.coupling;
+    const bad = nc + vnc > 0 || !cp.converged;
     console.log(
-      `       収束: 未収束 ${String(nc).padStart(3)} 件` +
+      `       収束: 輸送 未収束 ${String(nc).padStart(3)} 件` +
         ` / virga 未収束 ${String(vnc).padStart(3)} 件` +
         ` / 最悪残差 ${CONSERVATIVE_STATS.worstResidual.toExponential(2)}` +
-        ` / 反復 ${CONSERVATIVE_STATS.iterations}` +
-        `${nc + vnc > 0 ? '   ← **この行は適用範囲外。解として読まない**' : ''}`,
+        ` / 反復 ${CONSERVATIVE_STATS.iterations}`,
+    );
+    console.log(
+      `             結合反復 ${cp.converged ? '収束' : '**未収束**'}` +
+        ` ${cp.iterations}/${cp.maxIterations} 回` +
+        ` / 残差 ${cp.finalResidualMmPerMonth.toFixed(3)} mm/月` +
+        `(許容 ${cp.toleranceMmPerMonth})` +
+        `${bad ? '   ← **この行は適用範囲外。解として読まない**' : ''}`,
     );
   }
   K[KEY] = base;
