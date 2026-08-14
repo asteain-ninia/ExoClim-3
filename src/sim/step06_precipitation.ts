@@ -572,7 +572,15 @@ export const COUPLING_MAX_ITERATIONS = 24;
  * ようにしておく。**通常経路の既定は変えない**。
  * 検査: scripts/exp_coupling_tolerance.ts
  */
-export const COUPLING_OVERRIDE = { maxIterations: 0 };
+export const COUPLING_OVERRIDE = {
+  maxIterations: 0,
+  /**
+   * 結合反復の緩和を**固定**する(0 = 既定の適応)。診断用。
+   * **緩和は不動点を変えない**ので、収束したときの答えは α に依らない。
+   * したがって較正のつまみにしてはならない(答えを決めてはならない量)。
+   */
+  relaxation: 0,
+};
 
 // ---- R2(地域降水 FB §6): 供給場の循環 3 点月ブレンド ----
 // 月平均風の単一方向トレースは風向の月替わりで供給が断絶する
@@ -1225,6 +1233,9 @@ export async function computePrecipitation(
   let iterations = 0;
   let residual = Number.POSITIVE_INFINITY;
   let converged = false;
+  /** 結合反復の適応緩和(段 23)。1 = 素のピカール = 2026-08-15 までの挙動 */
+  let couplingAlpha = COUPLING_OVERRIDE.relaxation > 0 ? COUPLING_OVERRIDE.relaxation : 1;
+  let prevCouplingResidual = Number.POSITIVE_INFINITY;
   /** 最後に走った結合反復の因子分解(診断を採る実行でのみ埋まる) */
   let lastDiagMonths: PrecipDiagMonth[] | null = null;
   const couplingMax =
@@ -1277,8 +1288,46 @@ export async function computePrecipitation(
       if (lastDiagMonths && dm) lastDiagMonths.push(dm);
     }
     applyPostAdjust(next);
+    // 残差は**緩和の前**で測る。収束判定は不動点への近さ `F(x) − x` であって
+    // 「今回どれだけ動かしたか」ではない。緩和を入れても判定の意味を変えない
     residual = meanAbsChange(next, precipEst);
-    precipEst = next;
+    // ---- 適応緩和(2026-08-15、段 23)----
+    //
+    // 結合反復は段 6 以来**素のピカール** `P(k+1) = F(P(k))` だった。
+    // 通常の地球は縮小比 0.55 で 8 回で抜けるので困らないが、
+    // CRH の指数抑制を入れると比が 1 へ近づき、やがて 2 周期の振動に落ちる
+    // (docs/実験記録_凝結率の幅の再測定_2026-08-14.md)。
+    //
+    // 段 21 は「緩慢には緩和が逆効果、停滞には効く。単一の α では救えない」と
+    // 見て実装を見送った。**前提は正しいが、単一の α しか見ていなかった。**
+    // virga の外側反復でまったく同じ混在に当たり、**適応緩和で解けることを
+    // 実測した**(固定 0.6 で 78/204、固定 1.0 で 184/204、適応で 204/204)。
+    //
+    // α = 1 から始め、残差が増えた回だけ半減(下限 0.1)、減った回は 1 へ戻す。
+    // 緩慢な区間は α = 1 のままで速く、振動した回だけ絞る。
+    //
+    // **緩和は不動点を変えない**ので物理の変更ではなく解き方の変更である。
+    // 地球は残差が単調に減るので α は 1 のまま = 現行と厳密に一致する
+    // (事前登録の判定 1。動いたらそれ自体が発見なので即座に棄却する)。
+    if (couplingAlpha >= 1) {
+      precipEst = next;
+    } else {
+      for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+        const p = precipEst[m];
+        const n = next[m];
+        if (!p || !n) continue;
+        for (let i = 0; i < p.length; i++) p[i] = (p[i] ?? 0) + couplingAlpha * ((n[i] ?? 0) - (p[i] ?? 0));
+      }
+    }
+    if (COUPLING_OVERRIDE.relaxation > 0) {
+      couplingAlpha = COUPLING_OVERRIDE.relaxation;
+    } else {
+      couplingAlpha =
+        residual > prevCouplingResidual
+          ? Math.max(0.1, couplingAlpha * 0.5)
+          : Math.min(1, couplingAlpha * 1.5);
+    }
+    prevCouplingResidual = residual;
     // 反復ごとの降水場を表示へ流す。**複製して渡す** — precipEst は次の反復で
     // 読み続ける生の作業配列なので、そのまま渡して転送されると計算が壊れる
     opts?.progress?.({
