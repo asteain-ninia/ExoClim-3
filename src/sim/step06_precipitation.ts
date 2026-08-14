@@ -147,6 +147,129 @@ export const TRANSPORT_MAX_ITERATIONS = 20000;
 // 適応の実装は下の外側反復にある。固定したいときは `VIRGA_OVERRIDE.relaxation`。
 const VIRGA_TOLERANCE = 5e-3;
 
+/**
+ * Anderson 加速の履歴と、次の点の組み立て(段 24)。
+ *
+ * 差分形式の標準形を使う(和が 1 という制約を消せるので数値的に安定):
+ * ```
+ *   f_k  = F(x_k) − x_k
+ *   ΔF_i = f_{i+1} − f_i,   ΔX_i = x_{i+1} − x_i
+ *   γ    = argmin ‖f_k − ΔF γ‖        （m×m の正規方程式）
+ *   x_{k+1} = x_k + f_k − (ΔX + ΔF) γ
+ * ```
+ * 場は「12 か月 × セル」を 1 本の平坦な配列として扱う(月をまたいだ相関も
+ * 使えるので、月ごとに解くより素直)。
+ */
+export class AndersonAccelerator {
+  private readonly dF: Float64Array[] = [];
+  private readonly dX: Float64Array[] = [];
+  private prevX: Float64Array | null = null;
+  private prevF: Float64Array | null = null;
+
+  constructor(
+    private readonly depth: number,
+    private readonly regularization: number,
+  ) {}
+
+  /**
+   * 現在の点 x と残差 f = F(x) − x から次の点を組む。
+   * 履歴が空の 1 回目は素のピカール `x + f` を返す。
+   * **戻り値は x を上書きした同じ配列**(呼び出し側が書き戻す)。
+   */
+  next(x: Float64Array, f: Float64Array): Float64Array {
+    const n = x.length;
+    if (this.prevX && this.prevF) {
+      const df = new Float64Array(n);
+      const dx = new Float64Array(n);
+      for (let i = 0; i < n; i++) {
+        df[i] = (f[i] ?? 0) - (this.prevF[i] ?? 0);
+        dx[i] = (x[i] ?? 0) - (this.prevX[i] ?? 0);
+      }
+      this.dF.push(df);
+      this.dX.push(dx);
+      while (this.dF.length > this.depth) {
+        this.dF.shift();
+        this.dX.shift();
+      }
+    }
+    this.prevX = Float64Array.from(x);
+    this.prevF = Float64Array.from(f);
+
+    const m = this.dF.length;
+    // 1 回目、または履歴が無いときは素のピカール
+    if (m === 0) {
+      for (let i = 0; i < n; i++) x[i] = (x[i] ?? 0) + (f[i] ?? 0);
+      return x;
+    }
+    // 正規方程式 (ΔFᵀΔF + λI) γ = ΔFᵀ f
+    const a: number[][] = [];
+    const b: number[] = [];
+    for (let r = 0; r < m; r++) {
+      const row: number[] = [];
+      const fr = this.dF[r] as Float64Array;
+      for (let c = 0; c < m; c++) {
+        const fc = this.dF[c] as Float64Array;
+        let s = 0;
+        for (let i = 0; i < n; i++) s += (fr[i] ?? 0) * (fc[i] ?? 0);
+        row.push(r === c ? s + this.regularization : s);
+      }
+      let s = 0;
+      for (let i = 0; i < n; i++) s += (fr[i] ?? 0) * (f[i] ?? 0);
+      a.push(row);
+      b.push(s);
+    }
+    const gamma = solveSmallSpd(a, b);
+    // γ が解けなかった(退化)なら素のピカールへ落ちる。**黙って壊れない**
+    if (!gamma) {
+      for (let i = 0; i < n; i++) x[i] = (x[i] ?? 0) + (f[i] ?? 0);
+      return x;
+    }
+    for (let i = 0; i < n; i++) {
+      let corr = 0;
+      for (let j = 0; j < m; j++) {
+        corr += (gamma[j] ?? 0) * (((this.dX[j] as Float64Array)[i] ?? 0) + ((this.dF[j] as Float64Array)[i] ?? 0));
+      }
+      x[i] = (x[i] ?? 0) + (f[i] ?? 0) - corr;
+    }
+    return x;
+  }
+}
+
+/** 小さい対称正定値系をガウス消去で解く(m ≤ 8 程度)。退化したら null */
+function solveSmallSpd(a: number[][], b: number[]): number[] | null {
+  const m = b.length;
+  const mat = a.map((row, i) => [...row, b[i] ?? 0]);
+  for (let col = 0; col < m; col++) {
+    let piv = col;
+    for (let r = col + 1; r < m; r++) {
+      if (Math.abs(mat[r]?.[col] ?? 0) > Math.abs(mat[piv]?.[col] ?? 0)) piv = r;
+    }
+    const pivRow = mat[piv];
+    const colRow = mat[col];
+    if (!pivRow || !colRow) return null;
+    if (Math.abs(pivRow[col] ?? 0) < 1e-300) return null;
+    mat[piv] = colRow;
+    mat[col] = pivRow;
+    const cur = mat[col] as number[];
+    const d = cur[col] ?? 1;
+    for (let c = col; c <= m; c++) cur[c] = (cur[c] ?? 0) / d;
+    for (let r = 0; r < m; r++) {
+      if (r === col) continue;
+      const row = mat[r] as number[];
+      const factor = row[col] ?? 0;
+      if (factor === 0) continue;
+      for (let c = col; c <= m; c++) row[c] = (row[c] ?? 0) - factor * (cur[c] ?? 0);
+    }
+  }
+  const out: number[] = [];
+  for (let r = 0; r < m; r++) {
+    const v = mat[r]?.[m] ?? 0;
+    if (!Number.isFinite(v)) return null;
+    out.push(v);
+  }
+  return out;
+}
+
 export function resetConservativeStats(): void {
   CONSERVATIVE_STATS.nonConverged = 0;
   CONSERVATIVE_STATS.worstResidual = 0;
@@ -572,6 +695,31 @@ export const COUPLING_MAX_ITERATIONS = 24;
  * ようにしておく。**通常経路の既定は変えない**。
  * 検査: scripts/exp_coupling_tolerance.ts
  */
+/**
+ * 結合反復の **Anderson 加速**(段 24、2026-08-15)。
+ *
+ * `depth = 0`(既定)で無効 = 素のピカール = 従来と厳密に一致する。
+ *
+ * なぜ要るか: CRH の指数抑制は「湿潤域で 1 のまま、乾燥域だけで落ちる」という
+ * **乾いた端に要る形を満たす唯一既知の機構**だが(段 22・23)、結合系を硬くする。
+ * 適応緩和つき・上限 200 でも残差 1.96(許容 0.2)で、比が 0.999 に張り付く。
+ *
+ * **緩和は原理的に足りない** — 実効比 `1 − α(1 − L)` は L → 1 でどう α を
+ * 選んでも 1 へ近づく。要るのは過去の残差からの**外挿**である。
+ *
+ * **加速は不動点を変えない**(`x = F(x)` は γ に依らない)ので、
+ * 物理の変更ではなく解き方の変更である。したがって深さは
+ * **答えを決めてはならない量**で、較正の探索空間に入れてはならない。
+ *
+ * 事前登録: docs/事前登録_結合反復のAnderson加速_2026-08-15.md
+ */
+export const COUPLING_ANDERSON = {
+  /** 履歴の深さ。0 = 無効(既定)。1 で割線法 / Aitken と等価 */
+  depth: 0,
+  /** 正規方程式の Tikhonov 正則化(ΔF が退化したときの保険) */
+  regularization: 1e-10,
+};
+
 export const COUPLING_OVERRIDE = {
   maxIterations: 0,
   /**
@@ -1236,6 +1384,11 @@ export async function computePrecipitation(
   /** 結合反復の適応緩和(段 23)。1 = 素のピカール = 2026-08-15 までの挙動 */
   let couplingAlpha = COUPLING_OVERRIDE.relaxation > 0 ? COUPLING_OVERRIDE.relaxation : 1;
   let prevCouplingResidual = Number.POSITIVE_INFINITY;
+  /** Anderson 加速(段 24)。深さ 0(既定)なら null = 従来経路 */
+  const anderson =
+    COUPLING_ANDERSON.depth > 0
+      ? new AndersonAccelerator(COUPLING_ANDERSON.depth, COUPLING_ANDERSON.regularization)
+      : null;
   /** 最後に走った結合反復の因子分解(診断を採る実行でのみ埋まる) */
   let lastDiagMonths: PrecipDiagMonth[] | null = null;
   const couplingMax =
@@ -1309,7 +1462,41 @@ export async function computePrecipitation(
     // **緩和は不動点を変えない**ので物理の変更ではなく解き方の変更である。
     // 地球は残差が単調に減るので α は 1 のまま = 現行と厳密に一致する
     // (事前登録の判定 1。動いたらそれ自体が発見なので即座に棄却する)。
-    if (couplingAlpha >= 1) {
+    // ---- Anderson 加速(段 24)----
+    // 深さ 0(既定)では 1 命令も走らず、下の緩和経路がそのまま使われる。
+    // **加速は不動点を変えない**ので物理の変更ではなく解き方の変更である。
+    if (anderson) {
+      const cells = grid.cellCount;
+      const flatX = new Float64Array(MONTHS_PER_YEAR * cells);
+      const flatF = new Float64Array(MONTHS_PER_YEAR * cells);
+      // **緩和と加速は併用できる**(段 21 が「両方が要る」と書いた形)。
+      // 緩和つきピカール `F_α(x) = x + α(F(x) − x)` を新しい写像とみなして
+      // Anderson を当てる。α は不動点を変えないので、答えは変わらない。
+      //
+      // 2026-08-15 の実測で、結合反復の写像は**2 周期の構造**を持つと分かった
+      // (Anderson の深さ 1 でも 3 でも残差が偶奇 2 系列に分裂する)。
+      // 2 周期には α ≈ 0.5 が効き(固有値 −1 を 0 へ写す)、
+      // その裏に残る緩慢な成分に Anderson が効く、というのが段 21 の見立て。
+      const accelAlpha = COUPLING_OVERRIDE.relaxation > 0 ? COUPLING_OVERRIDE.relaxation : 1;
+      for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+        const p = precipEst[m];
+        const n2 = next[m];
+        if (!p || !n2) continue;
+        const base = m * cells;
+        for (let i = 0; i < cells; i++) {
+          flatX[base + i] = p[i] ?? 0;
+          flatF[base + i] = accelAlpha * ((n2[i] ?? 0) - (p[i] ?? 0));
+        }
+      }
+      anderson.next(flatX, flatF);
+      for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+        const p = precipEst[m];
+        if (!p) continue;
+        const base = m * cells;
+        // **降水は負になれない。** 外挿は行き過ぎうるので床で受ける
+        for (let i = 0; i < cells; i++) p[i] = Math.max(0, flatX[base + i] ?? 0);
+      }
+    } else if (couplingAlpha >= 1) {
       precipEst = next;
     } else {
       for (let m = 0; m < MONTHS_PER_YEAR; m++) {

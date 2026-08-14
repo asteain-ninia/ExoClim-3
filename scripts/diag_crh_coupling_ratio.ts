@@ -23,6 +23,7 @@ import { runPipeline } from '../src/sim/pipeline';
 import { EARTH_PARAMS } from '../src/domain/planetParams';
 import { MODEL_CONSTANTS } from '../src/sim/constants';
 import { EBM_SOLVER, EBM_FULL_CAPACITY_YEARS } from '../src/sim/step05_temperature';
+import { COUPLING_ANDERSON, COUPLING_OVERRIDE } from '../src/sim/step06_precipitation';
 
 // **テストと同じ安い条件で測る**(diag_hightilt_coupling.ts と同じ理由)。
 // 見たいのは結合反復の残差列の形であって、EBM の精度ではない。
@@ -32,6 +33,15 @@ EBM_FULL_CAPACITY_YEARS.years = 2;
 const VALUES = (process.argv[2] ?? '0,1,2,3,4').split(',').map(Number);
 const MAX_IT = Number(process.argv[3] ?? 40);
 const RES = Number(process.argv[4] ?? 4);
+/**
+ * Anderson 加速の深さ(段 24)。0 = 無効 = 従来の素のピカール。
+ * **加速は不動点を変えない**ので、収束したときの答えは深さに依らない。
+ */
+const DEPTH = Number(process.argv[5] ?? 0);
+COUPLING_ANDERSON.depth = DEPTH;
+/** 緩和の固定(0 = 適応)。加速と併用できる — 段 21 の「両方が要る」 */
+const ALPHA = Number(process.argv[6] ?? 0);
+COUPLING_OVERRIDE.relaxation = ALPHA;
 
 /** "降水の結合反復 3/24(残差 1.234 mm/月)" から残差を取り出す */
 function residualOf(detail: string): number | null {
@@ -44,7 +54,10 @@ function residualOf(detail: string): number | null {
 async function main(): Promise<void> {
   const K = MODEL_CONSTANTS as unknown as Record<string, number>;
   const base = K['crhSuppressionSharpness'] ?? 0;
-  console.log(`格子 ${RES}°、反復上限 ${MAX_IT}、EBM は短縮(掃引 8・全熱容量 2 年)`);
+  console.log(
+    `格子 ${RES}°、反復上限 ${MAX_IT}、EBM は短縮(掃引 8・全熱容量 2 年)` +
+      `、Anderson 加速 ${DEPTH > 0 ? `深さ ${DEPTH}` : '無効'}、緩和 ${ALPHA > 0 ? ALPHA : '適応'}`,
+  );
   console.log('残差列と、隣り合う残差の比(比 < 1 なら縮小、> 1 なら拡大)\n');
 
   for (const s of VALUES) {
