@@ -16,7 +16,14 @@ import { runPipeline } from '../src/sim/pipeline';
 import { openAccel } from './accel_cli';
 import { MODEL_CONSTANTS } from '../src/sim/constants';
 import { EARTH_PARAMS } from '../src/domain/planetParams';
-import { SPACE, UNSOLVED_FITNESS, evaluateResult, type Scores } from './optimize_lib';
+import { EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
+import {
+  SPACE,
+  UNSOLVED_FITNESS,
+  disqualifyIfUnsound,
+  evaluateResult,
+  type Scores,
+} from './optimize_lib';
 import { loadStateStrict, nextEvalNumber, readEvalLog, saveStateAtomic } from './optimize_store';
 
 const OUT_DIR = path.join(process.cwd(), 'out', 'optimize');
@@ -134,6 +141,10 @@ function sequentialBackend(state: OptState): Backend {
         const t0 = Date.now();
         const result = await runPipeline(EARTH_PARAMS, accel.opts);
         const s = evaluateResult(result, HOLDOUT_FOLD);
+        // **逐次経路にも失格の判定を入れる(2026-08-14)。** ここには判定が
+        // 1 つも無く、--parallel 1 の較正は数値的に無防備だった。
+        if (EBM_SOLVER_STATS.capHits > 0) s.fitness = UNSOLVED_FITNESS;
+        disqualifyIfUnsound(s);
         logEval(state, it.tag, s, (Date.now() - t0) / 1000);
         out.push(s);
       }
@@ -238,6 +249,11 @@ function logEval(
       pRmse: Math.round(s.precipRmse),
       iRmse: Math.round(s.itczRmse * 100) / 100,
       sec: Math.round(sec * 10) / 10,
+      // **失格の理由を必ず残す(2026-08-14)。** 判定条件には、それを機械的に
+      // 読み出す出力を対にする。段 20 は「未収束 0」を事前登録しながら、
+      // 掃引がその数字を出さないまま判定が素通りした。同じことを繰り返さない。
+      // 健全なときは何も足さない(ログを膨らませない)。
+      ...(s.numericallySound ? {} : { unsound: s.numericalFailures }),
       // 収束予算(費用の内訳を後から読むため。optimize_worker.ts の注記)
       ...(ebmYears !== undefined ? { ebmYears } : {}),
       ...(ebmIters !== undefined ? { ebmIters } : {}),

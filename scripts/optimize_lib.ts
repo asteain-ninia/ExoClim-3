@@ -6,6 +6,9 @@ import { MODEL_CONSTANTS } from '../src/sim/constants';
 import type { PipelineResult } from '../src/sim/types';
 import { fieldScore, itczLineRmse, koppenScore, scoreRegionGates } from './scoring';
 import { gateFoldAssignments, keepExcludingFold } from './holdout';
+import { EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
+import { CONSERVATIVE_STATS } from '../src/sim/step06_precipitation';
+import { evaluateNumericalSoundness } from './validate_criteria';
 
 export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // ---- 保存型への移行(段 6、2026-08-09)----
@@ -116,6 +119,19 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
  */
 export const UNSOLVED_FITNESS = -1e6;
 
+/**
+ * 数値的に解けなかった評価を失格にする。**評価する側の経路すべてで呼ぶ。**
+ *
+ * 2026-08-14 まで、失格の判定は `optimize_worker.ts` の 1 行
+ * (`EBM_SOLVER_STATS.capHits > 0`)だけで、**5 系統のうち 1 系統しか
+ * 見ていなかった**。しかも逐次経路(`--parallel 1`)には判定が 1 つも無く、
+ * 完全に無防備だった。判定を 1 か所へ集約して、経路差を無くす。
+ */
+export function disqualifyIfUnsound(scores: Scores): Scores {
+  if (!scores.numericallySound) scores.fitness = UNSOLVED_FITNESS;
+  return scores;
+}
+
 export interface Scores {
   majorPct: number;
   detailPct: number;
@@ -128,6 +144,19 @@ export interface Scores {
   fitness: number;
   /** 目的関数 v2(旧定義。比較のために必ず併記する) */
   fitnessV2: number;
+  /**
+   * **数値的に健全か**(2026-08-14)。`npm run validate` が使うのと
+   * まったく同じ凍結済みの関門(`evaluateNumericalSoundness`)で判定する。
+   *
+   * これが無かったため、較正は 5 系統の収束のうち **EBM の上限到達しか
+   * 見ていなかった**(しかも逐次経路では 1 つも見ていなかった)。
+   * 未収束の解にも成績はつくので、探索は「収束しない領域」へ逃げ込める。
+   * 実測: 鋭さ 4(結合反復の残差が許容の 233 倍)の v3 は 81.781 で、
+   * 収束している鋭さ 2 の 78.251 より**良い**。
+   */
+  numericallySound: boolean;
+  /** 健全でないときの理由(ログに残して原因を追えるようにする) */
+  numericalFailures: string[];
   // ---- 季節指標(v3 で目的関数に入った量。報告にも使う)----
   tempRangeRmse: number;
   tempPhaseRmseDays: number;
@@ -245,6 +274,19 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
       (Math.abs(f.landMeanModelMm - f.landMeanObsMm) / Math.max(1e-9, f.landMeanObsMm)) -
     W.wItcz * (itczTerm / W.itczScaleDeg);
 
+  // ---- 数値的健全性(2026-08-14)----
+  // `npm run validate` と**同じ凍結済みの関門**を使う。判定の二重定義を作らない。
+  // 収束を要する反復は 5 系統ある: EBM の線形解 / EBM の周期定常 /
+  // 結合反復 / 土壌の周期定常 / 輸送(と virga)。
+  const soundness = evaluateNumericalSoundness({
+    ebmMaxResidualC: EBM_SOLVER_STATS.maxResidualC,
+    ebmMeanYearDriftC: EBM_SOLVER_STATS.meanYearDriftC,
+    precipCouplingConverged: result.precipitation.coupling?.converged ?? true,
+    soilConverged: result.precipitation.soil?.converged ?? true,
+    moistureTransportNonConverged: CONSERVATIVE_STATS.nonConverged,
+    virgaNonConverged: CONSERVATIVE_STATS.virgaNonConverged,
+  });
+
   return {
     majorPct: k.majorPct,
     detailPct: k.detailPct,
@@ -255,6 +297,8 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
     itczRmse,
     fitness,
     fitnessV2,
+    numericallySound: soundness.pass,
+    numericalFailures: soundness.failures,
     tempRangeRmse: f.tempRangeRmseC,
     tempPhaseRmseDays: f.tempPhaseRmseDays,
     precipDriestRmse: f.precipDriestRmseMm,

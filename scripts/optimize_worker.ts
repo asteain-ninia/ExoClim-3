@@ -9,7 +9,7 @@ import * as readline from 'node:readline';
 import { runPipeline } from '../src/sim/pipeline';
 import { MODEL_CONSTANTS } from '../src/sim/constants';
 import { EARTH_PARAMS } from '../src/domain/planetParams';
-import { evaluateResult, UNSOLVED_FITNESS } from './optimize_lib';
+import { disqualifyIfUnsound, evaluateResult, UNSOLVED_FITNESS } from './optimize_lib';
 import { EBM_SOLVER, EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
 import { openAccel } from './accel_cli';
 
@@ -56,8 +56,11 @@ rl.on('line', (line) => {
       EBM_SOLVER_STATS.fullCapacityYears = 0;
       const result = await runPipeline(EARTH_PARAMS, accel.opts);
       const scores = evaluateResult(result, msg.holdoutFold);
-      // 予算内で解けなかった定数ベクトルは**失格**にする(減点ではない)
+      // 予算内で解けなかった定数ベクトルは**失格**にする(減点ではない)。
+      // capHits は evaluateNumericalSoundness が見ない量なのでここに残す。
+      // それ以外の 5 系統は disqualifyIfUnsound が見る(2026-08-14)。
       if (EBM_SOLVER_STATS.capHits > 0) scores.fitness = UNSOLVED_FITNESS;
+      disqualifyIfUnsound(scores);
       process.stdout.write(
         JSON.stringify({
           id: msg.id,
