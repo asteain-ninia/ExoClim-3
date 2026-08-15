@@ -148,7 +148,22 @@ export interface Scores {
   landMeanMm: number;
   itczRmse: number;
   /** 目的関数 v3(探索が最大化する量) */
+  /** 探索が最大化する量。2026-08-16 以降は v4 */
   fitness: number;
+  /** 旧目的関数(2026-08-02〜08-16)。併記のため計算し続ける */
+  fitnessV3: number;
+  /**
+   * ゲート項を除いた連続部分(v3 と v4 で共通)。
+   * **目的関数の版をまたいで比べられる唯一の量**なので、
+   * 版を変えた前後の比較は必ずこれで行う。
+   */
+  continuousV3: number;
+  /** 期待する気候帯の面積割合の和(0〜17、連続版ゲート) */
+  gateShare: number;
+  /** 年降水の分布形の誤差(分位の平均対数誤差) */
+  precipQuantileLogErr: number;
+  /** その内訳 [分位%, モデル mm, 観測 mm] */
+  precipQuantiles: Array<[number, number, number]>;
   /** 目的関数 v2(旧定義。比較のために必ず併記する) */
   fitnessV2: number;
   /**
@@ -216,6 +231,26 @@ export const OBJECTIVE_V3 = {
   itczScaleDeg: 3,
 } as const;
 
+/**
+ * 目的関数 v4(2026-08-16、利用者の裁定「GO」を得て事前登録 →
+ * `docs/事前登録_目的関数v4_ゲートの崖を外し分布形を入れる_2026-08-16.md`)。
+ *
+ * v3 からの変更は 2 点だけ:
+ *   1. **地域ゲートを離散(合格件数)から連続(面積割合の和)へ**。
+ *      外部監査に「50%・10% に崖があり、崖を一つ越えただけの解が
+ *      採用されている」と指摘され、v23 の採用を分解して裏が取れた
+ *      (ゲート +1.10 に対し、他の連続指標は約 −0.031 悪化していた)。
+ *      上限は 17 のままなので**重み 1.1 は据え置く**。
+ *   2. **年降水の分布形の項を足す**。本丸である「乾いた端が作れない」
+ *      (1% 分位がモデル 64mm 対 観測 9mm)を、目的関数が
+ *      まったく測っていなかった。測っていないものは直らない。
+ */
+export const OBJECTIVE_V4 = {
+  ...OBJECTIVE_V3,
+  /** 分布形の重み。年降水 RMSE と同じ 3。**現状値を測る前に決めた** */
+  wPrecipQuantile: 3,
+} as const;
+
 // 目的関数 v3(2026-08-02 に事前登録 — 利用者の許可を得て v2 から改訂)。
 // v2 も併記のため計算し続ける。v2 の定義は下記のとおり:
 //   fitnessV2 = 大分類% + 1.1×地域ゲート数 + 0.25×詳細%
@@ -242,16 +277,23 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
   const itczRmse = itczLineRmse(result);
   const f = fieldScore(result, undefined, keep);
   let gates: number;
+  /** v2・v3 が使う離散のゲート項(合格件数) */
   let gateTerm: number;
+  /** v4 が使う連続のゲート項(期待する気候帯の面積割合の和) */
+  let gateShareTerm: number;
   let itczTerm: number;
   if (gateFolds === null) {
     gates = gateResults.filter((g) => g.pass).length;
     gateTerm = gates;
+    gateShareTerm = gateResults.reduce((s, g) => s + g.share, 0);
     itczTerm = itczRmse;
   } else {
     const training = gateResults.filter((g) => gateFolds[g.id] !== holdoutFold);
     gates = training.filter((g) => g.pass).length;
     gateTerm = (17 * gates) / Math.max(1, training.length);
+    // 連続版も同じ規則で正規化する(fold ごとに訓練地域数が違うため)
+    gateShareTerm =
+      (17 * training.reduce((s, g) => s + g.share, 0)) / Math.max(1, training.length);
     itczTerm = 0;
   }
   // ---- v2(旧定義)。比較のために必ず計算して併記する ----
@@ -264,12 +306,12 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
     (0.02 * Math.abs(f.landMeanModelMm - f.landMeanObsMm)) / 10 -
     0.3 * itczTerm;
 
-  // ---- v3(探索が最大化する量)----
+  // ---- v3(2026-08-02〜2026-08-16 に探索が最大化していた量。以後は併記のみ)----
   // 各誤差を**観測自身の空間ばらつき**で割ってから重みを掛ける。
-  const W = OBJECTIVE_V3;
-  const fitness =
+  const W = OBJECTIVE_V4;
+  /** ゲート項を除いた連続部分。v3 と v4 で共通なので一度だけ組む */
+  const continuousV3 =
     k.majorPct +
-    1.1 * gateTerm +
     0.25 * k.detailPct -
     W.wTempMean * (f.tempRmseC / f.obsSdTempC) -
     W.wTempRange * (f.tempRangeRmseC / f.obsSdTempRangeC) -
@@ -280,6 +322,12 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
     W.wLandMean *
       (Math.abs(f.landMeanModelMm - f.landMeanObsMm) / Math.max(1e-9, f.landMeanObsMm)) -
     W.wItcz * (itczTerm / W.itczScaleDeg);
+  const fitnessV3 = continuousV3 + 1.1 * gateTerm;
+
+  // ---- v4(探索が最大化する量。2026-08-16 の事前登録)----
+  // ゲートを連続化し、年降水の分布形を足した。それ以外は v3 と同一。
+  const fitness =
+    continuousV3 + 1.1 * gateShareTerm - W.wPrecipQuantile * f.precipQuantileLogErr;
 
   // ---- 数値的健全性(2026-08-14)----
   // `npm run validate` と**同じ凍結済みの関門**を使う。判定の二重定義を作らない。
@@ -304,6 +352,12 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
     itczRmse,
     fitness,
     fitnessV2,
+    fitnessV3,
+    /** ゲート項を除いた連続部分。目的関数をまたいで比べられる唯一の量 */
+    continuousV3,
+    gateShare: gateShareTerm,
+    precipQuantileLogErr: f.precipQuantileLogErr,
+    precipQuantiles: f.precipQuantiles,
     numericallySound: soundness.pass,
     numericalFailures: soundness.failures,
     tempRangeRmse: f.tempRangeRmseC,

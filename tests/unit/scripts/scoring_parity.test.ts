@@ -4,7 +4,7 @@
 // 合成結果で担保する。パイプラインは実行しない(採点層だけの検査)。
 
 import { describe, expect, it } from 'vitest';
-import { OBJECTIVE_V3, evaluateResult } from '../../../scripts/optimize_lib';
+import { OBJECTIVE_V4, evaluateResult } from '../../../scripts/optimize_lib';
 import {
   fieldScore,
   itczLineRmse,
@@ -47,8 +47,8 @@ describe('採点の一元化(P0-3)', () => {
       0.3 * i;
     expect(s.fitnessV2).toBeCloseTo(fitnessV2, 12);
 
-    // v3(探索が最大化する量)
-    const W = OBJECTIVE_V3;
+    // v3(2026-08-02〜08-16 に探索が最大化していた量。以後は併記のみ)
+    const W = OBJECTIVE_V4;
     const fitnessV3 =
       k.majorPct +
       1.1 * s.gates +
@@ -61,7 +61,45 @@ describe('採点の一元化(P0-3)', () => {
       W.wPrecipWettest * (f.precipWettestRmseMm / f.obsSdPrecipWettestMm) -
       W.wLandMean * (Math.abs(f.landMeanModelMm - f.landMeanObsMm) / f.landMeanObsMm) -
       W.wItcz * (i / W.itczScaleDeg);
-    expect(s.fitness).toBeCloseTo(fitnessV3, 12);
+    expect(s.fitnessV3).toBeCloseTo(fitnessV3, 12);
+
+    // v4(2026-08-16 以降、探索が最大化する量)。v3 との差は 2 点だけ:
+    //   ゲートが離散(合格件数)から連続(面積割合の和)へ
+    //   年降水の分布形の項が加わった
+    const gateShare = gates.reduce((acc, g) => acc + g.share, 0);
+    const fitnessV4 =
+      fitnessV3 - 1.1 * s.gates + 1.1 * gateShare - W.wPrecipQuantile * f.precipQuantileLogErr;
+    expect(s.fitness).toBeCloseTo(fitnessV4, 12);
+    expect(s.gateShare).toBeCloseTo(gateShare, 12);
+    expect(s.precipQuantileLogErr).toBe(f.precipQuantileLogErr);
+    // 連続部分(版をまたいで比べられる唯一の量)がゲート項を含まないこと
+    expect(s.continuousV3).toBeCloseTo(fitnessV3 - 1.1 * s.gates, 12);
+  });
+
+  it('ゲートの被覆(連続版)は 0〜1 で、合否と整合する', () => {
+    const gates = scoreRegionGates(result);
+    for (const g of gates) {
+      expect(g.share).toBeGreaterThanOrEqual(0);
+      expect(g.share).toBeLessThanOrEqual(1);
+    }
+    // 大分類ゲートは「過半」で合格。被覆はセル数基準の合否と概ね一致するはずで、
+    // **合格しているのに被覆が 0** なら連続化の配線を間違えている
+    for (const g of gates) {
+      if (g.pass) expect(g.share).toBeGreaterThan(0);
+    }
+  });
+
+  it('降水の分位が単調で、分布形の誤差が有限である', () => {
+    const f = fieldScore(result);
+    expect(f.precipQuantiles.length).toBe(8);
+    for (let i = 1; i < f.precipQuantiles.length; i++) {
+      // 分位なので分位点・モデル値・観測値のいずれも単調非減少
+      expect(f.precipQuantiles[i]![0]).toBeGreaterThan(f.precipQuantiles[i - 1]![0]);
+      expect(f.precipQuantiles[i]![1]).toBeGreaterThanOrEqual(f.precipQuantiles[i - 1]![1]);
+      expect(f.precipQuantiles[i]![2]).toBeGreaterThanOrEqual(f.precipQuantiles[i - 1]![2]);
+    }
+    expect(Number.isFinite(f.precipQuantileLogErr)).toBe(true);
+    expect(f.precipQuantileLogErr).toBeGreaterThanOrEqual(0);
   });
 
   it('合成結果の成績が退化していない(比較が意味を持つ)', () => {

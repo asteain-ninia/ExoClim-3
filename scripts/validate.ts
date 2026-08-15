@@ -240,6 +240,16 @@ async function main(): Promise<void> {
       obsSdDriestMm: round2(f.obsSdPrecipDriestMm),
       obsSdWettestMm: round2(f.obsSdPrecipWettestMm),
       logCorrelation: Math.round(f.logCorrelation * 1000) / 1000,
+      // ---- 分布の形(2026-08-16 に目的関数 v4 へ入った量)----
+      // 本丸である「乾いた端が作れない」を、これまで**何も測っていなかった**。
+      // 面積重み・南極を除く年降水の分位。[分位%, モデル mm, 観測 mm]
+      quantileLogErr: round2(f.precipQuantileLogErr),
+      quantiles: f.precipQuantiles.map(([q, m, o]) => ({
+        q,
+        modelMm: Math.round(m),
+        obsMm: Math.round(o),
+        ratio: Math.round((100 * (m + 1)) / (o + 1)) / 100,
+      })),
       nonAreaWeighted: scorePrecipitationNonWeighted(result, climObs),
     },
     itcz: {
@@ -904,6 +914,8 @@ function printSummary(report: {
     obsLandMeanMmPerYear: number;
     annualRmseMm: number;
     logCorrelation: number;
+    quantileLogErr: number;
+    quantiles: Array<{ q: number; modelMm: number; obsMm: number; ratio: number }>;
     nonAreaWeighted: ReturnType<typeof scorePrecipitationNonWeighted>;
   };
   itcz: { lineRmseRainWeightedDeg: number };
@@ -928,11 +940,21 @@ function printSummary(report: {
     `降水(面積重み): 陸平均 モデル ${report.precipitation.modelLandMeanMmPerYear}mm vs 観測 ${report.precipitation.obsLandMeanMmPerYear}mm / RMSE ${report.precipitation.annualRmseMm}mm / log相関 ${report.precipitation.logCorrelation}` +
       `(非面積重み診断: RMSE ${report.precipitation.nonAreaWeighted.annualRmseMm}mm / log相関 ${report.precipitation.nonAreaWeighted.logCorrelation})`,
   );
+  console.log(
+    `年降水の分位(面積重み・南極を除く) 平均対数誤差 ${report.precipitation.quantileLogErr}: ` +
+      report.precipitation.quantiles
+        .map((q) => `${q.q}% ${q.modelMm}/${q.obsMm}`)
+        .join('  '),
+  );
   console.log(`ITCZ 線 RMSE(雨量重み): ${report.itcz.lineRmseRainWeightedDeg}°`);
   const passed = report.regionGates.filter((g) => g.pass).length;
-  console.log(`地域ゲート: ${passed} / ${report.regionGates.length} PASS`);
+  const shareSum = report.regionGates.reduce((s, g) => s + g.share, 0);
+  console.log(
+    `地域ゲート: ${passed} / ${report.regionGates.length} PASS` +
+      `(連続版 被覆の和 ${shareSum.toFixed(2)} / ${report.regionGates.length} — 目的関数 v4 が使うのはこちら)`,
+  );
   for (const g of report.regionGates) {
-    console.log(`  ${g.pass ? '✅' : '❌'} ${g.id}: ${g.detail}`);
+    console.log(`  ${g.pass ? '✅' : '❌'} ${g.id} [被覆 ${(100 * g.share).toFixed(0)}%]: ${g.detail}`);
   }
   const ls = report.logStructure;
   console.log('Log 構造観点(モデル vs 観測、報告のみ):');

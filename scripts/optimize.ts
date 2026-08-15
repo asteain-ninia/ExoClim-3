@@ -11,6 +11,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execSync, spawn, type ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import * as readline from 'node:readline';
 import { runPipeline } from '../src/sim/pipeline';
 import { openAccel } from './accel_cli';
@@ -69,6 +70,44 @@ function currentVector(): Record<string, number> {
   const v: Record<string, number> = {};
   for (const [name] of SPACE) v[name] = MODEL_CONSTANTS[name] as number;
   return v;
+}
+
+/**
+ * **較正の来歴の指紋(2026-08-16、外部レビューの指摘を受けて)。**
+ *
+ * 監査(Codex)に「再開時に git commit・目的関数・探索空間・教師データの
+ * 一致確認がなく、古い bestFit をそのまま比較基準にする。コード変更をまたいで
+ * 再開した場合、**異なる目的関数の数値が同じログに混ざり得る**」と指摘された。
+ *
+ * 実害は既に近いところまで来ていた — 2026-08-15 に `westerlyWindMs` を
+ * 探索空間から外したうえで v23 を回している。あのとき較正中に外していたら、
+ * **61 定数の評価と 62 定数の評価が同じログに並んでいた**。
+ *
+ * 指紋に入れるもの:
+ *   - 探索空間(名前・下限・上限の全体)
+ *   - 目的関数と採点のソース(optimize_lib.ts / scoring.ts の中身)
+ *   - git commit
+ * **どれかが変われば別の較正**であり、続きから回してはならない。
+ */
+function calibrationFingerprint(): { space: string; objective: string; git: string } {
+  const hash = (text: string): string =>
+    createHash('sha256').update(text).digest('hex').slice(0, 16);
+  const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+  // **読めなかったら例外にする。** 空文字を返すと指紋が定数になり、
+  // 目的関数が変わっても一致してしまう = 検査が黙って無効化される。
+  // 「壊れたら通す」のが、この監査が指摘した型の事故そのものである
+  const read = (f: string): string => fs.readFileSync(path.join(here, f), 'utf8');
+  let git = 'unknown';
+  try {
+    git = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
+  } catch {
+    /* 架空の値を入れない */
+  }
+  return {
+    space: hash(JSON.stringify(SPACE)),
+    objective: hash(read('optimize_lib.ts') + read('scoring.ts')),
+    git,
+  };
 }
 
 function loadState(): OptState {
@@ -276,11 +315,41 @@ async function main(): Promise<void> {
   // run ごとにチャートのコードへ系列を足し続けない
   if (RUN_NAME) {
     const metaPath = path.join(OUT_DIR, `run_${RUN_NAME}.meta.json`);
+    const fp = calibrationFingerprint();
+    // **続きから回すなら、来歴が一致していなければならない(2026-08-16)。**
+    // 探索空間か目的関数が変わっていれば、それは**別の較正**である。
+    // 混ぜると「異なる目的関数の数値が同じログに並ぶ」(外部レビューの指摘)
+    if (fs.existsSync(metaPath)) {
+      try {
+        const prev = JSON.parse(fs.readFileSync(metaPath, 'utf8')) as {
+          fingerprint?: { space?: string; objective?: string };
+        };
+        const p = prev.fingerprint;
+        if (p && (p.space !== fp.space || p.objective !== fp.objective)) {
+          console.error(
+            [
+              `[較正] **来歴が一致しないので再開を拒否する**(run=${RUN_NAME})`,
+              `  探索空間 ${p.space} → ${fp.space}`,
+              `  目的関数 ${p.objective} → ${fp.objective}`,
+              '  探索空間か目的関数が変わっている。これは別の較正である。',
+              '  続けたいなら --run に新しい名前を付けること。',
+            ].join('\n'),
+          );
+          process.exit(2);
+        }
+        if (!p) {
+          console.warn(
+            `[較正] 警告: run_${RUN_NAME}.meta.json に来歴の指紋が無い` +
+              '(2026-08-16 より前に始めた較正)。一致は確かめられない。',
+          );
+        }
+      } catch {
+        /* メタが壊れているときは黙って進めない — 下で上書きしない */
+      }
+    }
     if (!fs.existsSync(metaPath)) {
-      let gitCommit = 'unknown';
       let gitDirty = true;
       try {
-        gitCommit = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
         gitDirty = execSync('git status --porcelain', { encoding: 'utf8' }).trim().length > 0;
       } catch {
         /* 架空の値を入れない */
@@ -292,8 +361,10 @@ async function main(): Promise<void> {
             runName: RUN_NAME,
             label: RUN_NAME,
             objectiveBasis: 'v2_itcz',
-            gitCommit,
+            gitCommit: fp.git,
             gitDirty,
+            /** 探索空間・目的関数・git の指紋。再開時に照合する */
+            fingerprint: fp,
             startedAt: new Date().toISOString(),
             holdoutFold: HOLDOUT_FOLD ?? null,
           },

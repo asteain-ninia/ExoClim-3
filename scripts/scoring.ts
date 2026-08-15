@@ -212,7 +212,23 @@ export const REGION_GATES: RegionGate[] = [
 
 export interface RegionGateResult {
   id: string;
+  /**
+   * 合否(**セル数**で判定、2026-07 以来の定義のまま凍結)。
+   * 2026-08-16 に目的関数から外したので、以後は報告のみの参考値である。
+   * 面積重みへ直さないのは、過去の全実験記録の「ゲート n/17」と
+   * 比べられなくすることの害のほうが大きいため。判断には `share` を使う。
+   */
   pass: boolean;
+  /**
+   * **期待する気候帯がその地域の陸面積に占める割合**(0〜1、面積重み)。
+   * 2026-08-16 追加。`pass` の離散判定(過半 / 10% 以上)を連続量に直したもの。
+   *
+   * なぜ要るか: 外部監査(2026-08-15)に「ゲートは 50%・10% に離散的な崖を
+   * 持ち、崖を一つ越えただけの解が『改善』として採用される」と指摘された。
+   * 実際 v23 は連続指標が約 −0.031 悪化しているのにゲート +1 で採用されている。
+   * 割合そのものを見れば崖は消え、**近づいたぶんだけ報われる**。
+   */
+  share: number;
   detail: string;
 }
 
@@ -305,9 +321,14 @@ export function scoreRegionGates(result: PipelineResult): RegionGateResult[] {
     const counts = new Map<string, number>();
     const majorCounts = new Array<number>(5).fill(0);
     let total = 0;
+    // 連続版(share)は面積重み。cos(lat) を掛けて数える
+    const wCounts = new Map<string, number>();
+    const wMajor = new Array<number>(5).fill(0);
+    let wTotal = 0;
     for (let row = 0; row < grid.heightCells; row++) {
       const lat = latDegOfRow(grid, row);
       if (lat < g.latMin || lat > g.latMax) continue;
+      const aw = Math.cos((lat * Math.PI) / 180);
       for (let col = 0; col < grid.widthCells; col++) {
         const lon = -180 + (col + 0.5) * grid.resolutionDeg;
         if (lon < g.lonMin || lon > g.lonMax) continue;
@@ -316,10 +337,15 @@ export function scoreRegionGates(result: PipelineResult): RegionGateResult[] {
         const id = result.koppen.classId[i] ?? 0;
         if (id === 0) continue;
         total++;
+        wTotal += aw;
         const sym = KOPPEN_CLASSES[id] ?? '?';
         counts.set(sym, (counts.get(sym) ?? 0) + 1);
+        wCounts.set(sym, (wCounts.get(sym) ?? 0) + aw);
         const mj = majorClassOf(id);
-        if (mj >= 0) majorCounts[mj] = (majorCounts[mj] ?? 0) + 1;
+        if (mj >= 0) {
+          majorCounts[mj] = (majorCounts[mj] ?? 0) + 1;
+          wMajor[mj] = (wMajor[mj] ?? 0) + aw;
+        }
       }
     }
     const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
@@ -327,20 +353,25 @@ export function scoreRegionGates(result: PipelineResult): RegionGateResult[] {
       .map(([s, c]) => `${s} ${Math.round((c / Math.max(1, total)) * 100)}%`)
       .join(', ');
     let pass = false;
+    let share = 0;
     if (total === 0) {
       pass = false;
     } else if (g.mode === 'major') {
       const majorIdx = 'ABCDE'.indexOf(g.expect);
       pass = (majorCounts[majorIdx] ?? 0) / total > 0.5;
+      share = (wMajor[majorIdx] ?? 0) / Math.max(1e-9, wTotal);
     } else {
       let matched = 0;
+      let wMatched = 0;
       for (const [sym, c] of counts.entries()) if (sym.startsWith(g.expect)) matched += c;
+      for (const [sym, c] of wCounts.entries()) if (sym.startsWith(g.expect)) wMatched += c;
       pass = matched / total >= 0.1;
+      share = wMatched / Math.max(1e-9, wTotal);
     }
     // **失敗の由来を併記する。** 記号だけでは降水と気温のどちらを直せばよいか
     // 分からず、名前(rainshadow など)に引きずられて誤った場所を掘ることになる
     const comp = gateComponents(result, g, getClimObs());
-    gates.push({ id: g.id, pass, detail: comp ? `${detail} ${comp}` : detail });
+    gates.push({ id: g.id, pass, share, detail: comp ? `${detail} ${comp}` : detail });
   }
   return gates;
 }
@@ -473,7 +504,53 @@ export interface FieldScore {
   obsSdPrecipMm: number;
   obsSdPrecipDriestMm: number;
   obsSdPrecipWettestMm: number;
+  /**
+   * **年降水の分布形の誤差**(2026-08-16 追加、面積重み・南極を除く)。
+   *
+   * なぜ要るか: 2026-08-15 に測って分かった本丸は「**乾いた端が作れない**」
+   * ことだった(1% 分位がモデル 64mm 対 観測 9mm)。ところが目的関数は
+   * RMSE と平均しか見ておらず、**分布の形をまったく測っていなかった**。
+   * 最も乾いたセルを 7 倍も湿らせていても、成績には表れない。
+   *
+   * 定義: 分位 {1,5,10,25,50,75,90,99}% で `|log((Pm+ε)/(Po+ε))|` の平均、ε=1mm。
+   * 対数なので「乾いた端で 7 倍」と「湿った端で 7 倍」が同じ重みになる。
+   *
+   * **ε の訂正(同日)**: 事前登録では ε=10mm としたが、実測すると
+   * 観測の 1% 分位は **9mm/年**で、**ε のほうが大きかった**。
+   * 「砂漠の年降水より十分小さい」と書いたのは誤りで、
+   * 7 倍のずれ(64 対 9)が 3.9 倍に圧縮され、**測りたい対象そのものを
+   * 潰していた**。ε は 0 割り回避のための数値上の配慮であって
+   * 評価の強さを決める量ではないので、1mm へ直す。重み 3 は据え置く。
+   *
+   * 南極を除くのは、観測もモデルも一律 EF で成績に出ないのに
+   * セル数の 28.3% を占め、分位を買い占めるため
+   * (`docs/診断_枯渇しているのは南極だけ_2026-08-15.md`)。
+   */
+  precipQuantileLogErr: number;
+  /** 上の内訳(報告用)。[分位%, モデル mm, 観測 mm] */
+  precipQuantiles: Array<[number, number, number]>;
 }
+
+/** 面積重みつき分位(pairs は [値, 重み]) */
+function weightedQuantile(sorted: Array<[number, number]>, total: number, p: number): number {
+  let acc = 0;
+  for (const [v, w] of sorted) {
+    acc += w;
+    if (acc >= p * total) return v;
+  }
+  return sorted[sorted.length - 1]?.[0] ?? 0;
+}
+
+/** 分布形を測る分位(%)。事前登録 2026-08-16 で凍結 */
+export const PRECIP_QUANTILES = [1, 5, 10, 25, 50, 75, 90, 99] as const;
+
+/**
+ * 分位の対数誤差の 0 割り回避項(mm/年)。
+ * **1mm。** 事前登録時は 10mm としたが、観測の 1% 分位が 9mm/年なので
+ * ε のほうが大きく、乾いた端のずれを 7 倍から 3.9 倍へ圧縮していた
+ * (2026-08-16 に実測して同日訂正)。
+ */
+export const PRECIP_QUANTILE_EPS_MM = 1;
 
 /**
  * 観測(暦月、1 月始まり)とモデル(北半球冬至起点)の月の原点の差。
@@ -546,6 +623,9 @@ export function fieldScore(
   let oW = 0;
   let oW2 = 0;
   let wObs = 0;
+  // 年降水の分布形(南極を除く。[年降水 mm, 面積重み])
+  const qModel: Array<[number, number]> = [];
+  const qObs: Array<[number, number]> = [];
   // 面積重み付き log 相関の積算
   let cw = 0,
     cx = 0,
@@ -687,6 +767,11 @@ export function fieldScore(
         oW2 += w * obsWet * obsWet;
         pModelSum += (w * pSum) / n;
         pObsSum += w * pObs;
+        // 分布形のため、南極を除いて (年降水, 面積重み) を溜める
+        if (lat > -60) {
+          qModel.push([pSum / n, w]);
+          qObs.push([pObs, w]);
+        }
         const lx = Math.log1p(pObs);
         const ly = Math.log1p(pSum / n);
         cw += w;
@@ -706,7 +791,22 @@ export function fieldScore(
     const mean = sum / wt;
     return Math.max(1e-6, Math.sqrt(Math.max(0, sum2 / wt - mean * mean)));
   };
+  // ---- 年降水の分布形(2026-08-16)----
+  qModel.sort((a, b) => a[0] - b[0]);
+  qObs.sort((a, b) => a[0] - b[0]);
+  const qTotal = qModel.reduce((s, [, w]) => s + w, 0);
+  const precipQuantiles: Array<[number, number, number]> = [];
+  let qErrSum = 0;
+  for (const p of PRECIP_QUANTILES) {
+    const vm = weightedQuantile(qModel, qTotal, p / 100);
+    const vo = weightedQuantile(qObs, qTotal, p / 100);
+    precipQuantiles.push([p, vm, vo]);
+    qErrSum += Math.abs(Math.log((vm + PRECIP_QUANTILE_EPS_MM) / (vo + PRECIP_QUANTILE_EPS_MM)));
+  }
+
   return {
+    precipQuantileLogErr: qErrSum / PRECIP_QUANTILES.length,
+    precipQuantiles,
     tempRmseC: Math.sqrt(se / Math.max(1e-9, wsum)),
     tempJanRmseC: Math.sqrt(seJan / Math.max(1e-9, wsum)),
     tempJulRmseC: Math.sqrt(seJul / Math.max(1e-9, wsum)),
