@@ -109,7 +109,14 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['subtropicalCellEastBoost', 0.3, 0.9],
   ['subpolarWinterLowHpa', 3, 7],
   ['tradeWindMs', 5, 7.5],
-  ['westerlyWindMs', 6.5, 9],
+  // **段 38(2026-08-15): westerlyWindMs を探索空間から外した。**
+  // 較正はこの定数を範囲の**下端 6.5 に張り付かせていた**(目的関数が
+  // 「均す」方向を報酬にしているため。
+  //  docs/診断_較正が探索空間の端に張り付いている_2026-08-15.md)。
+  // だが偏西風は**中位の陸を湿らせられる唯一の手**であり(段 32)、
+  // 9.0 にすると中位の分位が 468 → 501 へ動く。
+  // 探索空間に残すと較正が 6.5 へ戻すので、**9.0 に固定して他を最適化する**。
+  // ['westerlyWindMs', 6.5, 9],
 ];
 
 /**

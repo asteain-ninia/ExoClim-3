@@ -435,7 +435,7 @@ export const MODEL_CONSTANTS = {
   // ---- Step 4 気流 (docs/spec/04_気流.md) ----
   /** 貿易風・偏西風・極東風の基準風速(m/s) */
   tradeWindMs: 6.72,
-  westerlyWindMs: 6.5,
+  westerlyWindMs: 9,
   polarEasterlyMs: 3,
   /** 気圧勾配風の結合係数(m/s per hPa/1000km): 回転成分と横断成分 */
   pressureGradientRotationalMsPerHpaPerMm: 3.2,
@@ -541,7 +541,7 @@ export const MODEL_CONSTANTS = {
    * 注: 沈降緩和と同時に効かせると二重増幅で結合反復が不安定化しうるため、
    * 単独実験で分離して測る(2026-08-01 の外部レビュー指摘)
    */
-  convergenceLiftBoost: 0,
+  convergenceLiftBoost: 0.5,
   /** 湿潤収束による亜熱帯沈降の実効抑制の緩和(0〜1、0 = 無効) */
   convergenceSubsidenceRelief: 0,
   /**
