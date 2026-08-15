@@ -105,6 +105,77 @@ function majorShares(r: PipelineResult): number[] {
   return acc.map((a) => (total > 0 ? (a / total) * 100 : 0));
 }
 
+/**
+ * **物理として向きが決まっている応答の 3 点**(2026-08-16 追加)。
+ *
+ * なぜ要るか: 外部監査に「較正がすべて地球で行われたので、地球はモデルにとって
+ * 恒等変換であり、**地球以外での破綻が成績に現れない**」と指摘された。
+ * このハーネスはもともと保存型と非保存の応答を比べるために作られており、
+ * 「観測が無いので正解も無い」として判定を置いていない。
+ *
+ * だが**向きだけなら物理で決まる量**がある。ここで測るのはその 3 つ:
+ *
+ *   傾斜 ↑ → 陸の気温年較差 ↑     (日射の季節配分が強まる。ほぼ定義から従う)
+ *   自転 ↓ → 乾燥帯の中心緯度 ↑   (ハドレー循環が広がる = Held-Hou)
+ *   気圧 ↑ → 赤道と極の気温差 ↓   (大気の熱輸送が効率的になる)
+ *
+ * **判定はまだ置かない。** まず測って、モデルがこの向きを持っているかを見る。
+ * 持っていなければ、それは「地球に合わせ込んだ結果、応答が死んだ」ことの
+ * 証拠になる(たとえば風帯が緯度で決め打ちなら、自転を変えても乾燥帯は動かない)。
+ */
+function responseMetrics(r: PipelineResult): {
+  landTempRangeC: number;
+  aridCenterLatDeg: number;
+  equatorPoleDiffC: number;
+} {
+  const grid = r.context.grid;
+  const land = r.context.terrain.landMask;
+  const cls = r.koppen.classId;
+  let wRange = 0;
+  let eRange = 0;
+  let wArid = 0;
+  let eArid = 0;
+  let wEq = 0;
+  let eEq = 0;
+  let wPo = 0;
+  let ePo = 0;
+  for (let row = 0; row < grid.heightCells; row++) {
+    const lat = 90 - (row + 0.5) * grid.resolutionDeg;
+    const w = Math.cos((lat * Math.PI) / 180);
+    for (let col = 0; col < grid.widthCells; col++) {
+      const i = row * grid.widthCells + col;
+      const t = r.temperature.annualMeanC[i] ?? 0;
+      if (Math.abs(lat) < 10) {
+        wEq += w;
+        eEq += w * t;
+      } else if (Math.abs(lat) > 70) {
+        wPo += w;
+        ePo += w * t;
+      }
+      if (!land[i]) continue;
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+        const v = r.temperature.monthlyTemperatureC[m]?.[i] ?? 0;
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+      wRange += w;
+      eRange += w * (hi - lo);
+      // 乾燥帯(B 群)の中心緯度。**半球をまたぐので絶対値で測る**
+      if (majorClassOf((cls[i] ?? 0) as KoppenClassId) === 2) {
+        wArid += w;
+        eArid += w * Math.abs(lat);
+      }
+    }
+  }
+  return {
+    landTempRangeC: wRange > 0 ? eRange / wRange : 0,
+    aridCenterLatDeg: wArid > 0 ? eArid / wArid : NaN,
+    equatorPoleDiffC: (wEq > 0 ? eEq / wEq : 0) - (wPo > 0 ? ePo / wPo : 0),
+  };
+}
+
 /** 全球平均気温(°C)。年平均 */
 function meanTempC(r: PipelineResult): number {
   const grid = r.context.grid;
@@ -136,7 +207,8 @@ async function main(): Promise<void> {
   const K = MODEL_CONSTANTS as unknown as Record<string, number>;
 
   console.log(
-    '軸                  型      閉包     気温    陸降水    A     B     C     D     E',
+    '軸                  型      閉包     気温    陸降水    A     B     C     D     E' +
+      '  |年較差  乾燥帯緯度  赤道-極',
   );
   for (const name of names) {
     const levels = AXES[name];
@@ -160,12 +232,16 @@ async function main(): Promise<void> {
         const E = means(r, src);
         const closure = E.global > 0 ? ((P.global - E.global) / E.global) * 100 : NaN;
         const sh = majorShares(r);
+        const rm = responseMetrics(r);
         const conv = mode === 1 && CONSERVATIVE_STATS.nonConverged > 0 ? '×' : ' ';
         console.log(
           `${lv.label.padEnd(18)} ${mode === 0 ? '非保存' : '保存 '}${conv} ` +
             `${closure.toFixed(1).padStart(6)}%  ${meanTempC(r).toFixed(2).padStart(6)}  ` +
             `${Math.round(P.land).toString().padStart(5)}   ` +
-            sh.map((x) => x.toFixed(1).padStart(5)).join(' '),
+            sh.map((x) => x.toFixed(1).padStart(5)).join(' ') +
+            `  |${rm.landTempRangeC.toFixed(1).padStart(6)}` +
+            `  ${Number.isNaN(rm.aridCenterLatDeg) ? '   —  ' : rm.aridCenterLatDeg.toFixed(1).padStart(6)}` +
+            `      ${rm.equatorPoleDiffC.toFixed(1).padStart(5)}`,
         );
       }
     }
@@ -173,7 +249,10 @@ async function main(): Promise<void> {
   console.log(
     '\n読み方: **正解は無い**(観測が無い)。見るのは 2 つ。\n' +
       '  1. 保存型で軸を振っても閉包が 0 のままか（0 でなければ実装が地球に依存している）\n' +
-      '  2. 保存型と非保存で応答の**符号**が違う軸はどれか（違えば片方は架空惑星で嘘をつく）',
+      '  2. 保存型と非保存で応答の**符号**が違う軸はどれか（違えば片方は架空惑星で嘘をつく）\n' +
+      '\n**向きだけは物理で決まる 3 点**(2026-08-16 追加、判定はまだ置かない):\n' +
+      '  傾斜 ↑ → 陸の年較差 ↑ / 自転 ↓ → 乾燥帯の中心緯度 ↑ / 気圧 ↑ → 赤道-極の差 ↓\n' +
+      '  この向きを持たない軸があれば、地球に合わせ込んだ結果その応答が死んでいる。',
   );
 }
 
