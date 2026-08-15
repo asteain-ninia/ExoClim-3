@@ -40,27 +40,48 @@ const K = MODEL_CONSTANTS as unknown as Record<string, number>;
 const START = Number(process.argv[2] ?? 0);
 const COUNT = Number(process.argv[3] ?? SPACE.length);
 
-/** 降水場の要約(ビット一致の判定用) */
-function digest(monthly: Float32Array[]): string {
-  let s = 0;
-  let mx = 0;
+/**
+ * 基準との差を**空間の再配分まで見える形**で測る(2026-08-15 訂正)。
+ *
+ * **初版は「合計と最大値を小数 6 桁に丸めた文字列」を比べていた。**
+ * 外部レビュー(Codex)に「空間再配分が起きても合計と最大が同じなら
+ * 『死んでいる』と誤判定できる。ビット一致という呼称は過大」と指摘され、
+ * **そのとおりだったので直した**。
+ *
+ * いまは全セル全月について
+ *   - 最大絶対差(mm/月)
+ *   - 差が 1e-6 を超えたセル月の割合(= 影響範囲)
+ * を返す。**合計が保たれたまま場所だけ入れ替わっても捕まえられる。**
+ */
+function diffAgainst(base: Float32Array[], cur: Float32Array[]): { maxAbs: number; frac: number } {
+  let maxAbs = 0;
+  let hit = 0;
+  let n = 0;
   for (let m = 0; m < MONTHS_PER_YEAR; m++) {
-    const a = monthly[m];
-    if (!a) continue;
+    const a = base[m];
+    const b = cur[m];
+    if (!a || !b) continue;
     for (let i = 0; i < a.length; i++) {
-      s += a[i] ?? 0;
-      if ((a[i] ?? 0) > mx) mx = a[i] ?? 0;
+      const d = Math.abs((b[i] ?? 0) - (a[i] ?? 0));
+      if (d > maxAbs) maxAbs = d;
+      if (d > 1e-6) hit++;
+      n++;
     }
   }
-  return `${s.toFixed(6)}|${mx.toFixed(6)}`;
+  return { maxAbs, frac: hit / Math.max(1, n) };
+}
+
+/** 月別配列を複製する(基準を保持するため) */
+function clone(monthly: Float32Array[]): Float32Array[] {
+  return monthly.map((a) => a.slice());
 }
 
 async function main(): Promise<void> {
   const base = await runPipeline(P);
-  const baseD = digest(base.precipitation.monthlyPrecipMm);
-  console.log(`基準の降水ダイジェスト: ${baseD}`);
+  const baseP = clone(base.precipitation.monthlyPrecipMm);
+  console.log('基準を採った。以降は**全セル全月の差**で判定する');
   console.log(`2° 格子・EBM 短縮。${SPACE.length} 定数のうち ${START}〜${START + COUNT - 1} を見る\n`);
-  console.log('定数                                  変更     判定');
+  console.log('定数                                  変更        最大差mm  影響%   判定');
 
   const dead: string[] = [];
   for (let k = START; k < Math.min(SPACE.length, START + COUNT); k++) {
@@ -72,13 +93,15 @@ async function main(): Promise<void> {
     const next = cur === 0 ? lo + 0.1 * (hi - lo) : cur * 1.2 > hi ? cur * 0.8 : cur * 1.2;
     K[name] = next;
     const r = await runPipeline(P);
-    const d = digest(r.precipitation.monthlyPrecipMm);
+    const { maxAbs, frac } = diffAgainst(baseP, r.precipitation.monthlyPrecipMm);
     K[name] = cur;
-    const same = d === baseD;
+    // **完全に 0 のときだけ「効いていない」と言う。** 丸めた要約では言わない
+    const same = maxAbs === 0;
     if (same) dead.push(String(name));
     console.log(
       `${String(name).padEnd(36)} ${cur.toPrecision(3)}→${next.toPrecision(3)}` +
-        `  ${same ? '**ビット一致 = 効いていない**' : '効いている'}`,
+        `  ${maxAbs.toExponential(2).padStart(9)} ${(100 * frac).toFixed(2).padStart(7)}` +
+        `  ${same ? '**まったく効いていない**' : '効いている'}`,
     );
   }
 
