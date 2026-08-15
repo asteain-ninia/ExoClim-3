@@ -108,6 +108,24 @@ export interface LevelReport {
    * 事前登録の条件には、それを機械的に読み出す出力を対にすること(教訓 §9)。
    */
   dryTail: { p01: number; p05: number; p50: number; obsP01: number; obsP05: number; obsP50: number };
+  /**
+   * **分布形の誤差**(2026-08-16 に目的関数 v4 へ入った量)。
+   * 年降水の分位 8 点 {1,5,10,25,50,75,90,99}% の平均対数誤差。
+   * `dryTail` は 3 点しか見ないが、こちらは**湿った端まで含めて**測る。
+   * 2026-08-16 に、分布は乾いた端が過剰(7.11 倍)で湿った端が不足(0.89 倍)、
+   * つまり**両端が潰れている**と分かった。片側だけ見ると読み違える。
+   */
+  quantileLogErr: number;
+  /** 分位の内訳 [分位%, モデル mm, 観測 mm] */
+  quantiles: Array<[number, number, number]>;
+  /**
+   * ゲート項を除いた連続部分。**目的関数の版をまたいで比べられる唯一の量**。
+   * 掃引は目的関数の外側で機構を理解するための測定なので、
+   * fitness の絶対値ではなくこちらで比べる。
+   */
+  continuousV3: number;
+  /** 期待する気候帯の面積割合の和(0〜17、連続版ゲート) */
+  gateShare: number;
   /** 輸送の未収束月数 */
   transportNonConverged: number;
   virgaNonConverged: number;
@@ -318,6 +336,10 @@ export async function measureLevel(
     tempRmseC: f.tempRmseC,
     targets: rows,
     dryTail: dryTailOf(r),
+    quantileLogErr: f.precipQuantileLogErr,
+    quantiles: f.precipQuantiles,
+    continuousV3: s.continuousV3,
+    gateShare: s.gateShare,
     transportNonConverged: CONSERVATIVE_STATS.nonConverged,
     virgaNonConverged: CONSERVATIVE_STATS.virgaNonConverged,
     worstResidual: CONSERVATIVE_STATS.worstResidual,
@@ -531,6 +553,11 @@ export function formatLevel(p: LevelReport): string {
     ` 1% ${p.dryTail.p01.toFixed(0).padStart(5)}(観測 ${p.dryTail.obsP01.toFixed(0)})` +
     `  5% ${p.dryTail.p05.toFixed(0).padStart(5)}(観測 ${p.dryTail.obsP05.toFixed(0)})` +
     `  50% ${p.dryTail.p50.toFixed(0).padStart(5)}(観測 ${p.dryTail.obsP50.toFixed(0)})\n` +
+    `       分布形: 平均対数誤差 ${p.quantileLogErr.toFixed(3)}` +
+    `  連続部分 ${p.continuousV3.toFixed(3)}  被覆の和 ${p.gateShare.toFixed(2)}/17\n` +
+    `       分位(モデル/観測): ` +
+    p.quantiles.map(([q, m, o]) => `${q}% ${m.toFixed(0)}/${o.toFixed(0)}`).join('  ') +
+    '\n' +
     `       収束: 輸送 未収束 ${String(p.transportNonConverged).padStart(3)} 件` +
     ` / virga 未収束 ${String(p.virgaNonConverged).padStart(3)} 件` +
     ` / 最悪残差 ${p.worstResidual.toExponential(2)}` +

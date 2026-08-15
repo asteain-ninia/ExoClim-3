@@ -20,7 +20,7 @@ import {
   type ClimateFixture,
   type KoppenFixture,
 } from '../../../scripts/scoring';
-import { OBJECTIVE_V3, evaluateResult } from '../../../scripts/optimize_lib';
+import { OBJECTIVE_V4, evaluateResult } from '../../../scripts/optimize_lib';
 import { syntheticResult } from '../../helpers/syntheticResult';
 
 describe('空間ホールドアウト分割(P1-1)', () => {
@@ -122,7 +122,7 @@ describe('空間ホールドアウト分割(P1-1)', () => {
         (0.02 * Math.abs(fld.landMeanModelMm - fld.landMeanObsMm)) / 10;
       expect(s.fitnessV2).toBeCloseTo(expectedV2, 10); // ITCZ 項なしで厳密に再構成できる
       // v3(探索が最大化する量)。季節指標を含み、観測のばらつきで無次元化する
-      const W = OBJECTIVE_V3;
+      const W = OBJECTIVE_V4;
       const expectedV3 =
         k.majorPct +
         1.1 * gateTerm +
@@ -135,7 +135,17 @@ describe('空間ホールドアウト分割(P1-1)', () => {
         W.wPrecipWettest * (fld.precipWettestRmseMm / fld.obsSdPrecipWettestMm) -
         W.wLandMean *
           (Math.abs(fld.landMeanModelMm - fld.landMeanObsMm) / Math.max(1e-9, fld.landMeanObsMm));
-      expect(s.fitness).toBeCloseTo(expectedV3, 10); // ITCZ 項なしで厳密に再構成できる
+      expect(s.fitnessV3).toBeCloseTo(expectedV3, 10); // ITCZ 項なしで厳密に再構成できる
+
+      // v4(2026-08-16 以降、探索が最大化する量)。保留較正でも
+      // **連続版のゲート項が訓練対象数で正規化される**ことを確かめる
+      // (絶対数のままだと fold ごとに項の最大値が揃わない — P1-3 と同じ理由)
+      const gateShareTerm =
+        (17 * training.reduce((acc, g) => acc + g.share, 0)) / training.length;
+      const expectedV4 =
+        expectedV3 - 1.1 * gateTerm + 1.1 * gateShareTerm - W.wPrecipQuantile * fld.precipQuantileLogErr;
+      expect(s.fitness).toBeCloseTo(expectedV4, 10);
+      expect(s.gateShare).toBeCloseTo(gateShareTerm, 10);
       expect(s.itczRmse).toBeGreaterThan(0); // 参考値としての報告は継続
     }
   });
