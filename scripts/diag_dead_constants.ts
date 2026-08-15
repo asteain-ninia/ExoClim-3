@@ -1,4 +1,4 @@
-// 診断: **62 定数のうち、保存型で実際に答えを動かすのはどれか。**
+// 診断: **探索空間の定数のうち、保存型で実際に答えを動かすのはどれか。**
 //
 // なぜ要るか(2026-08-15):
 //   `stormMoistureSupply` を掃引したら全水準ビット一致した。実装を読むと
@@ -22,8 +22,14 @@
 //   ただし「2° では効かないが 1° では効く」機構(格子依存)は見逃すので、
 //   **候補が出たら 1° で確かめること。**
 //
-// 実行: npx tsx scripts/diag_dead_constants.ts [開始index] [件数]
+// 実行: npx tsx scripts/diag_dead_constants.ts [開始index] [件数] [--write]
+//   `--write` で `docs/探索空間の生存性.json` を更新する(全定数を測ったときだけ)。
+//   その記録を tests/unit/scripts/space_liveness.test.ts が照合し、
+//   **探索空間を変えたら測り直すまでテストが落ちる**。
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 import { runPipeline } from '../src/sim/pipeline';
 import { EARTH_PARAMS } from '../src/domain/planetParams';
 import { MODEL_CONSTANTS } from '../src/sim/constants';
@@ -37,8 +43,12 @@ EBM_FULL_CAPACITY_YEARS.years = 2;
 
 const P = { ...EARTH_PARAMS, gridResolutionDeg: 2 };
 const K = MODEL_CONSTANTS as unknown as Record<string, number>;
-const START = Number(process.argv[2] ?? 0);
-const COUNT = Number(process.argv[3] ?? SPACE.length);
+// **フラグを位置引数として食わない。** `--write` を第 3 引数に渡すと
+// Number('--write') = NaN になり、ループが 1 回も回らないまま
+// 「効いていない候補 0 件」と報告してしまう(2026-08-16 に気づいて直した)
+const POSITIONAL = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const START = Number(POSITIONAL[0] ?? 0);
+const COUNT = Number(POSITIONAL[1] ?? SPACE.length);
 
 /**
  * 基準との差を**空間の再配分まで見える形**で測る(2026-08-15 訂正)。
@@ -107,6 +117,40 @@ async function main(): Promise<void> {
 
   console.log(`\n効いていない候補: ${dead.length} 件`);
   for (const n of dead) console.log(`  ${n}`);
+
+  // ---- 生存性の記録を書き出す(2026-08-16、外部監査の推奨への対処)----
+  // 監査は「SPACE 全定数の動的生存性を CI で検査せよ」と言うが、
+  // 全定数 × 2 方向のパイプライン実行は CI に載る重さではない(61 定数で実測 56 分)。
+  //
+  // **代わりに「探索空間を変えたら測り直しを強制する」形にする。**
+  // ここで探索空間の指紋と生存性の結果を JSON に固定し、テスト
+  // (tests/unit/scripts/space_liveness.test.ts)が
+  // 「いまの SPACE の指紋が記録と一致するか」だけを照合する。
+  // 定数を足す・範囲を変える・削るとテストが落ち、測り直しを促す。
+  // 検査そのものは一瞬だが、**測っていない探索空間で較正を始められなくなる**。
+  if (process.argv.includes('--write')) {
+    const end = Math.min(SPACE.length, START + COUNT);
+    if (START !== 0 || end !== SPACE.length) {
+      console.log('\n(部分実行なので生存性の記録は更新しない)');
+    } else {
+      const out = {
+        measuredAt: new Date().toISOString(),
+        note:
+          '探索空間の動的生存性。`npx tsx scripts/diag_dead_constants.ts --write` で更新する。' +
+          'SPACE を変えたら測り直すこと(tests/unit/scripts/space_liveness.test.ts が照合する)',
+        gridResolutionDeg: P.gridResolutionDeg,
+        spaceFingerprint: createHash('sha256')
+          .update(JSON.stringify(SPACE))
+          .digest('hex')
+          .slice(0, 16),
+        constantCount: SPACE.length,
+        dead,
+      };
+      const dest = path.join(process.cwd(), 'docs', '探索空間の生存性.json');
+      fs.writeFileSync(dest, JSON.stringify(out, null, 2) + '\n', 'utf8');
+      console.log(`\n生存性の記録を書いた: ${dest}`);
+    }
+  }
   console.log(
     '\n注意: 2° で判定しているので、**格子依存で 2° だけ効かない機構**は\n' +
       '  見逃す。候補が出たら 1° で確かめること。\n' +
