@@ -69,6 +69,13 @@ export function computeAirflow(
         }
         /** 1 で従来の東風、0 で無風、−1 で同じ強さの西風 */
         const zonalRev = 1 - 2 * crossEq;
+        /**
+         * 子午面成分の反転(段 41)。1 で従来の赤道向き、−1 で同じ強さの極向き。
+         * **既定 0 のとき meridRev = 1 で従来とビット一致。**
+         * 実物の夏のモンスーンは下層で海から大陸へ吹き込む極向きの流れで、
+         * 水を運ぶのは子午面成分のほうである(2026-08-16 の診断)
+         */
+        const meridRev = 1 - 2 * crossEq * K.monsoonMeridionalReversal;
 
         let bu = 0;
         let bv = 0;
@@ -76,11 +83,11 @@ export function computeAirflow(
           // 北半球貿易風(北東風 → 西南西へ吹く: u 負、v は ITCZ へ向かい負)
           const t = bandWeight(lat, itczLat, ridgeN);
           bu = -K.tradeWindMs * t * dirSign * zonalRev;
-          bv = -K.tradeWindMs * 0.4 * t;
+          bv = -K.tradeWindMs * 0.4 * t * meridRev;
         } else if (lat <= itczLat && lat >= ridgeS) {
           const t = bandWeight(lat, itczLat, ridgeS);
           bu = -K.tradeWindMs * t * dirSign * zonalRev;
-          bv = K.tradeWindMs * 0.4 * t;
+          bv = K.tradeWindMs * 0.4 * t * meridRev;
         } else if (lat > ridgeN && lat <= pfN) {
           const t = bandWeight(lat, ridgeN, pfN);
           bu = K.westerlyWindMs * t * dirSign;
