@@ -70,12 +70,41 @@ export function computeAirflow(
         /** 1 で従来の東風、0 で無風、−1 で同じ強さの西風 */
         const zonalRev = 1 - 2 * crossEq;
         /**
-         * 子午面成分の反転(段 41)。1 で従来の赤道向き、−1 で同じ強さの極向き。
+         * 子午面成分の反転(段 41、2026-08-16 に配線を訂正)。
+         * 1 で従来の赤道向き、−1 で同じ強さの極向き。
          * **既定 0 のとき meridRev = 1 で従来とビット一致。**
+         *
          * 実物の夏のモンスーンは下層で海から大陸へ吹き込む極向きの流れで、
-         * 水を運ぶのは子午面成分のほうである(2026-08-16 の診断)
+         * 水を運ぶのは子午面成分のほうである(2026-08-16 の診断)。
+         *
+         * > **初版の配線は誤りだった**(同日、掃引が全水準ビット一致して発覚)。
+         * > `crossEq` を駆動源にしたが、これは `crossEquatorialMonsoon`(既定 0)を
+         * > 含むので**常に 0** であり、何を掛けても効かなかった。
+         * > さらに `crossEq` が効く範囲は「赤道と ITCZ の間」で、
+         * > ITCZ は夏でも 20〜25° までしか北上しないため
+         * > **狙った亜熱帯(30〜37°)には最初から届かない**。
+         *
+         * 訂正後の駆動源は **ITCZ の変位そのもの**(`disp`)と
+         * **夏半球であること**の 2 つ。ITCZ が夏半球へ北上しているとき、
+         * その極側の貿易風帯で子午面成分を弱め、やがて反転させる。
+         * これは実物のモンスーン循環(ITCZ の北上に伴い下層が海から大陸へ吹く)
+         * の素直な表現であり、緯度も経度も名指ししない。
          */
-        const meridRev = 1 - 2 * crossEq * K.monsoonMeridionalReversal;
+        let monsoonMerid = 0;
+        if (K.monsoonMeridionalReversal > 0 && itczLat !== 0 && lat * itczLat > 0) {
+          // ITCZ が赤道からどれだけ離れたか(0〜1)。夏の強さそのもの
+          const disp = Math.min(1, Math.abs(itczLat) / K.crossEquatorialRefDeg);
+          // ITCZ の**極側**で効く。ITCZ 線上で最大、リッジで 0 へ落ちる
+          const ridge = lat >= 0 ? ridgeN : ridgeS;
+          const span = Math.abs(ridge) - Math.abs(itczLat);
+          if (span > 1) {
+            const away = (Math.abs(lat) - Math.abs(itczLat)) / span; // ITCZ 0 → リッジ 1
+            if (away >= 0 && away <= 1) {
+              monsoonMerid = K.monsoonMeridionalReversal * disp * (1 - away);
+            }
+          }
+        }
+        const meridRev = 1 - 2 * monsoonMerid;
 
         let bu = 0;
         let bv = 0;
