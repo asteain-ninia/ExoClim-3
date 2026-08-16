@@ -25,6 +25,23 @@ import { latDegOfRow } from '../src/domain/grid';
 import { MAJOR, majorClassOf } from '../src/domain/koppen';
 import { getKoppenObs } from './scoring';
 import { openAccel } from './accel_cli';
+import { MODEL_CONSTANTS } from '../src/sim/constants';
+
+// 定数の上書き(組の実験用)。sweep_lib と同じ書式:
+//   DIAG_OVERRIDE='subtropicalCellWestSummerBoost=0.6'
+// **知らない名前は例外にする** — 綴り違いが「効かない実験」になるため
+if (process.env['DIAG_OVERRIDE']) {
+  const K0 = MODEL_CONSTANTS as unknown as Record<string, number>;
+  for (const part of process.env['DIAG_OVERRIDE'].split(',')) {
+    const [name, raw] = part.split('=');
+    const key = (name ?? '').trim();
+    const v = Number(raw);
+    if (!key || !(key in K0)) throw new Error(`DIAG_OVERRIDE: 未知の定数 '${key}'`);
+    if (!Number.isFinite(v)) throw new Error(`DIAG_OVERRIDE: '${key}' の値が数値でない`);
+    K0[key] = v;
+    console.log(`[上書き] ${key} = ${v}`);
+  }
+}
 
 interface Cell {
   w: number;
