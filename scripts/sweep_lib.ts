@@ -55,6 +55,33 @@ if (process.env['STORM_DIFFUSION_BOOST']) {
   STORM_DIFFUSION.boost = Number(process.env['STORM_DIFFUSION_BOOST']);
 }
 
+/**
+ * **掃引の全水準に共通で掛ける定数の上書き**(2026-08-16)。
+ * `SWEEP_OVERRIDE='westerlyWindMs=12,tradeWindMs=7'` のように指定する。
+ *
+ * なぜ要るか: 2026-08-16 に「渦拡散は移流が担うべき輸送を代行していた」と
+ * 分かった。単独の掃引では**組で打つ手**を測れない
+ * (拡散を下げると内陸が乾くので、下げたぶんを移流で補えるかを見たい)。
+ *
+ * **ここはトップレベルなのでワーカー側でも実行される。**
+ * 親だけに掛けると答えが変わる — 2026-08-15 に `EBM_SOLVER.adaptive` を
+ * ワーカーへ写し間違えて v3 が 0.024〜0.057 ずれた前科がある。
+ */
+export const SWEEP_OVERRIDES: Array<[string, number]> = [];
+if (process.env['SWEEP_OVERRIDE']) {
+  const K0 = MODEL_CONSTANTS as unknown as Record<string, number>;
+  for (const part of process.env['SWEEP_OVERRIDE'].split(',')) {
+    const [name, raw] = part.split('=');
+    const key = (name ?? '').trim();
+    const v = Number(raw);
+    // **知らない名前を黙って無視しない。** 綴り違いが「効かない実験」になる
+    if (!key || !(key in K0)) throw new Error(`SWEEP_OVERRIDE: 未知の定数 '${key}'`);
+    if (!Number.isFinite(v)) throw new Error(`SWEEP_OVERRIDE: '${key}' の値が数値でない`);
+    K0[key] = v;
+    SWEEP_OVERRIDES.push([key, v]);
+  }
+}
+
 /** 既定で見る地域。未達 3 件 + 対照 2 件 */
 export const DEFAULT_TARGETS = [
   'india_tropical',
@@ -508,8 +535,14 @@ export async function runSweep(
 
 /** 表の見出し(水準を印字する前に 1 回) */
 export function formatHeader(key: string, base: number, targets: string[]): string {
+  // 上書きがあるなら**必ず表に出す**。どの条件で測った表かが後から分からないと、
+  // 別条件の記録どうしを取り違える(2026-08-16 に古い出力を読んで報告した前科)
+  const ov =
+    SWEEP_OVERRIDES.length > 0
+      ? `\n**全水準に共通の上書き**: ${SWEEP_OVERRIDES.map(([k, v]) => `${k}=${v}`).join(', ')}`
+      : '';
   return (
-    `レバー: ${key}（現在値 ${base}）\n` +
+    `レバー: ${key}（現在値 ${base}）${ov}\n` +
     '\n値      v3      大分類  詳細   ゲート 位相  気温RMSE ' +
     targets.map((t) => t.split('_')[0]?.padStart(7) ?? '').join(' ') +
     '\n                                                     ' +
