@@ -542,8 +542,20 @@ export async function computeTemperature(
   // ---- 拡散・移流係数 ----
   const dPhi = (cg.resolutionDeg * Math.PI) / 180;
   const radiusRatio = 6371 / params.body.radiusKm;
+  // 大気質量への依存(段 40)。南北熱輸送は大気の質量流量に比例する成分を持つ。
+  // **地球(1 bar)では厳密に 1 になるので、地球の結果は 1 ビットも動かない。**
+  // これが無いと気圧を 4 倍にしても赤道-極差が 0.1°C しか動かなかった
+  // (2026-08-16 の惑星応答の初測定)
+  const pressureFactor = Math.pow(
+    Math.max(0.05, atm.surfacePressureBar),
+    K.heatTransportPressureExponent,
+  );
   const dBase =
-    K.diffusionWm2PerK * radiusRatio * radiusRatio * Math.max(0.1, atm.heatTransportStrength);
+    K.diffusionWm2PerK *
+    radiusRatio *
+    radiusRatio *
+    pressureFactor *
+    Math.max(0.1, atm.heatTransportStrength);
   const cosCenter = new Float64Array(CH);
   const metricZonal = new Float64Array(CH);
   for (let row = 0; row < CH; row++) {
