@@ -70,6 +70,32 @@ export function computeWindBelt(
     }
   }
 
+  // 海セルから「自転方向の逆(西)」の陸までの距離(km)。eastLandKm の鏡像。
+  // 夏の高気圧の西方張り出し(段 39)に使う: 海盆の西縁 = 大陸東岸の沖。
+  // 逆行自転では dir が反転するので東西が自動的に入れ替わる(地理中立)
+  const westLandKm = new Float32Array(grid.cellCount).fill(1e9);
+  if (K.subtropicalCellWestSummerBoost > 0) {
+    const dir = params.body.rotationDirection >= 0 ? 1 : -1;
+    for (let row = 0; row < H; row++) {
+      const dxKm = Math.max(20, cellWidthKm(grid, row, params.body.radiusKm));
+      const maxScan = Math.min(W - 1, Math.max(10, Math.round(6000 / dxKm)));
+      for (let col = 0; col < W; col++) {
+        const i = row * W + col;
+        if (terrain.landMask[i]) {
+          westLandKm[i] = 0;
+          continue;
+        }
+        for (let d = 1; d <= maxScan; d++) {
+          const j = row * W + ((((col - dir * d) % W) + W) % W);
+          if (terrain.landMask[j]) {
+            westLandKm[i] = d * dxKm;
+            break;
+          }
+        }
+      }
+    }
+  }
+
   // 経度列ごとの熱帯陸割合(|lat|≤30°)。陸上のモンスーントラフは海上 ITCZ より深い
   const troughLandFrac = new Float64Array(W);
   {
@@ -144,6 +170,14 @@ export function computeWindBelt(
         } else {
           const cell = Math.exp(-(eastLandKm[i] ?? 1e9) / K.subtropicalCellEastScaleKm);
           oceanW = 0.8 + K.subtropicalCellEastBoost * cell;
+          // 夏の西方張り出し(段 39): 海盆の西縁(大陸東岸の沖)を夏にだけ強める。
+          // その西縁の回転成分が沿岸の陸に**極向きの湿潤流**を作る。
+          // 既定 0 = この項は厳密に 0 で従来とビット一致
+          if (K.subtropicalCellWestSummerBoost > 0) {
+            const summerW = Math.max(0, Math.min(1.2, seasonalHeating));
+            const wcell = Math.exp(-(westLandKm[i] ?? 1e9) / K.subtropicalCellWestScaleKm);
+            oceanW += K.subtropicalCellWestSummerBoost * wcell * summerW;
+          }
         }
         v += K.subtropicalHighHpa * oceanW * (Math.exp(-dN * dN) + Math.exp(-dS * dS));
         // 大陸の熱的高低気圧: 夏に低圧・冬に高圧(内陸ほど強い)
