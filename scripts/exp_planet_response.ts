@@ -32,7 +32,7 @@ import { MODEL_CONSTANTS } from '../src/sim/constants';
 import { CONSERVATIVE_STATS } from '../src/sim/step06_precipitation';
 import { computeOceanEvaporation } from '../src/sim/evaporation';
 import { MONTHS_PER_YEAR } from '../src/domain/insolation';
-import { majorClassOf, type KoppenClassId } from '../src/domain/koppen';
+import { MAJOR, majorClassOf, type KoppenClassId } from '../src/domain/koppen';
 import { openAccel } from './accel_cli';
 import type { PipelineResult } from '../src/sim/types';
 
@@ -99,7 +99,11 @@ function majorShares(r: PipelineResult): number[] {
       const i = row * grid.widthCells + col;
       if (!land[i]) continue;
       const mj = majorClassOf((cls[i] ?? 0) as KoppenClassId);
-      if (mj >= 1 && mj <= 5) { acc[mj - 1] = (acc[mj - 1] ?? 0) + w; total += w; }
+      // **majorClassOf は 0=A 1=B 2=C 3=D 4=E**(-1 = 海/未分類)。
+      // 初版は 1 起点と誤解して mj>=1 で数えており、**A を集計から除外したうえ
+      // 全列が 1 つずれていた**(2026-08-16 に発覚。過去の出力の A〜E 列は
+      // 実際には B〜E + 常に 0 の列である)
+      if (mj >= 0 && mj <= 4) { acc[mj] = (acc[mj] ?? 0) + w; total += w; }
     }
   }
   return acc.map((a) => (total > 0 ? (a / total) * 100 : 0));
@@ -163,7 +167,8 @@ function responseMetrics(r: PipelineResult): {
       wRange += w;
       eRange += w * (hi - lo);
       // 乾燥帯(B 群)の中心緯度。**半球をまたぐので絶対値で測る**
-      if (majorClassOf((cls[i] ?? 0) as KoppenClassId) === 2) {
+      // B 乾燥 = 1(0 起点。2 は C — 今朝の追加時に取り違えていた)
+      if (majorClassOf((cls[i] ?? 0) as KoppenClassId) === MAJOR.B) {
         wArid += w;
         eArid += w * Math.abs(lat);
       }

@@ -22,7 +22,7 @@ import { runPipelineWithPrecipDiag } from '../src/sim/pipeline';
 import { EARTH_PARAMS } from '../src/domain/planetParams';
 
 import { latDegOfRow } from '../src/domain/grid';
-import { majorClassOf } from '../src/domain/koppen';
+import { MAJOR, majorClassOf } from '../src/domain/koppen';
 import { getKoppenObs } from './scoring';
 import { openAccel } from './accel_cli';
 
@@ -76,7 +76,7 @@ async function main(): Promise<void> {
       if (obsId === 0) continue;
       const obsMajor = majorClassOf(obsId); // 0=A 1=B 2=C 3=D 4=E
       const modMajor = majorClassOf(r.koppen.classId[i] ?? 0);
-      if (obsMajor !== 2) continue; // 観測 C だけを見る
+      if (obsMajor !== MAJOR.C) continue; // 観測 C だけを見る
       let vSum = 0;
       let wSum = 0;
       let fSum = 0;
@@ -102,8 +102,8 @@ async function main(): Promise<void> {
         g: gSum / n,
         pSummer: pSum,
       };
-      if (modMajor === 1) cToB.push(cell);
-      else if (modMajor === 2) cOk.push(cell);
+      if (modMajor === MAJOR.B) cToB.push(cell);
+      else if (modMajor === MAJOR.C) cOk.push(cell);
     }
   }
 

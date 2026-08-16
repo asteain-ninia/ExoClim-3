@@ -84,6 +84,15 @@ export function majorClassOf(classId: KoppenClassId): number {
 
 export const MAJOR_CLASS_NAMES = ['A 熱帯', 'B 乾燥', 'C 温帯', 'D 冷帯', 'E 寒帯'] as const;
 
+/**
+ * 大分類の名前付き定数(2026-08-16)。
+ * `majorClassOf` の返り値は **0 起点**(0=A … 4=E、-1=海/未分類)だが、
+ * 同じ日に 2 つの別々のスクリプトが「1 起点」と誤解して書かれた
+ * (diag_c_to_b 初版は D↔C を測り、exp_planet_response は A を集計から
+ * 除外して全列を 1 つずらしていた)。**裸の数字での比較を書かず、必ずこれを使う。**
+ */
+export const MAJOR = { A: 0, B: 1, C: 2, D: 3, E: 4 } as const;
+
 export function classIdOf(symbol: string): KoppenClassId {
   const idx = (KOPPEN_CLASSES as readonly string[]).indexOf(symbol);
   return idx >= 0 ? idx : 0;

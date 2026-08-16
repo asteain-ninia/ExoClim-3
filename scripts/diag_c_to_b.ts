@@ -29,7 +29,7 @@ import { runPipeline } from '../src/sim/pipeline';
 import { EARTH_PARAMS } from '../src/domain/planetParams';
 import { MONTHS_PER_YEAR } from '../src/domain/insolation';
 import { latDegOfRow } from '../src/domain/grid';
-import { KOPPEN_CLASSES, majorClassOf } from '../src/domain/koppen';
+import { KOPPEN_CLASSES, MAJOR, majorClassOf } from '../src/domain/koppen';
 import { getClimObs, getKoppenObs } from './scoring';
 import { openAccel } from './accel_cli';
 
@@ -174,12 +174,9 @@ async function main(): Promise<void> {
         shortfall: th - pModel,
         obsSym: KOPPEN_CLASSES[obsId] ?? '?',
       };
-      // 大分類: **0=A 1=B 2=C 3=D 4=E**
-      const C = 2;
-      const B = 1;
-      if (obsMajor === C && modMajor === B) cToB.push(cell);
-      else if (obsMajor === B && modMajor === C) bToC.push(cell);
-      else if (obsMajor === C && modMajor === C) cToC.push(cell);
+      if (obsMajor === MAJOR.C && modMajor === MAJOR.B) cToB.push(cell);
+      else if (obsMajor === MAJOR.B && modMajor === MAJOR.C) bToC.push(cell);
+      else if (obsMajor === MAJOR.C && modMajor === MAJOR.C) cToC.push(cell);
     }
   }
 
