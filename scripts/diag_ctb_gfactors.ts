@@ -26,6 +26,8 @@ interface Cell {
   subs: number; other: number; crh: number; g: number;
   /** 夏半年だけの同上 */
   sItcz: number; sFrontal: number; sConv: number; sSubs: number; sOther: number; sG: number;
+  /** 沈降の内訳(夏半年、残存率)。どのゲートが閉じているか */
+  sDescW: number; sItczProt: number; sEastRel: number; sConvRel: number;
 }
 
 function wmean(cells: Cell[], f: (c: Cell) => number): number {
@@ -69,6 +71,7 @@ async function main(): Promise<void> {
       const acc = {
         block: 0, itcz: 0, frontal: 0, conv: 0, oro: 0, subs: 0, other: 0, crh: 0, g: 0,
         sItcz: 0, sFrontal: 0, sConv: 0, sSubs: 0, sOther: 0, sG: 0,
+        sDescW: 0, sItczProt: 0, sEastRel: 0, sConvRel: 0,
       };
       for (let m = 0; m < MONTHS_PER_YEAR; m++) {
         acc.block += d.upwindBlock[m]?.[i] ?? 1;
@@ -87,6 +90,10 @@ async function main(): Promise<void> {
           acc.sSubs += d.subsidenceResidual[m]?.[i] ?? 1;
           acc.sOther += d.liftOther[m]?.[i] ?? 1;
           acc.sG += d.condRateG[m]?.[i] ?? 0;
+          acc.sDescW += d.subsDescW[m]?.[i] ?? 0;
+          acc.sItczProt += d.subsItczProt[m]?.[i] ?? 1;
+          acc.sEastRel += d.subsEastRel[m]?.[i] ?? 1;
+          acc.sConvRel += d.subsConvRel[m]?.[i] ?? 1;
         }
       }
       const M = MONTHS_PER_YEAR;
@@ -97,6 +104,8 @@ async function main(): Promise<void> {
         other: acc.other / M, crh: acc.crh / M, g: acc.g / M,
         sItcz: acc.sItcz / 6, sFrontal: acc.sFrontal / 6, sConv: acc.sConv / 6,
         sSubs: acc.sSubs / 6, sOther: acc.sOther / 6, sG: acc.sG / 6,
+        sDescW: acc.sDescW / 6, sItczProt: acc.sItczProt / 6,
+        sEastRel: acc.sEastRel / 6, sConvRel: acc.sConvRel / 6,
       });
     }
   }
@@ -131,6 +140,20 @@ async function main(): Promise<void> {
     ['—— 実効 G', (c) => c.sG],
   ];
   for (const [name, f] of srows) {
+    const a = wmean(ctb, f);
+    const b = wmean(cok, f);
+    console.log(`${name.padEnd(30)} ${a.toFixed(3).padStart(7)} ${b.toFixed(3).padStart(8)}  ${(a / Math.max(1e-9, b)).toFixed(2).padStart(8)}`);
+  }
+  console.log('');
+  console.log('【夏半年】沈降の内訳(残存率。1 = その経路の抑制なし)');
+  console.log('経路                            C→B      C→C     比');
+  const drows: Array<[string, (c: Cell) => number]> = [
+    ['帯の重なり descW(1=帯の芯)', (c) => c.sDescW],
+    ['ITCZ 防護後の残り', (c) => c.sItczProt],
+    ['東岸緩和後の残り', (c) => c.sEastRel],
+    ['収束緩和後の残り', (c) => c.sConvRel],
+  ];
+  for (const [name, f] of drows) {
     const a = wmean(ctb, f);
     const b = wmean(cok, f);
     console.log(`${name.padEnd(30)} ${a.toFixed(3).padStart(7)} ${b.toFixed(3).padStart(8)}  ${(a / Math.max(1e-9, b)).toFixed(2).padStart(8)}`);

@@ -319,6 +319,11 @@ export interface PrecipDiagnostics {
   convergenceIndex: Float32Array[];
   /** 亜熱帯沈降の残存倍率(1 = 抑制なし) */
   subsidenceResidual: Float32Array[];
+  /** 沈降の内訳(残存率 0〜1、2026-08-17)。subs ≈ (1−descW 抑制)×各緩和 */
+  subsDescW: Float32Array[];
+  subsItczProt: Float32Array[];
+  subsEastRel: Float32Array[];
+  subsConvRel: Float32Array[];
   /** 風上山脈の遮蔽倍率(1 = 遮蔽なし) */
   upwindBlock: Float32Array[];
   /** その他の倍率の積(ストーム帯持上げ × 寒流沿岸 × 高温湿潤対流) */
@@ -856,6 +861,16 @@ interface PrecipDiagMonth {
   liftConvergence: Float32Array;
   convergenceIndex: Float32Array;
   subsidenceResidual: Float32Array;
+  /**
+   * 沈降の内訳(2026-08-17 追加)。subs = descW × itczProt × eastRel × convRel。
+   * C→B 誤分類の主因が沈降残存(0.48 対 0.71)と判明し、緩和 3 経路の
+   * どのゲートが閉じているかを分解するために出す。すべて 0〜1 の残存率
+   * (1 = その経路の抑制なし)
+   */
+  subsDescW: Float32Array;
+  subsItczProt: Float32Array;
+  subsEastRel: Float32Array;
+  subsConvRel: Float32Array;
   upwindBlock: Float32Array;
   liftOther: Float32Array;
   crhSuppression: Float32Array;
@@ -875,6 +890,10 @@ function newDiagMonth(n: number): PrecipDiagMonth {
     liftConvergence: new Float32Array(n),
     convergenceIndex: new Float32Array(n),
     subsidenceResidual: new Float32Array(n),
+    subsDescW: new Float32Array(n),
+    subsItczProt: new Float32Array(n),
+    subsEastRel: new Float32Array(n),
+    subsConvRel: new Float32Array(n),
     upwindBlock: new Float32Array(n),
     liftOther: new Float32Array(n),
     crhSuppression: new Float32Array(n),
@@ -909,6 +928,10 @@ export async function computePrecipitation(
         liftConvergence: [],
         convergenceIndex: [],
         subsidenceResidual: [],
+        subsDescW: [],
+        subsItczProt: [],
+        subsEastRel: [],
+        subsConvRel: [],
         upwindBlock: [],
         liftOther: [],
         crhSuppression: [],
@@ -1771,6 +1794,10 @@ export async function computePrecipitation(
       diag.liftConvergence.push(diagM.liftConvergence);
       diag.convergenceIndex.push(diagM.convergenceIndex);
       diag.subsidenceResidual.push(diagM.subsidenceResidual);
+      diag.subsDescW.push(diagM.subsDescW);
+      diag.subsItczProt.push(diagM.subsItczProt);
+      diag.subsEastRel.push(diagM.subsEastRel);
+      diag.subsConvRel.push(diagM.subsConvRel);
       diag.upwindBlock.push(diagM.upwindBlock);
       diag.liftOther.push(diagM.liftOther);
       diag.crhSuppression.push(diagM.crhSuppression);
@@ -2127,6 +2154,46 @@ function convertToPrecip(
   const decl = ctx.insolation.monthlyDeclinationDeg[month] ?? 0;
   /** 供給の規格化基準(20°C の飽和水蒸気圧)。供給を作った側と同じ基準にする */
   const q0Local = saturationVaporPressureHpa(20);
+  // 段 44: モンスーントラフの R-H 位相(経度列ごと)。既定 0 では計算ごと飛ぶ
+  let troughPhase: Float64Array | null = null;
+  const troughItczByCol = itcz.monthlyCenterLatDegByCol[month];
+  if (K.monsoonTroughSubsRelief > 0) {
+    const centers = troughItczByCol;
+    const rowN30 = Math.max(0, Math.round((90 - 30) / grid.resolutionDeg) - 1);
+    const rowS30 = Math.min(H - 1, Math.round((90 + 30) / grid.resolutionDeg));
+    const hCol = new Float64Array(W);
+    for (let col = 0; col < W; col++) {
+      let n = 0;
+      let nl = 0;
+      for (let row = rowN30; row <= rowS30; row++) {
+        n++;
+        if (terrain.landMask[row * W + col]) nl++;
+      }
+      const frac = n > 0 ? nl / n : 0;
+      const itczLat = centers?.[col] ?? 0;
+      const disp = Math.min(1, Math.abs(itczLat) / 15);
+      hCol[col] = disp * Math.min(1, frac / 0.3);
+    }
+    // 東方(自転方向)5〜60° の加熱の距離減衰つき最大。
+    // R-H: 加熱の西側に下降 → 東に強い加熱があるほど緩和を許さない
+    const degPerCol = 360 / W;
+    const dirE = params.body.rotationDirection >= 0 ? 1 : -1;
+    const minD = Math.max(1, Math.round(5 / degPerCol));
+    const maxD = Math.round(60 / degPerCol);
+    troughPhase = new Float64Array(W);
+    for (let col = 0; col < W; col++) {
+      let eastH = 0;
+      for (let dd = minD; dd <= maxD; dd++) {
+        const c2 = (((col + dirE * dd) % W) + W) % W;
+        eastH = Math.max(eastH, (hCol[c2] ?? 0) * Math.exp(-(dd * degPerCol) / 30));
+      }
+      troughPhase[col] = Math.min(
+        1,
+        Math.max(0, ((hCol[col] ?? 0) - eastH) / K.monsoonHeatContrastNorm),
+      );
+    }
+  }
+
   // R4: 水蒸気フラックス収束(供給場と地表風から。診断時は生の場も返す)
   const convergenceOn =
     K.convergenceLiftBoost > 0 || K.convergenceSubsidenceRelief > 0 || diagM !== undefined;
@@ -2307,11 +2374,22 @@ function convertToPrecip(
         Math.exp(-(eastOceanKm[i] ?? 1e9) / K.eastCoastSubsidenceDecayKm);
       // R4: 湿潤収束があるところは沈降の実効抑制が連続的に弱まる
       // (緯度帯だけで全開にしない — 中国東部・ラプラタの梅雨/暖湿流)
+      // 段 44: モンスーントラフの置換(陸のみ・夏半球側 = ITCZ と同符号の緯度)。
+      // 湿りに依存しない(乾いた平衡の罠を避ける)。位相は R-H 規則で
+      // アラビア型(東に強い加熱)を自動的に除外する
+      let troughRelief = 0;
+      if (troughPhase && terrain.landMask[i]) {
+        const itczHere = troughItczByCol?.[col] ?? 0;
+        if (lat * itczHere > 0) {
+          troughRelief = K.monsoonTroughSubsRelief * (troughPhase[col] ?? 0);
+        }
+      }
       const subs =
         descW *
         (1 - K.subsidenceItczProtection * gI * marineW) *
         (1 - eastRelief) *
-        (1 - K.convergenceSubsidenceRelief * wetConv);
+        (1 - K.convergenceSubsidenceRelief * wetConv) *
+        (1 - troughRelief);
       const subsResidualF = 1 - K.subsidenceSuppression * subs;
       lift *= subsResidualF;
 
@@ -2491,6 +2569,10 @@ function convertToPrecip(
         diagM.liftConvergence[i] = liftConvF;
         diagM.convergenceIndex[i] = convIndex?.[i] ?? 0;
         diagM.subsidenceResidual[i] = subsResidualF;
+        diagM.subsDescW[i] = descW;
+        diagM.subsItczProt[i] = 1 - K.subsidenceItczProtection * gI * marineW;
+        diagM.subsEastRel[i] = 1 - eastRelief;
+        diagM.subsConvRel[i] = 1 - K.convergenceSubsidenceRelief * wetConv;
         diagM.upwindBlock[i] = blockFactor;
         diagM.liftOther[i] = liftStormF * coldCoastF * warmHumidF;
         diagM.crhSuppression[i] = crhFactor;
