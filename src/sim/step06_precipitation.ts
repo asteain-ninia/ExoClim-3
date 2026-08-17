@@ -2171,8 +2171,10 @@ function convertToPrecip(
       }
       const frac = n > 0 ? nl / n : 0;
       const itczLat = centers?.[col] ?? 0;
-      const disp = Math.min(1, Math.abs(itczLat) / 15);
-      hCol[col] = disp * Math.min(1, frac / 0.3);
+      // 定数を参照する(15 と 0.3 のリテラル複製は隠しパラメータ —
+      // 2026-08-17 の棚卸しで指摘され即日修正。値は同じなのでビット一致)
+      const disp = Math.min(1, Math.abs(itczLat) / K.crossEquatorialRefDeg);
+      hCol[col] = disp * Math.min(1, frac / K.monsoonLandFracRef);
     }
     // 東方(自転方向)5〜60° の加熱の距離減衰つき最大。
     // R-H: 加熱の西側に下降 → 東に強い加熱があるほど緩和を許さない
