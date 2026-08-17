@@ -22,6 +22,24 @@ export function computeAirflow(
   const monthlyWindU: Float32Array[] = [];
   const monthlyWindV: Float32Array[] = [];
 
+  // 段 42: モンスーン反転の経度ゲート(経度列の熱帯陸割合)。
+  // step02 の troughLandFrac と同じ定義。**係数 0 のときは計算ごと飛ばす**
+  // (既定でビット一致を保つ + 費用ゼロ)
+  const colLandFrac = new Float64Array(W);
+  if (K.monsoonMeridionalReversal > 0) {
+    const rowN30 = Math.max(0, Math.round((90 - 30) / grid.resolutionDeg) - 1);
+    const rowS30 = Math.min(H - 1, Math.round((90 + 30) / grid.resolutionDeg));
+    for (let col = 0; col < W; col++) {
+      let n = 0;
+      let nLand = 0;
+      for (let row = rowN30; row <= rowS30; row++) {
+        n++;
+        if (terrain.landMask[row * W + col]) nLand++;
+      }
+      colLandFrac[col] = n > 0 ? nLand / n : 0;
+    }
+  }
+
   for (let m = 0; m < MONTHS_PER_YEAR; m++) {
     const u = new Float32Array(grid.cellCount);
     const v = new Float32Array(grid.cellCount);
@@ -100,7 +118,10 @@ export function computeAirflow(
           if (span > 1) {
             const away = (Math.abs(lat) - Math.abs(itczLat)) / span; // ITCZ 0 → リッジ 1
             if (away >= 0 && away <= 1) {
-              monsoonMerid = K.monsoonMeridionalReversal * disp * (1 - away);
+              // 経度ゲート(段 42): 熱帯陸割合が ref 以上の経度で全開、海だけなら 0。
+              // 段 41 はこれが無く、海上にも極向き流を立てて分布を均してしまった
+              const gate = Math.min(1, (colLandFrac[col] ?? 0) / K.monsoonLandFracRef);
+              monsoonMerid = K.monsoonMeridionalReversal * disp * (1 - away) * gate;
             }
           }
         }

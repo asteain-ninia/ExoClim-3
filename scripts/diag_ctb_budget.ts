@@ -27,6 +27,20 @@ import { openAccel } from './accel_cli';
 
 const K = MODEL_CONSTANTS as unknown as Record<string, number>;
 
+// 定数の上書き(組の実験用、diag_monsoon_inflow と同じ書式)。
+// DIAG_OVERRIDE='monsoonMeridionalReversal=1.0' のように指定。未知の名前は例外
+if (process.env['DIAG_OVERRIDE']) {
+  for (const part of process.env['DIAG_OVERRIDE'].split(',')) {
+    const [name, raw] = part.split('=');
+    const key = (name ?? '').trim();
+    const v = Number(raw);
+    if (!key || !(key in K)) throw new Error(`DIAG_OVERRIDE: 未知の定数 '${key}'`);
+    if (!Number.isFinite(v)) throw new Error(`DIAG_OVERRIDE: '${key}' の値が数値でない`);
+    K[key] = v;
+    console.log(`[上書き] ${key} = ${v}`);
+  }
+}
+
 interface Acc { w: number; adv: number; dif: number; src: number; p: number }
 const emptyAcc = (): Acc => ({ w: 0, adv: 0, dif: 0, src: 0, p: 0 });
 
