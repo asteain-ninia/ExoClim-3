@@ -32,7 +32,13 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['moistureDecayLandKm', 1100, 2400],
   ['landRecyclingStrength', 0.2, 0.6],
   ['itczLiftBoost', 1.4, 3.2],
-  ['itczLiftSupplyNorm', 0.6, 1.8],
+  // **範囲を [0.6, 1.8] → [0.5, 18] へ引き直した(2026-08-17)。**
+  // 旧範囲は保存型移行後の供給の分布(5% 分位 0.63 / 中央 7.4 / 95% 19.3)の
+  // 下に沈み、ゲートが 95% 常時飽和 = 死んだ範囲だった。掃引で norm 12 のとき
+  // 連続部分 +0.09・分位誤差 −0.022・1% 分位 −7mm を確認(インド −0.05 の
+  // トレードオフあり — その匙加減を較正に委ねる)。
+  // docs/実験記録_ゲート復活と幾何の掃引_2026-08-17.md
+  ['itczLiftSupplyNorm', 0.5, 18],
   ['stormTrackBoost', 0.4, 1.1],
   ['stormTrackWinterBoost', 0.15, 0.6],
   ['orographicBoost', 0.9, 2.5],
@@ -41,7 +47,13 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['subsidenceItczProtection', 0.6, 0.95],
   ['eastCoastSubsidenceRelief', 0.5, 0.95],
   ['eastCoastSubsidenceDecayKm', 600, 1300],
-  ['eastReliefSupplyNorm', 0.4, 1.2],
+  // **外した(2026-08-17)**: 範囲 [0.4, 1.2] は供給の分布の下に沈んで
+  // ゲートが 96% 常時飽和(死んだ範囲)。掃引で生かすと東岸緩和が絞られて
+  // **本丸の C→B 地域(米南東・東アジア)が乾く**逆効果と確認。
+  // 現行値 0.51(実質ゲート無効)で固定する。アラビア防護の再設計は
+  // モンスーンコンベア(段 45)側の課題。
+  // docs/実験記録_ゲート復活と幾何の掃引_2026-08-17.md
+  // ['eastReliefSupplyNorm', 0.4, 1.2],
   // **外した(2026-08-17、段 6 の移行漏れ)**: ストーム供給の 3 定数は
   // `stormSupply` が非保存の降水式にしか入っておらず、保存型の源にも凝結率にも
   // 現れないため、**答えに 1 ビットも影響しない**。2026-08-16 の生存性診断で
