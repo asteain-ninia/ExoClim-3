@@ -26,7 +26,7 @@ export function computeAirflow(
   // step02 の troughLandFrac と同じ定義。**係数 0 のときは計算ごと飛ばす**
   // (既定でビット一致を保つ + 費用ゼロ)
   const colLandFrac = new Float64Array(W);
-  if (K.monsoonMeridionalReversal > 0) {
+  if (K.monsoonMeridionalReversal > 0 || K.monsoonInflowMs > 0) {
     const rowN30 = Math.max(0, Math.round((90 - 30) / grid.resolutionDeg) - 1);
     const rowS30 = Math.min(H - 1, Math.round((90 + 30) / grid.resolutionDeg));
     for (let col = 0; col < W; col++) {
@@ -152,6 +152,25 @@ export function computeAirflow(
         } else if (lat < pfS) {
           bu = -K.polarEasterlyMs * dirSign;
           bv = K.polarEasterlyMs * 0.3;
+        }
+
+        // --- モンスーン吸い込み流(段 43)。既定 0 = この節は丸ごと飛ぶ ---
+        if (K.monsoonInflowMs > 0 && itczLat !== 0 && lat * itczLat > 0) {
+          const halfW = Math.max(1, itcz.halfWidthDeg);
+          const ridge = lat >= 0 ? ridgeN : Math.abs(ridgeS);
+          const aLat = Math.abs(lat);
+          const aItcz = Math.abs(itczLat);
+          // ITCZ の雨帯を守る: 影響圏の内側では 0、そこから halfWidth でランプ
+          const ramp = Math.min(1, Math.max(0, (aLat - aItcz) / halfW));
+          // リッジの先は halfWidth で減衰(偏西風帯まで持ち込まない)
+          const fade = aLat <= ridge ? 1 : Math.max(0, 1 - (aLat - ridge) / halfW);
+          if (ramp > 0 && fade > 0) {
+            const disp = Math.min(1, aItcz / K.crossEquatorialRefDeg);
+            const gate = Math.min(1, (colLandFrac[col] ?? 0) / K.monsoonLandFracRef);
+            const add = K.monsoonInflowMs * disp * ramp * fade * gate;
+            // 極向き(夏半球で赤道から陸へ)。海セルにも通す = fetch
+            bv += (lat >= 0 ? 1 : -1) * add;
+          }
         }
 
         // --- 気圧勾配風(合計を上限で抑える。実地表風は 5〜10 m/s 級) ---
