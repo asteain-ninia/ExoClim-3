@@ -4,7 +4,7 @@
 // 合成結果で担保する。パイプラインは実行しない(採点層だけの検査)。
 
 import { describe, expect, it } from 'vitest';
-import { OBJECTIVE_V4, evaluateResult } from '../../../scripts/optimize_lib';
+import { OBJECTIVE_V5, evaluateResult } from '../../../scripts/optimize_lib';
 import {
   fieldScore,
   itczLineRmse,
@@ -48,7 +48,7 @@ describe('採点の一元化(P0-3)', () => {
     expect(s.fitnessV2).toBeCloseTo(fitnessV2, 12);
 
     // v3(2026-08-02〜08-16 に探索が最大化していた量。以後は併記のみ)
-    const W = OBJECTIVE_V4;
+    const W = OBJECTIVE_V5;
     const fitnessV3 =
       k.majorPct +
       1.1 * s.gates +
@@ -69,7 +69,12 @@ describe('採点の一元化(P0-3)', () => {
     const gateShare = gates.reduce((acc, g) => acc + g.share, 0);
     const fitnessV4 =
       fitnessV3 - 1.1 * s.gates + 1.1 * gateShare - W.wPrecipQuantile * f.precipQuantileLogErr;
-    expect(s.fitness).toBeCloseTo(fitnessV4, 12);
+    expect(s.fitnessV4).toBeCloseTo(fitnessV4, 12);
+
+    // v5(2026-08-17 以降、探索が最大化する量)。v4 との差は降水位相の 1 項だけ
+    const fitnessV5 = fitnessV4 - W.wPrecipPhase * (f.precipPhaseRmseDays / W.phaseScaleDays);
+    expect(s.fitness).toBeCloseTo(fitnessV5, 12);
+    expect(s.precipPhaseRmseDays).toBe(f.precipPhaseRmseDays);
     expect(s.gateShare).toBeCloseTo(gateShare, 12);
     expect(s.precipQuantileLogErr).toBe(f.precipQuantileLogErr);
     // 連続部分(版をまたいで比べられる唯一の量)がゲート項を含まないこと

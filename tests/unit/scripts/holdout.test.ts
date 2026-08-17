@@ -20,7 +20,7 @@ import {
   type ClimateFixture,
   type KoppenFixture,
 } from '../../../scripts/scoring';
-import { OBJECTIVE_V4, evaluateResult } from '../../../scripts/optimize_lib';
+import { OBJECTIVE_V5, evaluateResult } from '../../../scripts/optimize_lib';
 import { syntheticResult } from '../../helpers/syntheticResult';
 
 describe('空間ホールドアウト分割(P1-1)', () => {
@@ -122,7 +122,7 @@ describe('空間ホールドアウト分割(P1-1)', () => {
         (0.02 * Math.abs(fld.landMeanModelMm - fld.landMeanObsMm)) / 10;
       expect(s.fitnessV2).toBeCloseTo(expectedV2, 10); // ITCZ 項なしで厳密に再構成できる
       // v3(探索が最大化する量)。季節指標を含み、観測のばらつきで無次元化する
-      const W = OBJECTIVE_V4;
+      const W = OBJECTIVE_V5;
       const expectedV3 =
         k.majorPct +
         1.1 * gateTerm +
@@ -144,7 +144,10 @@ describe('空間ホールドアウト分割(P1-1)', () => {
         (17 * training.reduce((acc, g) => acc + g.share, 0)) / training.length;
       const expectedV4 =
         expectedV3 - 1.1 * gateTerm + 1.1 * gateShareTerm - W.wPrecipQuantile * fld.precipQuantileLogErr;
-      expect(s.fitness).toBeCloseTo(expectedV4, 10);
+      expect(s.fitnessV4).toBeCloseTo(expectedV4, 10);
+      const expectedV5 =
+        expectedV4 - W.wPrecipPhase * (fld.precipPhaseRmseDays / W.phaseScaleDays);
+      expect(s.fitness).toBeCloseTo(expectedV5, 10);
       expect(s.gateShare).toBeCloseTo(gateShareTerm, 10);
       expect(s.itczRmse).toBeGreaterThan(0); // 参考値としての報告は継続
     }

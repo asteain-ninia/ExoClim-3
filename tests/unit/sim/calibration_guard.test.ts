@@ -27,6 +27,8 @@ function scores(sound: boolean, failures: string[] = []): Scores {
     fitness: 85.235,
     fitnessV2: 80,
     fitnessV3: 84,
+    fitnessV4: 83,
+    precipPhaseRmseDays: 71,
     continuousV3: 70,
     gateShare: 7.5,
     precipQuantileLogErr: 0.6,

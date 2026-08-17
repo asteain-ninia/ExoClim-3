@@ -175,6 +175,8 @@ export interface Scores {
   fitness: number;
   /** 旧目的関数(2026-08-02〜08-16)。併記のため計算し続ける */
   fitnessV3: number;
+  /** 旧目的関数(2026-08-16〜08-17)。併記のため計算し続ける */
+  fitnessV4: number;
   /**
    * ゲート項を除いた連続部分(v3 と v4 で共通)。
    * **目的関数の版をまたいで比べられる唯一の量**なので、
@@ -203,6 +205,8 @@ export interface Scores {
   /** 健全でないときの理由(ログに残して原因を追えるようにする) */
   numericalFailures: string[];
   // ---- 季節指標(v3 で目的関数に入った量。報告にも使う)----
+  /** 降水の季節位相のずれ(日)。v5 で目的関数に入った(2026-08-17) */
+  precipPhaseRmseDays: number;
   tempRangeRmse: number;
   tempPhaseRmseDays: number;
   precipDriestRmse: number;
@@ -274,6 +278,22 @@ export const OBJECTIVE_V4 = {
   wPrecipQuantile: 3,
 } as const;
 
+/**
+ * 目的関数 v5(2026-08-17、利用者裁定「物差しを先に」→ 事前登録
+ * docs/事前登録_目的関数v5_降水位相_2026-08-17.md)。
+ *
+ * v4 からの追加は 1 項だけ: **降水の季節位相**(雨季の時期のずれ、日)。
+ * 2026-08-09 の外部レビュー 2 件がそろって指摘し、採点には実装済みだったのに
+ * 目的関数に入っていなかった(現在 71.9 日 ≒ 2.4 か月ずれで無罰。
+ * ケッペンの第 2 文字は雨季の時期で決まるので、最大失点源 C→B と直結)。
+ * 重みと規格化は気温位相と同じ(2 / 30 日)— 対称性だけで決め、
+ * 現状値を見た調整はしない。
+ */
+export const OBJECTIVE_V5 = {
+  ...OBJECTIVE_V4,
+  wPrecipPhase: 2,
+} as const;
+
 // 目的関数 v3(2026-08-02 に事前登録 — 利用者の許可を得て v2 から改訂)。
 // v2 も併記のため計算し続ける。v2 の定義は下記のとおり:
 //   fitnessV2 = 大分類% + 1.1×地域ゲート数 + 0.25×詳細%
@@ -331,7 +351,7 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
 
   // ---- v3(2026-08-02〜2026-08-16 に探索が最大化していた量。以後は併記のみ)----
   // 各誤差を**観測自身の空間ばらつき**で割ってから重みを掛ける。
-  const W = OBJECTIVE_V4;
+  const W = OBJECTIVE_V5;
   /** ゲート項を除いた連続部分。v3 と v4 で共通なので一度だけ組む */
   const continuousV3 =
     k.majorPct +
@@ -349,8 +369,12 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
 
   // ---- v4(探索が最大化する量。2026-08-16 の事前登録)----
   // ゲートを連続化し、年降水の分布形を足した。それ以外は v3 と同一。
-  const fitness =
+  const fitnessV4 =
     continuousV3 + 1.1 * gateShareTerm - W.wPrecipQuantile * f.precipQuantileLogErr;
+
+  // ---- v5(探索が最大化する量。2026-08-17 の事前登録)----
+  // v4 に降水の季節位相を足した。それ以外は v4 と同一。
+  const fitness = fitnessV4 - W.wPrecipPhase * (f.precipPhaseRmseDays / W.phaseScaleDays);
 
   // ---- 数値的健全性(2026-08-14)----
   // `npm run validate` と**同じ凍結済みの関門**を使う。判定の二重定義を作らない。
@@ -376,6 +400,8 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
     fitness,
     fitnessV2,
     fitnessV3,
+    fitnessV4,
+    precipPhaseRmseDays: f.precipPhaseRmseDays,
     /** ゲート項を除いた連続部分。目的関数をまたいで比べられる唯一の量 */
     continuousV3,
     gateShare: gateShareTerm,

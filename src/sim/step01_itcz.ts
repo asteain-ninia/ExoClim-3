@@ -52,7 +52,13 @@ export function computeItcz(ctx: SimContext, hemisOffsetDeg = 0): ItczResult {
       }
     }
     const landFrac = n > 0 ? nLand / n : 0;
-    const elevBoost = 1 + K.itczMonsoonElevBoostPerKm * (n > 0 ? elevSum / n / 1000 : 0);
+    // **分母は陸セル数(2026-08-17 修正)。** elevSum は陸だけを足しているのに
+    // 帯内の全セル数 n で割っていたため、計算されていたのは
+    // 「陸平均標高 × 陸割合」だった。引き寄せの式には既に landFrac が
+    // 掛かっているので、陸割合が 2 乗で効き、陸率の低い経度列ほど
+    // 高所加熱が余分に薄まっていた(物理棚卸し 01 の最重要指摘)。
+    // 係数 itczMonsoonElevBoostPerKm は「陸平均標高」を前提に置かれた値である。
+    const elevBoost = 1 + K.itczMonsoonElevBoostPerKm * (nLand > 0 ? elevSum / nLand / 1000 : 0);
     const highElevKm = highN > 0 ? highElevSum / highN / 1000 : 0;
     const height01 = Math.min(1, Math.max(0, (highElevKm - 1.5) / 2.5));
     const cover01 = Math.min(1, (n > 0 ? highN / n : 0) * 6);

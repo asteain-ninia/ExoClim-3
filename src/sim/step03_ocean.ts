@@ -59,17 +59,42 @@ export function computeOceanCurrent(
   // 周極海峡がある半球では、その最赤道側の緯度より極側で暖流吹送域を抑制する
   // (実物は周極流が環流を剪断するため北大西洋海流型の暖水輸送が成立しない。
   //  2026-07-30 レビュー指摘: これが南半球中緯度 +8°C の主犯の一つ)
-  const channelMinAbsLat: [number, number] = [90, 90]; // [北, 南]
+  // **段 15 の連続化を海流にも適用(2026-08-17)。** step05 は 2026-08-12 に
+  // 二値判定 → 陸割合の線形(channelnessLinear)へ直したが、こちらは二値のまま
+  // 取り残されていた(物理棚卸し 03 の確度高の指摘)。二値だと南米南部の
+  // 細い陸の行(陸割合 1.7〜3.3% < 閾値 4%)が「遮られない海峡」と判定され、
+  // 南半球の chanCap ≈ 39.5°S となって **warmDriftC / coldReturnC が
+  // 南半球で 1 セルも発火していなかった**(実際の遮蔽点はドレーク海峡 ≈ 56°S)。
+  // 連続版: 行ごとの海峡度 channelness = 1 − 陸割合/閾値 を持ち、
+  // 「その緯度より赤道側にある海峡度の最大値」で吹送域を**比例して**弱める。
+  // channelnessLinear = 0(旧二値)のときは従来と厳密に一致させる。
+  const channelMinAbsLat: [number, number] = [90, 90]; // [北, 南](二値経路で使用)
+  /** [半球][row] その緯度より赤道側(自行含む)の海峡度の最大値(連続経路) */
+  const channelnessByRow = new Float64Array(H);
   for (let row = 0; row < H; row++) {
     const lat = latDegOfRow(grid, row);
     if (Math.abs(lat) > K.channelMaxAbsLatDeg) continue;
     let landN = 0;
     for (let col = 0; col < W; col++) landN += land[row * W + col] ?? 0;
-    if (landN / W < K.channelLandFracMax) {
+    const frac = landN / W;
+    if (frac < K.channelLandFracMax) {
       const h = lat >= 0 ? 0 : 1;
       channelMinAbsLat[h] = Math.min(channelMinAbsLat[h] ?? 90, Math.abs(lat));
+      channelnessByRow[row] = K.channelnessLinear > 0 ? 1 - frac / K.channelLandFracMax : 1;
     }
   }
+  /** 半球ごとに「|lat| がこの値以下の行の海峡度の最大」を引けるよう前計算 */
+  const maxChannelnessEquatorward = (lat: number): number => {
+    let best = 0;
+    for (let row = 0; row < H; row++) {
+      const l2 = latDegOfRow(grid, row);
+      if (lat >= 0 !== l2 >= 0) continue;
+      if (Math.abs(l2) <= Math.abs(lat) && (channelnessByRow[row] ?? 0) > best) {
+        best = channelnessByRow[row] ?? 0;
+      }
+    }
+    return best;
+  };
 
   for (let row = 0; row < H; row++) {
     const lat = latDegOfRow(grid, row);
@@ -122,9 +147,16 @@ export function computeOceanCurrent(
         let widthFactor = Math.min(1, basinWidthDeg / 55); // 狭い海では発達しない
         // ほぼ一周する「海盆」は周極流域であり環流吹送は成立しない
         widthFactor *= Math.min(1, Math.max(0, (300 - basinWidthDeg) / 120));
-        // 周極海峡より極側は環流が剪断される
-        const chanCap = channelMinAbsLat[lat >= 0 ? 0 : 1] ?? 90;
-        if (absLat > chanCap - 4) widthFactor = 0;
+        // 周極海峡より極側は環流が剪断される。
+        // 連続版(channelnessLinear=1): 赤道側の海峡度の最大に比例して弱める。
+        // ドレーク型(海峡度 1)は全遮断、細い陸の行(0.2〜0.6)は部分遮断
+        if (K.channelnessLinear > 0) {
+          const c = maxChannelnessEquatorward(lat);
+          widthFactor *= 1 - c;
+        } else {
+          const chanCap = channelMinAbsLat[lat >= 0 ? 0 : 1] ?? 90;
+          if (absLat > chanCap - 4) widthFactor = 0;
+        }
         anomaly += K.warmDriftC * Math.pow(pos, 1.4) * bandW * widthFactor;
         if (pos < 0.35) {
           anomaly += K.coldReturnC * (1 - pos / 0.35) * bandW * widthFactor;
