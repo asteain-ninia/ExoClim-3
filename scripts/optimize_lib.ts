@@ -42,9 +42,16 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['eastCoastSubsidenceRelief', 0.5, 0.95],
   ['eastCoastSubsidenceDecayKm', 600, 1300],
   ['eastReliefSupplyNorm', 0.4, 1.2],
-  ['stormMinQRel', 0.25, 0.55],
-  ['stormMoistureSupply', 1.0, 2.4],
-  ['stormMoistureDecayKm', 1000, 2000],
+  // **外した(2026-08-17、段 6 の移行漏れ)**: ストーム供給の 3 定数は
+  // `stormSupply` が非保存の降水式にしか入っておらず、保存型の源にも凝結率にも
+  // 現れないため、**答えに 1 ビットも影響しない**。2026-08-16 の生存性診断で
+  // 61 定数を全数測って確認済み(`docs/探索空間の生存性.json`)。
+  // 較正はこの 3 定数を振り続け、評価の約 5% を空振りに使っていた。
+  // **外すより繋ぐほうが筋**なので、繋いだら戻すこと:
+  //   docs/診断_ストーム供給は保存型で死んでいる_2026-08-15.md
+  // ['stormMinQRel', 0.25, 0.55],
+  // ['stormMoistureSupply', 1.0, 2.4],
+  // ['stormMoistureDecayKm', 1000, 2000],
   ['coldCoastSuppression', 0.25, 0.6],
   ['winterFloorFracOfWettest', 0.2, 0.5],
   ['winterFloorMaxMm', 12, 34],
@@ -52,7 +59,11 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['frontalLiftBoost', 0.4, 1.2],
   ['precipMonthBlend', 0.04, 0.2],
   ['warmHumidConvectiveBoost', 0, 0.4],
-  ['warmHumidSupplyNorm', 2.0, 4.0],
+  // **外した(2026-08-17、親が 0)**: `warmHumidConvectiveBoost` を較正が 0 まで
+  // 押し下げた結果、`warmHumidF = 1 + 0 × …` で固定になり、この正規化定数は
+  // 答えに影響しなくなった。**較正は自分で殺した機構の正規化定数を振り続けていた。**
+  // 親を生き返らせるなら一緒に戻すこと。
+  // ['warmHumidSupplyNorm', 2.0, 4.0],
   ['subsidenceCloudReduction', 0.5, 0.75],
   ['subsidenceOceanFactor', 0.25, 0.5],
   ['convectiveCloudBoost', 0.3, 0.6],
