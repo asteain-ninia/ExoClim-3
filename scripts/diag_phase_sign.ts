@@ -71,6 +71,13 @@ async function main(): Promise<void> {
     ['中緯度 35〜60', 35, 60],
   ];
   const acc = BANDS.map(() => ({ w: 0, sum: 0, early: 0, late: 0, all: [] as Array<[number, number]> }));
+  // 追加(段 46b の切り分け): 観測の雨の季節型ごとの内訳。
+  // 夏雨型 = 観測ピークが当該半球の夏半年、冬雨型 = 冬半年。
+  // 中緯度が「どの時計で動いているか」(ITCZ 系の夏雨か、前線系の冬雨か)を分ける
+  const regimeAcc = BANDS.map(() => ({
+    summer: { w: 0, sum: 0 },
+    winter: { w: 0, sum: 0 },
+  }));
 
   for (let cr = 0; cr < clim.heightCells; cr++) {
     const lat = 89 - cr * 2;
@@ -119,6 +126,22 @@ async function main(): Promise<void> {
       if (days < -15) a.early += w;
       else if (days > 15) a.late += w;
       a.all.push([days, w]);
+      // 季節型: 観測ピーク月(冬至起点 → 暦月へ換算)が夏半年か冬半年か。
+      // 北半球の夏半年 ≈ 暦月 5〜10(peak+offset を月 0..12 の環で判定)
+      {
+        let peakCal = ho.peak + OBS_MONTH_ORIGIN_OFFSET; // 冬至起点の月位置
+        while (peakCal >= 12) peakCal -= 12;
+        // 冬至起点なので 0 = 12月下旬。夏至は 6.0 付近。
+        // 夏半年 = 夏至 ±3 か月(北) / 冬至 ±3 か月(南)
+        const distToSolstice = Math.min(Math.abs(peakCal - 6), 12 - Math.abs(peakCal - 6));
+        const isSummerPeak = lat >= 0 ? distToSolstice <= 3 : distToSolstice > 3;
+        const g = regimeAcc[bi];
+        if (g) {
+          const slot = isSummerPeak ? g.summer : g.winter;
+          slot.w += w;
+          slot.sum += w * days;
+        }
+      }
     }
   }
 
@@ -139,6 +162,16 @@ async function main(): Promise<void> {
         ` ${((100 * a.late) / a.w).toFixed(0).padStart(10)} %` +
         ` ${med.toFixed(1).padStart(10)}`,
     );
+  }
+  console.log('\n季節型ごとの内訳(平均ずれ 日 / 重み比):');
+  console.log('帯              夏雨型            冬雨型');
+  for (let bi = 0; bi < BANDS.length; bi++) {
+    const g = regimeAcc[bi];
+    const a = acc[bi];
+    if (!g || !a || a.w <= 0) continue;
+    const s = g.summer.w > 0 ? `${(g.summer.sum / g.summer.w).toFixed(1)} (${((100 * g.summer.w) / a.w).toFixed(0)}%)` : '—';
+    const wtr = g.winter.w > 0 ? `${(g.winter.sum / g.winter.w).toFixed(1)} (${((100 * g.winter.w) / a.w).toFixed(0)}%)` : '—';
+    console.log(`${BANDS[bi]?.[0]?.padEnd(14) ?? ''} ${s.padStart(16)} ${wtr.padStart(16)}`);
   }
   console.log(
     '\n読み: 「早い」に大きく偏っていれば天文直結(遅れゼロの暦)が原因で、\n' +
