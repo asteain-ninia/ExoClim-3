@@ -34,6 +34,20 @@ function annualHarmonic(series: number[]): { amp: number; peak: number } {
   return { amp, peak };
 }
 
+import { MODEL_CONSTANTS } from '../src/sim/constants';
+const K = MODEL_CONSTANTS as unknown as Record<string, number>;
+if (process.env['DIAG_OVERRIDE']) {
+  for (const part of process.env['DIAG_OVERRIDE'].split(',')) {
+    const [name, raw] = part.split('=');
+    const key = (name ?? '').trim();
+    const v = Number(raw);
+    if (!key || !(key in K)) throw new Error(`DIAG_OVERRIDE: 未知の定数 '${key}'`);
+    if (!Number.isFinite(v)) throw new Error(`DIAG_OVERRIDE: 値が数値でない '${key}'`);
+    K[key] = v;
+    console.log(`[上書き] ${key} = ${v}`);
+  }
+}
+
 const OBS_MONTH_ORIGIN_OFFSET = 0.355; // scoring.ts と同じ(冬至起点と暦月の差)
 const PRECIP_PHASE_MIN_RATIO = 0.25; // scoring.ts の既定と同じ趣旨(季節性のあるセルだけ)
 
