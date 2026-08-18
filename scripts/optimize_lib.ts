@@ -125,11 +125,21 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['diffusionWm2PerK', 0.45, 0.65],
   ['itczHemisOffsetPerC', 0, 14],
   ['itczOceanFollowDamp', 0.35, 1.0],
-  ['itczMonsoonPullDeg', 7, 13],
+  // v27: 下限を 7→4 へ拡張。高所加熱の分母修正の補償で v26 が下端 7 に張り付いた
+  // (docs/実験記録_v26判定_2026-08-18.md 発見 3)
+  ['itczMonsoonPullDeg', 4, 13],
   ['itczPlateauPullDeg', 6, 14],
   ['itczSmoothLocalBlend', 0.25, 0.55],
   ['itczDeclinationFollowRatio', 0.28, 0.42],
   ['subtropicalCellEastBoost', 0.3, 0.9],
+  // ---- v27 追加(2026-08-18)----
+  // 段 46: ITCZ の暦の遅れ。掃引で熱帯の位相系統誤差がほぼ消えた
+  // (−28.6→−3.8 日)。0 を含む = 較正が「不要」を選べる
+  ['circulationLagMonths', 0, 1.5],
+  // 段 45b: モンスーンコンベア。機構の関門は突破(流入が単調増・閉包維持・
+  // 分布誤差は改善)。強度と窓の縁の綱引きは較正が決める
+  ['conveyorStrength', 0, 60],
+  ['conveyorLatPolewardDeg', 0, 8],
   ['subpolarWinterLowHpa', 3, 7],
   ['tradeWindMs', 5, 7.5],
   // **段 38(2026-08-15): westerlyWindMs を探索空間から外した。**
