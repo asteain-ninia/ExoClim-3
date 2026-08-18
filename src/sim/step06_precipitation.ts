@@ -1137,11 +1137,11 @@ export async function computePrecipitation(
         const i = row * W + col;
         // 緯度窓(ITCZ 極側 〜 リッジ+5°、外は 3° で減衰)— 45a と同じ形
         const lo = Math.abs(centers?.[col] ?? 0);
-        const hi = Math.abs(ridge) + 5;
+        const hi = Math.abs(ridge) + K.conveyorLatPolewardDeg;
         let latW = 0;
         if (aLat >= lo && aLat <= hi) latW = 1;
-        else if (aLat < lo) latW = Math.max(0, 1 - (lo - aLat) / 3);
-        else latW = Math.max(0, 1 - (aLat - hi) / 3);
+        else if (aLat < lo) latW = Math.max(0, 1 - (lo - aLat) / K.conveyorLatSoftDeg);
+        else latW = Math.max(0, 1 - (aLat - hi) / K.conveyorLatSoftDeg);
         if (latW <= 0) continue;
         if (terrain.landMask[i]) {
           // 給水候補: 東海岸帯(奥行き conveyorCoastKm)× R-H 因子。
