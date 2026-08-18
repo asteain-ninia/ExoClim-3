@@ -113,7 +113,9 @@ export function computeWindBelt(
   }
 
   for (let m = 0; m < MONTHS_PER_YEAR; m++) {
-    const decl = laggedDeclinationDeg(insolation.monthlyDeclinationDeg, m, K.circulationLagMonths);
+    // 段 46b: 風帯の暦の遅れは ITCZ(circulationLagMonths)から分離。
+    // 掃引で中緯度は遅れを掛けると悪化した(事前登録の追記を参照)
+    const decl = laggedDeclinationDeg(insolation.monthlyDeclinationDeg, m, K.windbeltLagMonths);
     const declNorm = Math.max(-1.5, Math.min(1.5, decl / tilt)); // -1..1(高離心率で ±1.5)
     const shift = K.ridgeSeasonalShiftDeg * declNorm;
     const ridgeN = ridgeBase + shift;
