@@ -59,6 +59,16 @@ function buildPrecipitationResult(
  * **パイプラインの入口で初期化する**(resetConservativeStats)。
  * 収束していない輸送の解を黙って採用しないために置く。
  */
+/** 段 45b: コンベアの移送量の計器(診断用。走行ごとに computePrecipitation が初期化) */
+export const CONVEYOR_STATS = {
+  /** Σ 取水(mm/月 × cos緯度重み)。全結合反復・全月の合計 */
+  takeMmArea: 0,
+  /** applyConveyor の呼び出し数(有効時のみ数える) */
+  calls: 0,
+  /** warmStart 不在で不発だった回数 */
+  skippedNoWarm: 0,
+};
+
 export const CONSERVATIVE_STATS = {
   /** 収束しなかった月の数(12 か月 × 結合反復ぶん数える) */
   nonConverged: 0,
@@ -987,6 +997,9 @@ export async function computePrecipitation(
   // 経路の幾何をスカラー走査で書くと地形の網の目に負ける)。
   // 月・半球ごとに取水計 = 給水計(面積重み)。conveyorStrength = 0 なら
   // この準備ごと飛び、従来とビット一致。
+  CONVEYOR_STATS.takeMmArea = 0;
+  CONVEYOR_STATS.calls = 0;
+  CONVEYOR_STATS.skippedNoWarm = 0;
   const conveyorPrep = K.conveyorStrength > 0 ? buildConveyorPrep() : null;
   function buildConveyorPrep(): {
     /** 海セル: 西(自転の逆)の陸までの距離 km(東岸沖 = 取水候補) */
@@ -1068,7 +1081,12 @@ export async function computePrecipitation(
    * 取水はセルの蒸発源泉の半分を上限とし、src が負にならないことを保証する。
    */
   function applyConveyor(m: number, src: Float32Array, wPrev: Float32Array | null): void {
-    if (!conveyorPrep || !wPrev) return;
+    if (!conveyorPrep) return;
+    CONVEYOR_STATS.calls++;
+    if (!wPrev) {
+      CONVEYOR_STATS.skippedNoWarm++;
+      return;
+    }
     const W = grid.widthCells;
     const H = grid.heightCells;
     const ridgeN = windBelt.monthlyRidgeLatNDeg[m] ?? 31;
@@ -1126,6 +1144,7 @@ export async function computePrecipitation(
         }
       }
     }
+    CONVEYOR_STATS.takeMmArea += (takeSum[0] ?? 0) + (takeSum[1] ?? 0);
     // 半球ごとに配分(給水先の無い半球は取水もしない = 保存を厳守)
     for (let row = 0; row < H; row++) {
       const lat = latDegOfRow(grid, row);
