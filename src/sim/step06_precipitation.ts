@@ -1004,6 +1004,10 @@ export async function computePrecipitation(
   function buildConveyorPrep(): {
     /** 海セル: 西(自転の逆)の陸までの距離 km(東岸沖 = 取水候補) */
     westLandKmOcean: Float32Array;
+    /** 海セル: 西向き走査の流着列(海岸の経度列)。−1 = 流着なし */
+    landfallCol: Int32Array;
+    /** 陸セル: 東向き走査の海岸列(自セルの東海岸の経度列)。−1 = 海岸なし */
+    coastCol: Int32Array;
     /** 月別・列別の R-H 西側沈降の因子(1 = 抑制なし)。段 44 の hCol 規則の鏡像 */
     rhWestFactorByMonth: Float64Array[];
     /** 月別・行別の夏ゲート(0〜1.2)。step02 と同じ日射の季節偏差規格化 */
@@ -1013,16 +1017,32 @@ export async function computePrecipitation(
     const H = grid.heightCells;
     const dir = params.body.rotationDirection >= 0 ? 1 : -1;
     const westLandKmOcean = new Float32Array(grid.cellCount).fill(1e9);
+    // 45b-2: セクター別保存のための流着列(海側)と海岸列(陸側)。
+    // 半球プールは大西洋の水をアジアへテレポートさせた(掃引の分解で発覚)
+    const landfallCol = new Int32Array(grid.cellCount).fill(-1);
+    const coastCol = new Int32Array(grid.cellCount).fill(-1);
     for (let row = 0; row < H; row++) {
       const dxKm = Math.max(20, cellWidthKm(grid, row, params.body.radiusKm));
       const maxScan = Math.max(10, Math.round(K.conveyorFetchKm / dxKm));
+      const maxScanLand = Math.max(10, Math.round(4400 / dxKm));
       for (let col = 0; col < W; col++) {
         const i = row * W + col;
-        if (terrain.landMask[i]) continue;
+        if (terrain.landMask[i]) {
+          for (let d = 1; d <= maxScanLand; d++) {
+            const c2 = wrapCol(grid, col + dir * d);
+            if (!terrain.landMask[row * W + c2]) {
+              coastCol[i] = c2;
+              break;
+            }
+          }
+          continue;
+        }
         for (let d = 1; d <= maxScan; d++) {
-          const j = row * W + wrapCol(grid, col - dir * d);
-          if (terrain.landMask[j]) {
+          const c2 = wrapCol(grid, col - dir * d);
+          if (terrain.landMask[row * W + c2]) {
             westLandKmOcean[i] = d * dxKm;
+            // 流着列は陸に当たる直前の海の列(= その海岸の海側の列)
+            landfallCol[i] = wrapCol(grid, c2 + dir);
             break;
           }
         }
@@ -1072,7 +1092,7 @@ export async function computePrecipitation(
       }
       summerWByMonth.push(sw);
     }
-    return { westLandKmOcean, rhWestFactorByMonth, summerWByMonth };
+    return { westLandKmOcean, landfallCol, coastCol, rhWestFactorByMonth, summerWByMonth };
   }
 
   /**
@@ -1094,11 +1114,17 @@ export async function computePrecipitation(
     const centers = itcz.monthlyCenterLatDegByCol[m];
     const rhF = conveyorPrep.rhWestFactorByMonth[m];
     const summerW = conveyorPrep.summerWByMonth[m];
-    // 半球別に取水と給水候補を集める(面積重みつき)
+    // 45b-2: セクター(経度 10° ビン × 半球)別に取水と給水候補を集める。
+    // ビンの鍵 = 半球 × nBins + (流着列 or 海岸列の 10° ビン)
+    const binDeg = 10;
+    const nBins = Math.max(1, Math.round(360 / binDeg));
+    const colToBin = (c: number): number =>
+      Math.min(nBins - 1, Math.floor((c / grid.widthCells) * nBins));
     const take = new Float32Array(grid.cellCount);
     const giveW = new Float32Array(grid.cellCount);
-    const takeSum = [0, 0]; // [北, 南]
-    const giveSum = [0, 0];
+    const binOf = new Int32Array(grid.cellCount).fill(-1);
+    const takeSum = new Float64Array(2 * nBins);
+    const giveSum = new Float64Array(2 * nBins);
     for (let row = 0; row < H; row++) {
       const lat = latDegOfRow(grid, row);
       const hemi = lat >= 0 ? 0 : 1;
@@ -1118,15 +1144,23 @@ export async function computePrecipitation(
         else latW = Math.max(0, 1 - (aLat - hi) / 3);
         if (latW <= 0) continue;
         if (terrain.landMask[i]) {
-          // 給水候補: 東海岸帯(奥行き conveyorCoastKm)× R-H 因子
+          // 給水候補: 東海岸帯(奥行き conveyorCoastKm)× R-H 因子。
+          // セクター = 自セルの東海岸の経度ビン(45b-2)
+          const cc = conveyorPrep.coastCol[i] ?? -1;
+          if (cc < 0) continue;
           const g =
             Math.exp(-(eastOceanKm[i] ?? 1e9) / K.conveyorCoastKm) * sw * latW * (rhF?.[col] ?? 1);
           if (g > 1e-9) {
+            const bin = hemi * nBins + colToBin(cc);
             giveW[i] = g;
-            giveSum[hemi] = (giveSum[hemi] ?? 0) + g * areaW;
+            binOf[i] = bin;
+            giveSum[bin] = (giveSum[bin] ?? 0) + g * areaW;
           }
         } else {
-          // 取水候補: 東岸沖の暖流域。前反復の W に比例、蒸発源泉の半分が上限
+          // 取水候補: 東岸沖の暖流域。前反復の W に比例、蒸発源泉の半分が上限。
+          // セクター = 西向き走査の流着列の経度ビン(45b-2)
+          const lf = conveyorPrep.landfallCol[i] ?? -1;
+          if (lf < 0) continue;
           const anchor =
             Math.max(0, ocean.sstAnomalyC[i] ?? 0) *
             Math.exp(-(conveyorPrep.westLandKmOcean[i] ?? 1e9) / K.conveyorFetchKm) *
@@ -1138,27 +1172,26 @@ export async function computePrecipitation(
             K.conveyorStrength * anchor * (wPrev[i] ?? 0),
           );
           if (t > 0) {
+            const bin = hemi * nBins + colToBin(lf);
             take[i] = t;
-            takeSum[hemi] = (takeSum[hemi] ?? 0) + t * areaW;
+            binOf[i] = bin;
+            takeSum[bin] = (takeSum[bin] ?? 0) + t * areaW;
           }
         }
       }
     }
-    CONVEYOR_STATS.takeMmArea += (takeSum[0] ?? 0) + (takeSum[1] ?? 0);
-    // 半球ごとに配分(給水先の無い半球は取水もしない = 保存を厳守)
-    for (let row = 0; row < H; row++) {
-      const lat = latDegOfRow(grid, row);
-      const hemi = lat >= 0 ? 0 : 1;
-      const total = takeSum[hemi] ?? 0;
-      const denom = giveSum[hemi] ?? 0;
+    // セクターごとに配分(給水先の無いセクターは取水もしない = 保存を厳守)
+    for (let i = 0; i < grid.cellCount; i++) {
+      const bin = binOf[i] ?? -1;
+      if (bin < 0) continue;
+      const total = takeSum[bin] ?? 0;
+      const denom = giveSum[bin] ?? 0;
       if (total <= 0 || denom <= 1e-12) continue;
-      for (let col = 0; col < W; col++) {
-        const i = row * W + col;
-        if (terrain.landMask[i]) {
-          if ((giveW[i] ?? 0) > 0) src[i] = (src[i] ?? 0) + ((giveW[i] ?? 0) * total) / denom;
-        } else if ((take[i] ?? 0) > 0) {
-          src[i] = (src[i] ?? 0) - (take[i] ?? 0);
-        }
+      if (terrain.landMask[i]) {
+        if ((giveW[i] ?? 0) > 0) src[i] = (src[i] ?? 0) + ((giveW[i] ?? 0) * total) / denom;
+      } else if ((take[i] ?? 0) > 0) {
+        src[i] = (src[i] ?? 0) - (take[i] ?? 0);
+        CONVEYOR_STATS.takeMmArea += take[i] ?? 0;
       }
     }
   }
