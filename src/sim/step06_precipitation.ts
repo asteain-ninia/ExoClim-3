@@ -980,6 +980,170 @@ export async function computePrecipitation(
     }
   }
 
+  // ---- 段 45b: モンスーンコンベア(事前登録_コンベア接続_2026-08-18)----
+  // 夏半球の亜熱帯で「大陸東岸沖の暖流域」から水を取り、その東海岸帯へ注ぐ。
+  // 取水は前反復の W に比例(在る水しか運べない)。給水は海岸帯まで —
+  // 内陸への配分は保存型ソルバの風・拡散・地形が担う(段 45a の教訓:
+  // 経路の幾何をスカラー走査で書くと地形の網の目に負ける)。
+  // 月・半球ごとに取水計 = 給水計(面積重み)。conveyorStrength = 0 なら
+  // この準備ごと飛び、従来とビット一致。
+  const conveyorPrep = K.conveyorStrength > 0 ? buildConveyorPrep() : null;
+  function buildConveyorPrep(): {
+    /** 海セル: 西(自転の逆)の陸までの距離 km(東岸沖 = 取水候補) */
+    westLandKmOcean: Float32Array;
+    /** 月別・列別の R-H 西側沈降の因子(1 = 抑制なし)。段 44 の hCol 規則の鏡像 */
+    rhWestFactorByMonth: Float64Array[];
+    /** 月別・行別の夏ゲート(0〜1.2)。step02 と同じ日射の季節偏差規格化 */
+    summerWByMonth: Float64Array[];
+  } {
+    const W = grid.widthCells;
+    const H = grid.heightCells;
+    const dir = params.body.rotationDirection >= 0 ? 1 : -1;
+    const westLandKmOcean = new Float32Array(grid.cellCount).fill(1e9);
+    for (let row = 0; row < H; row++) {
+      const dxKm = Math.max(20, cellWidthKm(grid, row, params.body.radiusKm));
+      const maxScan = Math.max(10, Math.round(K.conveyorFetchKm / dxKm));
+      for (let col = 0; col < W; col++) {
+        const i = row * W + col;
+        if (terrain.landMask[i]) continue;
+        for (let d = 1; d <= maxScan; d++) {
+          const j = row * W + wrapCol(grid, col - dir * d);
+          if (terrain.landMask[j]) {
+            westLandKmOcean[i] = d * dxKm;
+            break;
+          }
+        }
+      }
+    }
+    const rhWestFactorByMonth: Float64Array[] = [];
+    const summerWByMonth: Float64Array[] = [];
+    const rowN30 = Math.max(0, Math.round((90 - 30) / grid.resolutionDeg) - 1);
+    const rowS30 = Math.min(H - 1, Math.round((90 + 30) / grid.resolutionDeg));
+    const landFracCol = new Float64Array(W);
+    for (let col = 0; col < W; col++) {
+      let n = 0;
+      let nl = 0;
+      for (let row = rowN30; row <= rowS30; row++) {
+        n++;
+        if (terrain.landMask[row * W + col]) nl++;
+      }
+      landFracCol[col] = n > 0 ? nl / n : 0;
+    }
+    const degPerCol = 360 / W;
+    const minD = Math.max(1, Math.round(5 / degPerCol));
+    const maxD = Math.round(60 / degPerCol);
+    for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+      const centers = itcz.monthlyCenterLatDegByCol[m];
+      const hCol = new Float64Array(W);
+      for (let col = 0; col < W; col++) {
+        const disp = Math.min(1, Math.abs(centers?.[col] ?? 0) / K.crossEquatorialRefDeg);
+        hCol[col] = disp * Math.min(1, (landFracCol[col] ?? 0) / K.monsoonLandFracRef);
+      }
+      const rhF = new Float64Array(W);
+      for (let col = 0; col < W; col++) {
+        let eastH = 0;
+        for (let dd = minD; dd <= maxD; dd++) {
+          const c2 = (((col + dir * dd) % W) + W) % W;
+          eastH = Math.max(eastH, (hCol[c2] ?? 0) * Math.exp(-(dd * degPerCol) / 30));
+        }
+        rhF[col] =
+          1 -
+          Math.min(1, Math.max(0, (eastH - (hCol[col] ?? 0)) / K.monsoonHeatContrastNorm));
+      }
+      rhWestFactorByMonth.push(rhF);
+      const sw = new Float64Array(H);
+      const insMonth = ctx.insolation.monthlyByRow[m];
+      for (let row = 0; row < H; row++) {
+        const dev = ((insMonth?.[row] ?? 0) - (ctx.insolation.annualMeanByRow[row] ?? 0)) / 120;
+        sw[row] = Math.max(0, Math.min(1.2, dev));
+      }
+      summerWByMonth.push(sw);
+    }
+    return { westLandKmOcean, rhWestFactorByMonth, summerWByMonth };
+  }
+
+  /**
+   * コンベアの源泉・シンクを src に足し込む(保存: 半球ごとに取水計 = 給水計)。
+   * wPrev が無い(初回の結合反復)あるいは給水先が無い半球では何もしない。
+   * 取水はセルの蒸発源泉の半分を上限とし、src が負にならないことを保証する。
+   */
+  function applyConveyor(m: number, src: Float32Array, wPrev: Float32Array | null): void {
+    if (!conveyorPrep || !wPrev) return;
+    const W = grid.widthCells;
+    const H = grid.heightCells;
+    const ridgeN = windBelt.monthlyRidgeLatNDeg[m] ?? 31;
+    const ridgeS = windBelt.monthlyRidgeLatSDeg[m] ?? -31;
+    const centers = itcz.monthlyCenterLatDegByCol[m];
+    const rhF = conveyorPrep.rhWestFactorByMonth[m];
+    const summerW = conveyorPrep.summerWByMonth[m];
+    // 半球別に取水と給水候補を集める(面積重みつき)
+    const take = new Float32Array(grid.cellCount);
+    const giveW = new Float32Array(grid.cellCount);
+    const takeSum = [0, 0]; // [北, 南]
+    const giveSum = [0, 0];
+    for (let row = 0; row < H; row++) {
+      const lat = latDegOfRow(grid, row);
+      const hemi = lat >= 0 ? 0 : 1;
+      const sw = summerW?.[row] ?? 0;
+      if (sw <= 0) continue;
+      const areaW = Math.cos((lat * Math.PI) / 180);
+      const ridge = lat >= 0 ? ridgeN : ridgeS;
+      const aLat = Math.abs(lat);
+      for (let col = 0; col < W; col++) {
+        const i = row * W + col;
+        // 緯度窓(ITCZ 極側 〜 リッジ+5°、外は 3° で減衰)— 45a と同じ形
+        const lo = Math.abs(centers?.[col] ?? 0);
+        const hi = Math.abs(ridge) + 5;
+        let latW = 0;
+        if (aLat >= lo && aLat <= hi) latW = 1;
+        else if (aLat < lo) latW = Math.max(0, 1 - (lo - aLat) / 3);
+        else latW = Math.max(0, 1 - (aLat - hi) / 3);
+        if (latW <= 0) continue;
+        if (terrain.landMask[i]) {
+          // 給水候補: 東海岸帯(奥行き conveyorCoastKm)× R-H 因子
+          const g =
+            Math.exp(-(eastOceanKm[i] ?? 1e9) / K.conveyorCoastKm) * sw * latW * (rhF?.[col] ?? 1);
+          if (g > 1e-9) {
+            giveW[i] = g;
+            giveSum[hemi] = (giveSum[hemi] ?? 0) + g * areaW;
+          }
+        } else {
+          // 取水候補: 東岸沖の暖流域。前反復の W に比例、蒸発源泉の半分が上限
+          const anchor =
+            Math.max(0, ocean.sstAnomalyC[i] ?? 0) *
+            Math.exp(-(conveyorPrep.westLandKmOcean[i] ?? 1e9) / K.conveyorFetchKm) *
+            sw *
+            latW;
+          if (anchor <= 1e-9) continue;
+          const t = Math.min(
+            0.5 * (src[i] ?? 0),
+            K.conveyorStrength * anchor * (wPrev[i] ?? 0),
+          );
+          if (t > 0) {
+            take[i] = t;
+            takeSum[hemi] = (takeSum[hemi] ?? 0) + t * areaW;
+          }
+        }
+      }
+    }
+    // 半球ごとに配分(給水先の無い半球は取水もしない = 保存を厳守)
+    for (let row = 0; row < H; row++) {
+      const lat = latDegOfRow(grid, row);
+      const hemi = lat >= 0 ? 0 : 1;
+      const total = takeSum[hemi] ?? 0;
+      const denom = giveSum[hemi] ?? 0;
+      if (total <= 0 || denom <= 1e-12) continue;
+      for (let col = 0; col < W; col++) {
+        const i = row * W + col;
+        if (terrain.landMask[i]) {
+          if ((giveW[i] ?? 0) > 0) src[i] = (src[i] ?? 0) + ((giveW[i] ?? 0) * total) / denom;
+        } else if ((take[i] ?? 0) > 0) {
+          src[i] = (src[i] ?? 0) - (take[i] ?? 0);
+        }
+      }
+    }
+  }
+
   // 年平均 ITCZ 中心(経度列別)。赤道常湿帯の残留影響に使う —
   // 実物の熱赤道近傍は ITCZ が年 2 回通過し遠くへ行かないため乾季でも雨が残る
   // (Pasta/Log の「赤道 = 雨林」の定量化)。トラフが片半球へ深く出る経度でも
@@ -1205,6 +1369,9 @@ export async function computePrecipitation(
     for (let i = 0; i < N; i++) {
       src[i] = terrain.landMask[i] ? (etM?.[i] ?? 0) : (oceanE?.[i] ?? 0);
     }
+    // 段 45b: コンベアの源泉・シンク対(既定 0 では conveyorPrep が null で不発。
+    // 初回の結合反復は warmStart が無いので不発 — 2 回目以降で自己整合する)
+    applyConveyor(m, src, warmStart[m] ?? null);
     // 凝結率 λ·G。λ = U_ref / L で、既存の距離減衰を**凝結寿命**として写す
     const rate = new Float32Array(N);
     const travelKmPerMonth = (K.condensationRefWindMs * SECONDS_PER_MONTH) / 1000;
