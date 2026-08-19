@@ -28,6 +28,8 @@ function scores(sound: boolean, failures: string[] = []): Scores {
     fitnessV2: 80,
     fitnessV3: 84,
     fitnessV4: 83,
+    fitnessV5: 82.5,
+    precipPhaseBandMeanDays: 65,
     precipPhaseRmseDays: 71,
     continuousV3: 70,
     gateShare: 7.5,

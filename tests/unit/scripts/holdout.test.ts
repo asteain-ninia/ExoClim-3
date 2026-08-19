@@ -145,9 +145,9 @@ describe('空間ホールドアウト分割(P1-1)', () => {
       const expectedV4 =
         expectedV3 - 1.1 * gateTerm + 1.1 * gateShareTerm - W.wPrecipQuantile * fld.precipQuantileLogErr;
       expect(s.fitnessV4).toBeCloseTo(expectedV4, 10);
-      const expectedV5 =
-        expectedV4 - W.wPrecipPhase * (fld.precipPhaseRmseDays / W.phaseScaleDays);
-      expect(s.fitness).toBeCloseTo(expectedV5, 10);
+      const expectedV6 =
+        expectedV4 - W.wPrecipPhase * (fld.precipPhaseBandMeanDays / W.phaseScaleDays);
+      expect(s.fitness).toBeCloseTo(expectedV6, 10);
       expect(s.gateShare).toBeCloseTo(gateShareTerm, 10);
       expect(s.itczRmse).toBeGreaterThan(0); // 参考値としての報告は継続
     }

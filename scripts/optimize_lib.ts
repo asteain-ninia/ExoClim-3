@@ -189,6 +189,10 @@ export interface Scores {
   fitnessV3: number;
   /** 旧目的関数(2026-08-16〜08-17)。併記のため計算し続ける */
   fitnessV4: number;
+  /** v5 の値(全球位相 RMSE 版。v6 移行後は併記のみ) */
+  fitnessV5: number;
+  /** v6 の位相距離: 帯別 RMSE の平均(日) */
+  precipPhaseBandMeanDays: number;
   /**
    * ゲート項を除いた連続部分(v3 と v4 で共通)。
    * **目的関数の版をまたいで比べられる唯一の量**なので、
@@ -306,6 +310,17 @@ export const OBJECTIVE_V5 = {
   wPrecipPhase: 2,
 } as const;
 
+/**
+ * 目的関数 v6(2026-08-19 に事前登録)。v5 との違いは**位相の距離だけ**:
+ * 全球一本の RMSE(冬雨型少数派が二乗和を独裁し、熱帯の雨季を正しく
+ * しても報酬しない — v27 で実測)を、帯別 RMSE の平均に置換する。
+ * 重み(wPrecipPhase=2 / 30 日)は動かさない。
+ * 事前登録: docs/事前登録_目的関数v6_位相の帯別化_2026-08-19.md
+ */
+export const OBJECTIVE_V6 = {
+  ...OBJECTIVE_V5,
+} as const;
+
 // 目的関数 v3(2026-08-02 に事前登録 — 利用者の許可を得て v2 から改訂)。
 // v2 も併記のため計算し続ける。v2 の定義は下記のとおり:
 //   fitnessV2 = 大分類% + 1.1×地域ゲート数 + 0.25×詳細%
@@ -363,7 +378,7 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
 
   // ---- v3(2026-08-02〜2026-08-16 に探索が最大化していた量。以後は併記のみ)----
   // 各誤差を**観測自身の空間ばらつき**で割ってから重みを掛ける。
-  const W = OBJECTIVE_V5;
+  const W = OBJECTIVE_V6;
   /** ゲート項を除いた連続部分。v3 と v4 で共通なので一度だけ組む */
   const continuousV3 =
     k.majorPct +
@@ -384,9 +399,13 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
   const fitnessV4 =
     continuousV3 + 1.1 * gateShareTerm - W.wPrecipQuantile * f.precipQuantileLogErr;
 
-  // ---- v5(探索が最大化する量。2026-08-17 の事前登録)----
-  // v4 に降水の季節位相を足した。それ以外は v4 と同一。
-  const fitness = fitnessV4 - W.wPrecipPhase * (f.precipPhaseRmseDays / W.phaseScaleDays);
+  // ---- v5(2026-08-17。以後は併記のみ)----
+  // v4 に降水の季節位相(全球 RMSE)を足した。
+  const fitnessV5 = fitnessV4 - W.wPrecipPhase * (f.precipPhaseRmseDays / W.phaseScaleDays);
+
+  // ---- v6(探索が最大化する量。2026-08-19 の事前登録)----
+  // 位相の距離を帯別 RMSE の平均へ置換。それ以外は v5 と同一。
+  const fitness = fitnessV4 - W.wPrecipPhase * (f.precipPhaseBandMeanDays / W.phaseScaleDays);
 
   // ---- 数値的健全性(2026-08-14)----
   // `npm run validate` と**同じ凍結済みの関門**を使う。判定の二重定義を作らない。
@@ -413,6 +432,8 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
     fitnessV2,
     fitnessV3,
     fitnessV4,
+    fitnessV5,
+    precipPhaseBandMeanDays: f.precipPhaseBandMeanDays,
     precipPhaseRmseDays: f.precipPhaseRmseDays,
     /** ゲート項を除いた連続部分。目的関数をまたいで比べられる唯一の量 */
     continuousV3,

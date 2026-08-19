@@ -491,6 +491,9 @@ export interface FieldScore {
    * 振幅比が閾値未満なら除く。
    */
   precipPhaseRmseDays: number;
+  /** v6: 位相の帯別 RMSE の平均(帯 = |緯度| [0,15)/[15,35)/[35,90])。
+   * 全球 RMSE は冬雨型少数派が支配するため、帯別平均を目的関数 v6 の距離にする */
+  precipPhaseBandMeanDays: number;
   /** 最少月降水の RMSE mm/月。乾季の深さ = Af/Am/Aw と s/w を決める */
   precipDriestRmseMm: number;
   /** 最多月降水の RMSE mm/月 */
@@ -608,6 +611,8 @@ export function fieldScore(
   let wPhase = 0;
   let sePPhase = 0;
   let wPPhase = 0;
+  const sePPhaseBand = [0, 0, 0];
+  const wPPhaseBand = [0, 0, 0];
   let seDry = 0;
   let seWet = 0;
   let wDryWet = 0;
@@ -754,6 +759,10 @@ export function fieldScore(
             const days = dp * 30.44;
             sePPhase += w * days * days;
             wPPhase += w;
+            // v6: 帯別(0-15 / 15-35 / 35-90)
+            const bi = Math.abs(lat) < 15 ? 0 : Math.abs(lat) < 35 ? 1 : 2;
+            sePPhaseBand[bi] = (sePPhaseBand[bi] ?? 0) + w * days * days;
+            wPPhaseBand[bi] = (wPPhaseBand[bi] ?? 0) + w;
           }
         }
         seDry += w * dDry * dDry;
@@ -817,6 +826,10 @@ export function fieldScore(
     tempRangeRmseC: Math.sqrt(seRange / Math.max(1e-9, wRange)),
     tempPhaseRmseDays: Math.sqrt(sePhase / Math.max(1e-9, wPhase)),
     precipPhaseRmseDays: Math.sqrt(sePPhase / Math.max(1e-9, wPPhase)),
+    precipPhaseBandMeanDays:
+      (Math.sqrt((sePPhaseBand[0] ?? 0) / Math.max(1e-9, wPPhaseBand[0] ?? 0)) +
+        Math.sqrt((sePPhaseBand[1] ?? 0) / Math.max(1e-9, wPPhaseBand[1] ?? 0)) +
+        Math.sqrt((sePPhaseBand[2] ?? 0) / Math.max(1e-9, wPPhaseBand[2] ?? 0))) / 3,
     precipDriestRmseMm: Math.sqrt(seDry / Math.max(1e-9, wDryWet)),
     precipWettestRmseMm: Math.sqrt(seWet / Math.max(1e-9, wDryWet)),
     obsSdTempC: sd(oT, oT2, wObs),

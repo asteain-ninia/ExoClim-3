@@ -71,10 +71,15 @@ describe('採点の一元化(P0-3)', () => {
       fitnessV3 - 1.1 * s.gates + 1.1 * gateShare - W.wPrecipQuantile * f.precipQuantileLogErr;
     expect(s.fitnessV4).toBeCloseTo(fitnessV4, 12);
 
-    // v5(2026-08-17 以降、探索が最大化する量)。v4 との差は降水位相の 1 項だけ
+    // v5(併記)。v4 との差は降水位相(全球 RMSE)の 1 項だけ
     const fitnessV5 = fitnessV4 - W.wPrecipPhase * (f.precipPhaseRmseDays / W.phaseScaleDays);
-    expect(s.fitness).toBeCloseTo(fitnessV5, 12);
+    expect(s.fitnessV5).toBeCloseTo(fitnessV5, 12);
+    // v6(2026-08-19 以降、探索が最大化する量)。位相の距離を帯別 RMSE の平均へ置換
+    const fitnessV6 =
+      fitnessV4 - W.wPrecipPhase * (f.precipPhaseBandMeanDays / W.phaseScaleDays);
+    expect(s.fitness).toBeCloseTo(fitnessV6, 12);
     expect(s.precipPhaseRmseDays).toBe(f.precipPhaseRmseDays);
+    expect(s.precipPhaseBandMeanDays).toBe(f.precipPhaseBandMeanDays);
     expect(s.gateShare).toBeCloseTo(gateShare, 12);
     expect(s.precipQuantileLogErr).toBe(f.precipQuantileLogErr);
     // 連続部分(版をまたいで比べられる唯一の量)がゲート項を含まないこと
