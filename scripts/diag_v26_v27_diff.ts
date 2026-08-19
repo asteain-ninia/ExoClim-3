@@ -16,17 +16,13 @@ const MAJOR_NAME = ['A', 'B', 'C', 'D', 'E'];
 async function main(): Promise<void> {
   const accel = await openAccel(true);
   let base; let alt; let grid; let land;
-  let precipBase: Float32Array | number[] | null = null;
-  let precipAlt: Float32Array | number[] | null = null;
   try {
     const r0 = await runPipeline(EARTH_PARAMS, accel.opts);
     base = r0.koppen.classId; grid = r0.context.grid; land = r0.context.terrain.landMask;
-    precipBase = r0.precipitation.annualPrecipMm;
     const best = JSON.parse(fs.readFileSync('out/optimize/best_v27.json', 'utf8')) as Record<string, number>;
     for (const [k, v] of Object.entries(best)) { if (k in K) K[k] = v; }
     const r1 = await runPipeline(EARTH_PARAMS, accel.opts);
     alt = r1.koppen.classId;
-    precipAlt = r1.precipitation.annualPrecipMm;
   } finally { accel.close(); }
   const kobs = getKoppenObs();
   const W = grid.widthCells;
