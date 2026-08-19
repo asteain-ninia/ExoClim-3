@@ -139,6 +139,9 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // 段 45b: モンスーンコンベア。機構の関門は突破(流入が単調増・閉包維持・
   // 分布誤差は改善)。強度と窓の縁の綱引きは較正が決める
   ['conveyorStrength', 0, 60],
+  // v28: 段 44 の沈降置換。45c で「コンベアとの組が超相加・豪州巻き添えゼロ」を
+  // 実証済み(docs/事前登録_コンベア沈降の組_2026-08-19.md)。単独でも生きる
+  ['monsoonTroughSubsRelief', 0, 0.8],
   // conveyorLatPolewardDeg は v27 では入れない: 基準点 strength=0 では
   // コンベアが止まり、生存性の探針で「死ぬ」(相互作用で基準点死する定数)。
   // 強度が非零に着地したら v28 で入れ直す(2026-08-18 の生存性測定)
