@@ -11,7 +11,7 @@ import { MODEL_CONSTANTS } from '../src/sim/constants';
 import { EARTH_PARAMS } from '../src/domain/planetParams';
 import { runPipelineTimed } from '../src/sim/pipeline';
 import { openAccel } from './accel_cli';
-import { KOPPEN_CLASSES, KOPPEN_COLORS, MAJOR_CLASS_NAMES } from '../src/domain/koppen';
+import { KOPPEN_CLASSES, KOPPEN_COLORS, MAJOR_CLASS_NAMES, majorClassOf } from '../src/domain/koppen';
 import type { PipelineResult } from '../src/sim/types';
 import {
   fieldScore,
@@ -841,6 +841,25 @@ function renderAll(result: PipelineResult, obs: KoppenFixture): void {
     const id = obs.classRaster[i] ?? 0;
     if (id === 0) return [15, 30, 55];
     return (KOPPEN_COLORS[id] ?? [0, 0, 0]) as unknown as [number, number, number];
+  });
+  // 大分類版(利用者要望 2026-08-20「大分類・小分類の両方を見せてほしい」)。
+  // 5 色は各大分類の代表色(A 濃緑 / B 砂 / C 若葉 / D 青緑 / E 灰)
+  const MAJOR_COLORS: Array<[number, number, number]> = [
+    [0, 120, 60],
+    [214, 180, 90],
+    [130, 200, 110],
+    [70, 130, 180],
+    [180, 180, 185],
+  ];
+  renderPng('koppen_model_major.png', W, H, (i) => {
+    const id = result.koppen.classId[i] ?? 0;
+    if (!land[i]) return [15, 30, 55];
+    return MAJOR_COLORS[majorClassOf(id)] ?? [0, 0, 0];
+  });
+  renderPng('koppen_obs_major.png', W, H, (i) => {
+    const id = obs.classRaster[i] ?? 0;
+    if (id === 0) return [15, 30, 55];
+    return MAJOR_COLORS[majorClassOf(id)] ?? [0, 0, 0];
   });
   renderPng('temp_annual.png', W, H, (i) =>
     tempColor(result.temperature.annualMeanC[i] ?? 0, land[i] === 1),
