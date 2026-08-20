@@ -48,6 +48,37 @@ export function computeOceanCurrent(
   const sstAnomalyC = new Float32Array(grid.cellCount);
   const currentClass = new Int8Array(grid.cellCount);
 
+  /**
+   * 縁海ゲート(2026-08-21): その列を水源側(寒流 = 極側、暖流 = 赤道側)へ
+   * 歩き、必要緯度幅のうち海が続いた割合(0〜1)を返す。
+   * 縁海(極側の閉じたアラビア海・メキシコ湾・南シナ海など)では寒流が 0 に
+   * 近づき、外洋(カリフォルニア・カナリア・ベンゲラ)では 1 のまま。
+   * 列固定の直進なので逆行自転でも鏡像で成立し、地理は名指ししない。
+   */
+  const opennessAlongColumn = (
+    row: number,
+    col: number,
+    lat: number,
+    towardEquator: boolean,
+    eccMean: number,
+    separationLat: number,
+  ): number => {
+    const absLat = Math.abs(lat);
+    const targetAbs = towardEquator ? eccMean : separationLat;
+    const spanDeg = Math.abs(targetAbs - absLat);
+    const needRows = Math.max(1, Math.round(spanDeg / grid.resolutionDeg));
+    // 北半球: 極側 = row 減、赤道側 = row 増。南半球は逆
+    const step = (lat >= 0) === towardEquator ? 1 : -1;
+    let open = 0;
+    for (let d = 1; d <= needRows; d++) {
+      const r2 = row + step * d;
+      if (r2 < 0 || r2 >= H) break;
+      if (land[r2 * W + col]) break;
+      open++;
+    }
+    return Math.min(1, open / needRows);
+  };
+
   // SST 偏差の帯域も惑星固有の風帯から導出(地球でそれぞれ ~8/38/68° に一致)
   const meanOf = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
   const ridgeMean = Math.abs(meanOf(windBelt.monthlyRidgeLatNDeg));
@@ -130,15 +161,37 @@ export function computeOceanCurrent(
       // 亜熱帯: 西岸境界流(暖・極向き)と東岸境界流(寒・赤道向き)。
       // 暖流は分離緯度(リッジ + フェレルセル幅×0.25。地球 ≈ 38°)で海盆内へ
       // 分離する。これより極側の海盆西縁は亜寒帯循環の寒流(ラブラドル/親潮)
+      //
+      // **縁海の偽寒流の修正**(2026-08-21、発見者は利用者。
+      // docs/診断_縁海の偽寒流_2026-08-21.md): 境界流は遠方の水の搬入なので、
+      // 寒流は海盆が**極側に**、暖流は**赤道側に**開いていることが成立条件。
+      // アラビア海・メキシコ湾・南シナ海のような極側の閉じた縁海に、実在しない
+      // 寒流(カリフォルニア級 −2°C)が立ち、モンスーン海岸の雨と蒸発源泉を
+      // 削っていた。開き具合(その列で水源側へ海が続く割合)を連続ゲートで掛ける。
+      // boundaryCurrentOpennessGate = 0 で従来と厳密一致
       if (absLat >= eccMean && absLat <= separationLat) {
         const bandW = bellBand(absLat, eccMean, separationLat, 4);
         if (nearWestBoundaryKm < K.boundaryCurrentReachKm) {
+          const openEq =
+            K.boundaryCurrentOpennessGate > 0
+              ? opennessAlongColumn(row, col, lat, true, eccMean, separationLat)
+              : 1;
           anomaly +=
-            K.warmBoundaryCurrentC * (1 - nearWestBoundaryKm / K.boundaryCurrentReachKm) * bandW;
+            K.warmBoundaryCurrentC *
+            (1 - nearWestBoundaryKm / K.boundaryCurrentReachKm) *
+            bandW *
+            openEq;
         }
         if (nearEastBoundaryKm < K.boundaryCurrentReachKm) {
+          const openPole =
+            K.boundaryCurrentOpennessGate > 0
+              ? opennessAlongColumn(row, col, lat, false, eccMean, separationLat)
+              : 1;
           anomaly +=
-            K.coldBoundaryCurrentC * (1 - nearEastBoundaryKm / K.boundaryCurrentReachKm) * bandW;
+            K.coldBoundaryCurrentC *
+            (1 - nearEastBoundaryKm / K.boundaryCurrentReachKm) *
+            bandW *
+            openPole;
         }
       }
       // 中高緯度: 暖流吹送域(海盆東側ほど暖かい)と海盆西縁の寒流帰還
