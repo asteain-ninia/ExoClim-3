@@ -142,9 +142,10 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // v28: 段 44 の沈降置換。45c で「コンベアとの組が超相加・豪州巻き添えゼロ」を
   // 実証済み(docs/事前登録_コンベア沈降の組_2026-08-19.md)。単独でも生きる
   ['monsoonTroughSubsRelief', 0, 0.8],
-  // conveyorLatPolewardDeg は v27 では入れない: 基準点 strength=0 では
-  // コンベアが止まり、生存性の探針で「死ぬ」(相互作用で基準点死する定数)。
-  // 強度が非零に着地したら v28 で入れ直す(2026-08-18 の生存性測定)
+  // v30(2026-08-21): conveyorLatPolewardDeg を復帰。v27〜v28 では基準点
+  // strength=0 で死ぬため外していたが、v29 種で conveyor=15 が生き残り
+  // 基準点が変わった。ゴビ B→D(45b-2 の分解)を較正が自分で裁ける
+  ['conveyorLatPolewardDeg', 0, 8],
   ['subpolarWinterLowHpa', 3, 7],
   ['tradeWindMs', 5, 7.5],
   // **段 38(2026-08-15): westerlyWindMs を探索空間から外した。**
