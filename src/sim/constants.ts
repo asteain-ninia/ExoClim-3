@@ -129,7 +129,7 @@ export const MODEL_CONSTANTS = {
   iceOnsetC: -6,
   iceRampWidthC: 5,
   /** 恒常氷床の地表アルベドと判定(パス1の年平均・最暖月の複合条件) */
-  permanentIceAlbedo: 0.7456,
+  permanentIceAlbedo: 0.75,
   permanentIceAnnualMeanC: -8,
   permanentIceWarmestMonthC: 2,
   /**
@@ -141,7 +141,7 @@ export const MODEL_CONSTANTS = {
    * 周極海峡行の海上の雲増強(実在の南大洋は惑星で最も雲が多い海域。
    * 遮られない西風の吹送距離 → 常時ストーム雲。トポロジー判定で地理中立)
    */
-  channelCloudBoost: 0.4888000000000001,
+  channelCloudBoost: 0.5248000000000002,
   /**
    * 陸の対流・前線雲の強さ。0 = 無効(従来と厳密一致)。
    *
@@ -172,11 +172,11 @@ export const MODEL_CONSTANTS = {
   /** 雲アルベドの循環変調: 沈降域(亜熱帯高圧帯)での低減率と ITCZ での増加率 */
   subsidenceCloudReduction: 0.5,
   /** 沈降晴天の海上での効き(貿易風積雲・層積雲が残るため陸より弱い) */
-  subsidenceOceanFactor: 0.37584099000000004,
+  subsidenceOceanFactor: 0.34884099,
   convectiveCloudBoost: 0.50116,
   /** ストームトラック帯(海上)の雲増加率と雲アルベド上限 */
-  stormTrackCloudBoost: 0.6832,
-  cloudAlbedoMax: 0.42528000000000005,
+  stormTrackCloudBoost: 0.5792,
+  cloudAlbedoMax: 0.41728000000000004,
   /** 夏半球のストーム雲の海上残存率(陸側ジェットは弱まるが海は夏も曇天) */
   stormCloudSummerOcean: 0.6539999999999999,
   /** 雲変調に使う ITCZ 幅の倍率(実物の雲帯は降水影響圏より狭い) */
@@ -263,7 +263,7 @@ export const MODEL_CONSTANTS = {
    * 供給ではなく輸送である。保存則の中では拡散項が正しい置き場所になる。
    * 大気の水蒸気の渦拡散は 1〜2e6 m²/s 程度。
    */
-  moistureEddyDiffusivityM2PerS: 2977275.937980041,
+  moistureEddyDiffusivityM2PerS: 3000000,
   /** 海上の近地表相対湿度。実測でも 0.75〜0.85 に収まる */
   evapOceanRelHumidity: 0.8,
   /**
@@ -293,7 +293,7 @@ export const MODEL_CONSTANTS = {
    * 流される誤った物理になる(較正ログ 2026-07-29)。到達距離 ≈ 結合/(B+Dk²)
    * 換算で 1500〜2500 km 相当。
    */
-  zonalAdvectionCouplingWm2PerK: 59.68,
+  zonalAdvectionCouplingWm2PerK: 54.6,
   /** EBM 積分年数と 1 年のステップ数 */
   ebmYears: 4,
   ebmStepsPerYear: 240,
@@ -310,9 +310,9 @@ export const MODEL_CONSTANTS = {
   /**
    * 海上の季節追従の減衰(Log/Pasta: ITCZ は海上でほとんど動かない)。
    * 経度列の帯内陸率 0 のときの追従率倍率(1 = 減衰なし) */
-  itczOceanFollowDamp: 0.79232,
+  itczOceanFollowDamp: 0.90932,
   /** 大陸モンスーンによる追加引き寄せ(度、夏半球の陸割合 1.0 のとき) */
-  itczMonsoonPullDeg: 5.38,
+  itczMonsoonPullDeg: 4,
   /**
    * 高所加熱によるモンスーン増強(帯内の陸平均標高 1km あたりの引き寄せ倍率増)。
    * チベット高原型の熱源が水蒸気トラフを大きく北上させる効果(WL#32 の趣旨)。
@@ -338,7 +338,7 @@ export const MODEL_CONSTANTS = {
    * 赤道常湿帯: 年平均 ITCZ 線の残留影響(0〜1)。実物の熱赤道近傍は年 2 回の
    * 通過と近接で乾季にも雨が残る(赤道 = 雨林の定量化)。幅は半幅 ×0.7
    */
-  equatorialItczResidual: 0.5983999999999999,
+  equatorialItczResidual: 0.4683999999999999,
   /** 経度方向平滑化の半幅(度)。広すぎるとモンスーンの経度応答が希釈される */
   itczSmoothingHalfWidthDeg: 12,
 
@@ -417,13 +417,13 @@ export const MODEL_CONSTANTS = {
    * 半永続低気圧 — アリューシャン/アイスランド低相当)。海氷は後段のため
    * 極前線相対で配置。回転成分を通じて冬の西岸への暖気移流を生む
    */
-  subpolarWinterLowHpa: 6.68,
+  subpolarWinterLowHpa: 7,
   /**
    * 亜熱帯高気圧の離散セル化(WL#29): 帯ではなく海盆ごとのセルで、
    * 「自転方向の東」に大陸が近い側(= 寒流の流れる海盆東縁)ほど強い。
    * 海上の基準重みへの加算倍率と、その減衰距離(km)
    */
-  subtropicalCellEastBoost: 0.4920000000000001,
+  subtropicalCellEastBoost: 0.6000000000000001,
   subtropicalCellEastScaleKm: 2200,
   /**
    * 夏の亜熱帯高気圧の**西方張り出し**(段 39、2026-08-16)。
@@ -551,7 +551,7 @@ export const MODEL_CONSTANTS = {
    *
    * **0 = 無効(従来とビット一致)。** 幾何のみ・湿り非依存・逆行対応。
    */
-  monsoonTroughSubsRelief: 0,
+  monsoonTroughSubsRelief: 0.005599999999999994,
   /**
    * R-H 位相 (H − eastH) の規格化。0.1 = C→B 群の実測中央値。
    * これで割って 0〜1 に clamp した値が緩和のゲートになる
@@ -575,7 +575,7 @@ export const MODEL_CONSTANTS = {
    * **0 = 無効(従来とビット一致)。** 将来は混合層深さから導出する余地あり。
    * 事前登録: docs/事前登録_循環の暦の遅れ_2026-08-18.md
    */
-  circulationLagMonths: 0,
+  circulationLagMonths: 0.88,
   /**
    * **風帯の暦の遅れ**(段 46b、2026-08-18)。風帯・亜熱帯リッジの季節シフト
    * (step02)が参照する赤緯を、この月数だけ遅らせる。ITCZ の遅れ
@@ -618,7 +618,7 @@ export const MODEL_CONSTANTS = {
    * 月・半球ごとに取水計 = 給水計(水は創らない)。
    * 事前登録: docs/事前登録_コンベア接続_2026-08-18.md
    */
-  conveyorStrength: 0,
+  conveyorStrength: 15,
   /**
    * コンベアの緯度窓の極側の縁(リッジからの度数)。窓 = ITCZ 極側〜リッジ+これ。
    * 45b-2 の分解で、+5 のリテラルはゴビ(40°N)まで給水帯を延ばして B→D を
@@ -741,15 +741,15 @@ export const MODEL_CONSTANTS = {
   /** ストームトラック(温帯低気圧帯)の増幅 */
   stormTrackBoost: 0.4,
   /** 寒候期のストームトラック追加増幅 */
-  stormTrackWinterBoost: 0.26700000000000007,
+  stormTrackWinterBoost: 0.23100000000000007,
   /** 地形性上昇の増幅(基準勾配あたり) */
   orographicBoost: 1.0728,
   /** 風下雨陰の最大抑制(0〜1 が残存率の下限) */
-  rainShadowFloor: 0.23435999999999996,
+  rainShadowFloor: 0.26236,
   /** 亜熱帯高圧帯(沈降域)の抑制率(0〜1)。下降枝全域(リッジ−16°〜+5°)に適用 */
   subsidenceSuppression: 0.774464,
   /** 沈降抑制に対する ITCZ 影響の防護係数(1 = 完全防護) */
-  subsidenceItczProtection: 0.8492,
+  subsidenceItczProtection: 0.7862,
   /**
    * 亜熱帯高気圧の西翼(大陸東岸側)の湿潤化: 順行自転では東に海が近いセルほど
    * 沈降抑制を緩める(バミューダ高気圧西縁の湿潤流の相当物)。減衰距離 km。
@@ -835,8 +835,8 @@ export const MODEL_CONSTANTS = {
    * (最多雨月のこの割合、上限 mm)。年総量は保存(湿潤月から比例控除)。
    * タイガの Dw 化(実物は Df)と Cwa 最多/最少比 276 への対策
    */
-  winterFloorFracOfWettest: 0.48536000000000007,
-  winterFloorMaxMm: 33.366400000000006,
+  winterFloorFracOfWettest: 0.5,
+  winterFloorMaxMm: 34,
   /** 夏半球の偏西風移流の弱化率(ジェットの季節弱化) */
   summerAdvectionFactor: 0.6,
   /**
