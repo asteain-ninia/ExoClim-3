@@ -269,6 +269,21 @@ export const EBM_SOLVER_STATS = {
   stepResidualsC: null as Float32Array | null,
 };
 
+/**
+ * 検証専用の捕捉箱(scripts/diag_ebm_batch_equiv.ts が使う)。
+ *
+ * enabled のとき、GPU 経路が加速器の run() へ渡した**最後の**入力
+ * (fields / constants)をそのまま控える。同値検証は「本物のパイプラインが
+ * 実際に渡す入力」を単発版とバッチ版の両方へ与えたいが、fields の組み立ては
+ * この段の閉包の奥にあり外から再現できない。そこで**入口で控える**。
+ * 既定は無効で、パイプラインの挙動には一切影響しない。
+ */
+export const EBM_CAPTURE: {
+  enabled: boolean;
+  fields: EbmStaticFields | null;
+  constants: EbmConstants | null;
+} = { enabled: false, fields: null, constants: null };
+
 /** 診断を初期化する。パイプラインの入口で 1 回だけ呼ぶ */
 export function resetEbmSolverStats(): void {
   EBM_SOLVER_STATS.totalSweeps = 0;
@@ -1247,11 +1262,23 @@ export async function computeTemperature(
     const live = makeLiveTemperature();
     /** 積算の積分年数。倍化の梯子は毎回ゼロから回し直すので、足し上げる */
     let yearsIntegrated = 0;
-    const runOnce = async (): Promise<Awaited<ReturnType<typeof ebmAccel.run>>> => (
-      (yearsIntegrated += fullYears + bSpinupAccelYears),
-      ebmAccel.run(
-        { ...fields, years: fullYears + bSpinupAccelYears, fullCapacityYears: fullYears },
-        { ...ebmConstants, iterationsPerStep: iters },
+    const runOnce = async (): Promise<Awaited<ReturnType<typeof ebmAccel.run>>> => {
+      yearsIntegrated += fullYears + bSpinupAccelYears;
+      const runFields: EbmStaticFields = {
+        ...fields,
+        years: fullYears + bSpinupAccelYears,
+        fullCapacityYears: fullYears,
+      };
+      const runConstants: EbmConstants = { ...ebmConstants, iterationsPerStep: iters };
+      // 検証専用の捕捉(既定は無効)。加速器へ渡した入力をそのまま控えるだけで、
+      // 実行そのものには一切影響しない(scripts/diag_ebm_batch_equiv.ts が読む)
+      if (EBM_CAPTURE.enabled) {
+        EBM_CAPTURE.fields = runFields;
+        EBM_CAPTURE.constants = runConstants;
+      }
+      return ebmAccel.run(
+        runFields,
+        runConstants,
         {
           signal: control.signal,
           // 段の進捗は「今のパス + 予算が伸びたか」を添えて上へ流す。
@@ -1284,8 +1311,8 @@ export async function computeTemperature(
               }
             : undefined,
         },
-      )
-    );
+      );
+    };
     let r = await runOnce();
     while (adaptive && !r.converged && iters < bMaxIterations) {
       iters *= 2;
