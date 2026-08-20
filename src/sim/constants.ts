@@ -176,7 +176,7 @@ export const MODEL_CONSTANTS = {
   convectiveCloudBoost: 0.50116,
   /** ストームトラック帯(海上)の雲増加率と雲アルベド上限 */
   stormTrackCloudBoost: 0.6832,
-  cloudAlbedoMax: 0.44328000000000006,
+  cloudAlbedoMax: 0.42528000000000005,
   /** 夏半球のストーム雲の海上残存率(陸側ジェットは弱まるが海は夏も曇天) */
   stormCloudSummerOcean: 0.6539999999999999,
   /** 雲変調に使う ITCZ 幅の倍率(実物の雲帯は降水影響圏より狭い) */
@@ -195,7 +195,7 @@ export const MODEL_CONSTANTS = {
   /** 気温減率(°C/km、標高降尺度と OLR 標高補正に使用) */
   lapseRateCPerKm: 5.8,
   /** 海流 SST 偏差を EBM に注入する結合係数(W/m²/K) */
-  sstAnomalyCouplingWm2PerK: 23.412799999999997,
+  sstAnomalyCouplingWm2PerK: 25.932799999999997,
   /**
    * 蒸発冷却の係数(W/m² per mm/日)。**実蒸発散の陸平均偏差**に掛ける。
    * 潜熱の物理値は λρ = 28.4 W/m² per mm/日。地表から出た潜熱の一部は
@@ -316,7 +316,7 @@ export const MODEL_CONSTANTS = {
    */
   itczPlateauPullDeg: 14,
   /** 経度平滑化後に混ぜ戻す生値の割合(0 = 完全平滑)。モンスーンの経度局所性を保つ */
-  itczSmoothLocalBlend: 0.28456,
+  itczSmoothLocalBlend: 0.26511999999999997,
   /** ITCZ 影響帯の半幅(度) */
   itczHalfWidthDeg: 9,
   /**
@@ -732,7 +732,7 @@ export const MODEL_CONSTANTS = {
   /** ストームトラック(温帯低気圧帯)の増幅 */
   stormTrackBoost: 0.4,
   /** 寒候期のストームトラック追加増幅 */
-  stormTrackWinterBoost: 0.23100000000000007,
+  stormTrackWinterBoost: 0.26700000000000007,
   /** 地形性上昇の増幅(基準勾配あたり) */
   orographicBoost: 1.0728,
   /** 風下雨陰の最大抑制(0〜1 が残存率の下限) */
@@ -827,7 +827,7 @@ export const MODEL_CONSTANTS = {
    * タイガの Dw 化(実物は Df)と Cwa 最多/最少比 276 への対策
    */
   winterFloorFracOfWettest: 0.48536000000000007,
-  winterFloorMaxMm: 30.990400000000005,
+  winterFloorMaxMm: 33.366400000000006,
   /** 夏半球の偏西風移流の弱化率(ジェットの季節弱化) */
   summerAdvectionFactor: 0.6,
   /**
