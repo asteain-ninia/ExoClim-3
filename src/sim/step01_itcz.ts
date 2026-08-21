@@ -75,6 +75,75 @@ export function computeItcz(ctx: SimContext, hemisOffsetDeg = 0): ItczResult {
     plateauPullS[col] = bs.plateauPull;
   }
 
+  // ---- 件 2(v31): 湿った陸の対流源への一般化吸引(既定 0 = 完全無効)----
+  // docs/事前登録_v31物理バッチ_2026-08-21.md 件 2。
+  // 既存の吸引はプラトー(高所加熱)と大陸モンスーンの 2 本で、島・半島
+  // (マダガスカル・メキシコ西岸)の対流源に線が寄らない(所見_計算順デバッグFB
+  // 2026-08-21 Step1)。ここでは経度列ごとに「低平で海に近い陸」の帯内占有から
+  // 吸引ポテンシャル φ(度)を作り、夏半球側へ ITCZ 中心を追加で引く。
+  //
+  // 二重計上への設計判断(max 融合、加算しない):
+  //   既存 2 本も「夏の陸への吸引」なので、φ を素朴に加算すると同じ物理を
+  //   二度数える(インド東部は既に強すぎるという FB に逆行する)。そこで
+  //   「どの列も夏の陸への吸引 ≥ φ」だけを保証する — 既存吸引の**実効値**
+  //   (12° 広域平滑 + 混ぜ戻し後に列に残る量)を φ が上回る不足分のみ足す。
+  //   実効値と比べるのは、島の既存吸引は広域平滑でほぼ消える(これこそ島に
+  //   吸引が立たない根)ためで、生値と比べると不足分を過小評価する。
+  //   大陸モンスーンが既に強い列(インド・アフリカ内陸)では不足分が 0 になり
+  //   何も足さない。既定 0 では下の if ごと飛ぶのでビット一致。
+  const moistExtraN = new Float64Array(W);
+  const moistExtraS = new Float64Array(W);
+  if (K.itczMoistLandPullDeg > 0) {
+    // 供給の代理は step01 で読める量だけで組む(step06 の供給場は無い):
+    // 海岸から近い陸(水蒸気の入り口)。**標高は入れない** — 高所は既存吸引の
+    // 側(標高増強・プラトー)が既に数えており、下の max 融合で eff として
+    // 差し引かれる。φ にも標高を入れると山地を持つ列を二重に罰し、低地の
+    // 対流源と高原が同居する列(メキシコ西岸)で吸引が立たない(実測)。
+    const supplyAt = (i: number): number =>
+      Math.exp(-(ctx.landDistToCoastKm[i] ?? 0) / 600); // 内陸 600km で 1/e
+    // 列の生重み = 陸率 × 供給の代理(帯平均)。対流源は帯(35°)を埋め尽くさ
+    // なくても線を留めるので、帯の 1/6 の実効占有で飽和させる(プラトー吸引の
+    // cover01 の ×6 飽和と同じ扱い。×3 では島・半島規模(マダガスカル級)が
+    // 飽和に届かず吸引が立たない — 実測)
+    const scanMoist = (col: number, row0: number, row1: number): number => {
+      let n = 0;
+      let sum = 0;
+      for (let row = row0; row <= row1; row++) {
+        n++;
+        const i = row * W + col;
+        if (terrain.landMask[i]) sum += supplyAt(i);
+      }
+      return Math.min(1, (n > 0 ? sum / n : 0) * 6);
+    };
+    const wRawN = new Float32Array(W);
+    const wRawS = new Float32Array(W);
+    // 既存吸引(モンスーン + プラトー)の declNorm=1 あたりの生値
+    const basePerDeclN = new Float32Array(W);
+    const basePerDeclS = new Float32Array(W);
+    for (let col = 0; col < W; col++) {
+      wRawN[col] = scanMoist(col, rowN35, rowEq);
+      wRawS[col] = scanMoist(col, rowEq + 1, rowS35);
+      basePerDeclN[col] =
+        K.itczMonsoonPullDeg * (landFracN[col] ?? 0) * (elevBoostN[col] ?? 1) + (plateauPullN[col] ?? 0);
+      basePerDeclS[col] =
+        K.itczMonsoonPullDeg * (landFracS[col] ?? 0) * (elevBoostS[col] ?? 1) + (plateauPullS[col] ?? 0);
+    }
+    // 島・半島は経度 2〜4 列しか持たず単独列では重みが立たないため、
+    // ±3° の近傍列移動平均で平滑してから φ にする
+    const phiN = smoothCyclic(wRawN, grid.resolutionDeg, 3);
+    const phiS = smoothCyclic(wRawS, grid.resolutionDeg, 3);
+    // 既存吸引の実効値: centers に入った後と同じ 12° 平滑 + 混ぜ戻しを通す
+    const effWideN = smoothCyclic(basePerDeclN, grid.resolutionDeg);
+    const effWideS = smoothCyclic(basePerDeclS, grid.resolutionDeg);
+    const blend = K.itczSmoothLocalBlend;
+    for (let col = 0; col < W; col++) {
+      const effN = (1 - blend) * (effWideN[col] ?? 0) + blend * (basePerDeclN[col] ?? 0);
+      const effS = (1 - blend) * (effWideS[col] ?? 0) + blend * (basePerDeclS[col] ?? 0);
+      moistExtraN[col] = Math.max(0, K.itczMoistLandPullDeg * (phiN[col] ?? 0) - effN);
+      moistExtraS[col] = Math.max(0, K.itczMoistLandPullDeg * (phiS[col] ?? 0) - effS);
+    }
+  }
+
   for (let m = 0; m < MONTHS_PER_YEAR; m++) {
     const decl = laggedDeclinationDeg(insolation.monthlyDeclinationDeg, m, K.circulationLagMonths);
     const declNorm = decl / tilt; // -1..1
@@ -103,15 +172,30 @@ export function computeItcz(ctx: SimContext, hemisOffsetDeg = 0): ItczResult {
     for (let col = 0; col < W; col++) {
       smoothed[col] = (1 - b) * (smoothed[col] ?? 0) + b * (centers[col] ?? 0);
     }
+    // 件 2: 湿った陸の吸引は**広域平滑の後**に足す。centers に混ぜると島の
+    // 局所吸引が 12° 平滑で希釈され、この機構を作った意味が消えるため
+    // (φ 自体は ±3° で平滑済み)。夏ゲートは既存吸引と同じ declNorm。
+    // 北半球夏(declNorm > 0)は北の対流源へ、南半球夏は南の対流源へ引く
+    if (K.itczMoistLandPullDeg > 0) {
+      for (let col = 0; col < W; col++) {
+        smoothed[col] =
+          (smoothed[col] ?? 0) +
+          declNorm * (declNorm >= 0 ? (moistExtraN[col] ?? 0) : (moistExtraS[col] ?? 0));
+      }
+    }
     monthlyCenterLatDegByCol.push(smoothed);
   }
   return { monthlyCenterLatDegByCol, halfWidthDeg: K.itczHalfWidthDeg };
 }
 
-/** 経度循環の移動平均(半幅 K.itczSmoothingHalfWidthDeg 度) */
-function smoothCyclic(values: Float32Array, resolutionDeg: number): Float32Array {
+/** 経度循環の移動平均(半幅 halfWidthDeg 度。省略時は K.itczSmoothingHalfWidthDeg) */
+function smoothCyclic(
+  values: Float32Array,
+  resolutionDeg: number,
+  halfWidthDeg: number = K.itczSmoothingHalfWidthDeg,
+): Float32Array {
   const W = values.length;
-  const half = Math.max(1, Math.round(K.itczSmoothingHalfWidthDeg / resolutionDeg));
+  const half = Math.max(1, Math.round(halfWidthDeg / resolutionDeg));
   const out = new Float32Array(W);
   for (let col = 0; col < W; col++) {
     let sum = 0;
