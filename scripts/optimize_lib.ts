@@ -146,6 +146,13 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // strength=0 で死ぬため外していたが、v29 種で conveyor=15 が生き残り
   // 基準点が変わった。ゴビ B→D(45b-2 の分解)を較正が自分で裁ける
   ['conveyorLatPolewardDeg', 0, 8],
+  // ---- v31 追加(2026-08-21、利用者 FB 由来。docs/事前登録_v31物理バッチ)----
+  // ソマリ型湧昇: 単独掃引は全球中立(気温微改善)。価値は局所実在性
+  ['somaliUpwellingC', 0, 4],
+  // ITCZ の湿った陸への一般化吸引: 単独中立(マダガスカル・メキシコの局所改善)
+  ['itczMoistLandPullDeg', 0, 5],
+  // 陸面摩擦: 単独では悪化(凝結率と綱引き)— 組み合わせは較正が決める
+  ['landSurfaceFrictionFactor', 0.6, 1],
   ['subpolarWinterLowHpa', 3, 7],
   ['tradeWindMs', 5, 7.5],
   // **段 38(2026-08-15): westerlyWindMs を探索空間から外した。**
