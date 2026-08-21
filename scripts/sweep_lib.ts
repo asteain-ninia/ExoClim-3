@@ -35,7 +35,11 @@ import {
   CRH_INNER,
   STORM_DIFFUSION,
 } from '../src/sim/step06_precipitation';
-import { EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
+import {
+  EBM_FULL_CAPACITY_YEARS,
+  EBM_SOLVER,
+  EBM_SOLVER_STATS,
+} from '../src/sim/step05_temperature';
 import type { RunOptions } from '../src/sim/accel';
 import type { PipelineResult } from '../src/sim/types';
 
@@ -53,6 +57,24 @@ if (process.env['CONVERGENCE_SMOOTH_DEG']) {
 // 段 36: ストーム混合を拡散の場として繋ぐ強さ（0 = 無効）
 if (process.env['STORM_DIFFUSION_BOOST']) {
   STORM_DIFFUSION.boost = Number(process.env['STORM_DIFFUSION_BOOST']);
+}
+
+/**
+ * **検証専用の安い設定(既定は無効。通常の掃引では設定しないこと)。**
+ *
+ * バッチ実行器の同値検証(scripts/diag_sweep_batch_equiv.ts)は、
+ * 「既存の掃引(直列・子プロセス並列)」と「バッチ実行器(worker_threads)」を
+ * **同じ安い条件**(2° 格子・EBM の反復と年数を固定)で比べる必要がある。
+ * 条件は親・子プロセス・worker_threads の**全経路に同じに**掛からなければ
+ * 比較にならない(2026-08-15 に `EBM_SOLVER.adaptive` の写し間違いで
+ * v3 が 0.02〜0.06 ずれた前科がある)。ここは全経路が必ず通る場所なので、
+ * CRH_INNER と同じく環境変数で掛ける。3 点の組は diag_ebm_batch_equiv.ts /
+ * diag_dead_constants.ts の頭と同じもの。
+ */
+export const SWEEP_CHEAP_GRID_DEG = Number(process.env['SWEEP_GRID_DEG'] ?? 0);
+if (process.env['SWEEP_EBM_SWEEPS']) EBM_SOLVER.sweeps = Number(process.env['SWEEP_EBM_SWEEPS']);
+if (process.env['SWEEP_EBM_YEARS']) {
+  EBM_FULL_CAPACITY_YEARS.years = Number(process.env['SWEEP_EBM_YEARS']);
 }
 
 /**
@@ -327,8 +349,13 @@ export async function measureLevel(
 ): Promise<LevelReport> {
   const K = MODEL_CONSTANTS as unknown as Record<string, number>;
   K[key] = value;
+  // 検証専用の格子差し替え(SWEEP_GRID_DEG。既定 0 = 素の EARTH_PARAMS)
+  const params =
+    SWEEP_CHEAP_GRID_DEG > 0
+      ? { ...EARTH_PARAMS, gridResolutionDeg: SWEEP_CHEAP_GRID_DEG }
+      : EARTH_PARAMS;
   const t0 = performance.now();
-  const r = await runPipeline(EARTH_PARAMS, opts);
+  const r = await runPipeline(params, opts);
   const sec = (performance.now() - t0) / 1000;
 
   const s = evaluateResult(r);

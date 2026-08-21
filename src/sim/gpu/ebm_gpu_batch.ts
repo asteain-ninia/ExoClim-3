@@ -61,6 +61,14 @@ const LEVEL_PARAM_WORDS = 32;
  * ステップ s・水準 lvl の残差を residual[s * L + lvl] に置く。
  */
 const MAX_STEPS = 16384;
+/**
+ * maxSteps の値の輸出(単発版 ebm_gpu.ts の MAX_STEPS と同値)。
+ * 掃引のバッチ実行器(scripts/sweep_batch_lib.ts)が worker_threads 側の
+ * 代理 EbmAccel に **同期プロパティとして**渡すために要る — step05 は
+ * `ebmAccel.maxSteps` を同期に読んで年数の倍化を抑えるので、
+ * 代理側は主スレッドへ問い合わせずに答えられなければならない。
+ */
+export const EBM_BATCH_MAX_STEPS = MAX_STEPS;
 /** 行別バッファの確保上限(単発版と同じ) */
 const MAX_ROWS = 512;
 
