@@ -62,6 +62,7 @@ export function computeOceanCurrent(
     towardEquator: boolean,
     eccMean: number,
     separationLat: number,
+    requireWidth = false,
   ): number => {
     const absLat = Math.abs(lat);
     const targetAbs = towardEquator ? eccMean : separationLat;
@@ -74,10 +75,64 @@ export function computeOceanCurrent(
       const r2 = row + step * d;
       if (r2 < 0 || r2 >= H) break;
       if (land[r2 * W + col]) break;
-      open++;
+      if (requireWidth) {
+        // 幅チェック(warmGateWidthCheck = 1、事前登録 v31 件 1): 暖流は赤道の
+        // 熱の搬入なので、搬入路は列 1 本でなく経度方向にも開いている必要が
+        // ある。経路の行ごとに左右 ±2 列の海の割合(1/5〜1)を行の寄与にし、
+        // 細い水路(縁海西縁 → 赤道のすき間)を連続に減衰する
+        let sea = 1; // 中央列(直上で海と確認済み)
+        for (const dc of [-2, -1, 1, 2]) {
+          if (!land[r2 * W + ((col + dc + W * 4) % W)]) sea++;
+        }
+        open += sea / 5;
+      } else {
+        open++;
+      }
     }
     return Math.min(1, open / needRows);
   };
+
+  /**
+   * ソマリ型湧昇の岸向き判別(2026-08-21、事前登録 v31 件 1): セルから赤道側へ
+   * 1 行ずつ歩き、各行で「西」(自転方向の逆側。順行 = col 減)へ ~500km 以内に
+   * 陸があるかを数え、その割合(0〜1)を返す。
+   * 岸沿いの赤道横断流(ソマリジェット型)は**経度方向の岸(西縁)が赤道まで
+   * 連続している**ときにだけ立つ。ベンガル湾北岸のような緯度方向の岸は、
+   * 赤道側へ歩くと西の陸が途中で尽きるため割合が下がり除外される。
+   * 地理は名指ししない(逆行自転では走査方向の反転だけで鏡像成立)。
+   */
+  const westCoastContinuityToEquator = (row: number, col: number, lat: number): number => {
+    const needRows = Math.max(1, Math.round(Math.abs(lat) / grid.resolutionDeg));
+    const stepR = lat >= 0 ? 1 : -1; // 赤道側へ(row0 = 北端)
+    const dirW = prograde ? -1 : 1; // 自転方向の逆側 = 境界流の意味の「西」
+    let ok = 0;
+    for (let d = 1; d <= needRows; d++) {
+      const r2 = row + stepR * d;
+      if (r2 < 0 || r2 >= H) break;
+      const reachCells = Math.max(1, Math.round(500 / cellWidthKm(grid, r2, params.body.radiusKm)));
+      for (let s = 0; s <= reachCells; s++) {
+        // s = 0(自列)も数える: 岸が東へ張り出して歩行列に掛かる場合も岸の連続
+        if (land[r2 * W + ((col + dirW * s + W * 4) % W)]) {
+          ok++;
+          break;
+        }
+      }
+    }
+    return ok / needRows;
+  };
+
+  // ソマリ型湧昇用の前計算: 経度列ごとの ITCZ 年最大変位(北向き・南向き、
+  // 正の大きさ)。SST は年一枚なので「夏半球」はこの深い側の半球で判定する
+  const itczMaxDispN = new Float32Array(W);
+  const itczMaxDispS = new Float32Array(W);
+  for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+    const c = itcz.monthlyCenterLatDegByCol[m];
+    for (let col = 0; col < W; col++) {
+      const v = c?.[col] ?? 0;
+      if (v > (itczMaxDispN[col] ?? 0)) itczMaxDispN[col] = v;
+      if (-v > (itczMaxDispS[col] ?? 0)) itczMaxDispS[col] = -v;
+    }
+  }
 
   // SST 偏差の帯域も惑星固有の風帯から導出(地球でそれぞれ ~8/38/68° に一致)
   const meanOf = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
@@ -174,7 +229,15 @@ export function computeOceanCurrent(
         if (nearWestBoundaryKm < K.boundaryCurrentReachKm) {
           const openEq =
             K.boundaryCurrentOpennessGate > 0
-              ? opennessAlongColumn(row, col, lat, true, eccMean, separationLat)
+              ? opennessAlongColumn(
+                  row,
+                  col,
+                  lat,
+                  true,
+                  eccMean,
+                  separationLat,
+                  K.warmGateWidthCheck > 0,
+                )
               : 1;
           anomaly +=
             K.warmBoundaryCurrentC *
@@ -220,9 +283,41 @@ export function computeOceanCurrent(
         anomaly += K.equatorialUpwellingC * ((pos - 0.5) / 0.5) * (1 - absLat / eccMean);
       }
 
-      // 注: 貿易風帯の「陸が極側」湧昇(ソマリ型)は帯規則ではベンガル湾北岸
-      // (モンスーンの主供給源)と区別できず実装見送り(2026-07-30 検討)。
-      // 季節風向を持つ将来の月別 SST 化の際に再訪する。
+      // ソマリ型湧昇(2026-08-21、事前登録 v31 件 1。somaliUpwellingC = 0 で
+      // 従来とビット一致): 夏半球で ITCZ が自セルより深く極側へ変位すると、
+      // 海盆西縁の岸沿いに赤道横断流が立ち、エクマン輸送が沿岸水を沖へ運んで
+      // 深層水が上がる(実物: ソマリジェットとソマリア〜オマーン沖の夏の湧昇。
+      // SST 偏差 −3〜−5°C。現行モデルは縁海の偽暖流で符号ごと逆だった)。
+      // 2026-07-30 の見送り理由「帯規則ではベンガル湾北岸と区別できない」は、
+      // 岸の向き判別(westCoastContinuityToEquator: 西の岸が赤道まで連続して
+      // いるか)で解消した — 湧昇は西縁(経度方向の岸)限定で、北岸(緯度方向の
+      // 岸)には掛けない。SST は年一枚なので夏半球は ITCZ 年最大変位の深い側で
+      // 判定する(月別 SST 化はしない)。
+      if (
+        K.somaliUpwellingC !== 0 &&
+        absLat <= separationLat &&
+        nearWestBoundaryKm < K.boundaryCurrentReachKm
+      ) {
+        const dispN = itczMaxDispN[col] ?? 0;
+        const dispS = itczMaxDispS[col] ?? 0;
+        const deepNorth = dispN >= dispS; // この経度の「深い夏」の半球
+        if ((lat >= 0) === deepNorth) {
+          // 変位の深さ(ITCZ 中心 − 自セル緯度)で連続に立ち上げる。
+          // 深さ 8° で全開、セルが ITCZ より 4° 極側で 0(縁は線形の余韻)
+          const depth = (deepNorth ? dispN : dispS) - absLat;
+          const depthFactor = Math.min(1, Math.max(0, (depth + 4) / 12));
+          if (depthFactor > 0) {
+            // 岸の連続は 3/4 から満点 1 へ線形(半端な岸では立てない)
+            const cont = westCoastContinuityToEquator(row, col, lat);
+            const coastFactor = Math.min(1, Math.max(0, (cont - 0.75) / 0.25));
+            anomaly -=
+              K.somaliUpwellingC *
+              depthFactor *
+              coastFactor *
+              (1 - nearWestBoundaryKm / K.boundaryCurrentReachKm);
+          }
+        }
+      }
 
       sstAnomalyC[i] = anomaly;
       currentClass[i] = anomaly > 0.5 ? 1 : anomaly < -0.5 ? -1 : 0;
