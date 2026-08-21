@@ -208,6 +208,15 @@ export function computeAirflow(
           bu *= damp;
           bv *= damp;
         }
+        // --- 陸面摩擦(v31 件 3、2026-08-21。事前登録_v31物理バッチ)---
+        // 陸の粗度による地表風の減速。観測の陸上月平均 10m 風は 2〜4 m/s だが
+        // モデルは帯状卓越風 6.7〜9 がほぼ素通しで、陸の水蒸気移流が
+        // 強すぎる(利用者 FB)。海上は触らない(蒸発の源泉を守る)。
+        // **1 = 従来とビット一致。**標高減衰と乗算
+        if (terrain.landMask[i] && K.landSurfaceFrictionFactor < 1) {
+          bu *= K.landSurfaceFrictionFactor;
+          bv *= K.landSurfaceFrictionFactor;
+        }
         // 合計風速の上限(地表月平均としての妥当域)
         const mag = Math.hypot(bu, bv);
         const MAX_WIND = 13;
