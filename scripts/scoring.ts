@@ -967,6 +967,12 @@ export interface IntermediateFieldScore {
   sstAnomRmseC: number;
   /** 観測側の SST 偏差の空間 SD(無次元化用) */
   obsSdSstAnomC: number;
+  /**
+   * v7b: 符号矛盾 RMSE(°C)。モデル偏差と観測偏差の符号が逆のセルだけの誤差を、
+   * 全セルの面積重みで正規化して RMS。偽の寒流・暖流(観測は暖なのにモデルは寒 等)
+   * は面積が小さく全球 RMSE では希釈されるため、矛盾だけを集めて露出させる
+   */
+  sstSignErrC: number;
   /** 陸上 10m 風速(年平均 |V|)の RMSE m/s、陸率 ≥ 0.5 の 2° セル、面積重み */
   landWindRmseMs: number;
   /** 観測側の陸上風速の空間 SD */
@@ -979,7 +985,13 @@ export function intermediateFieldScore(result: PipelineResult): IntermediateFiel
   const ocean = (result as Partial<PipelineResult>).ocean;
   const airflow = (result as Partial<PipelineResult>).airflow;
   if (!ocean?.sstAnomalyC || !airflow?.monthlyWindU) {
-    return { sstAnomRmseC: 0, obsSdSstAnomC: 1, landWindRmseMs: 0, obsSdLandWindMs: 1 };
+    return {
+      sstAnomRmseC: 0,
+      obsSdSstAnomC: 1,
+      sstSignErrC: 0,
+      landWindRmseMs: 0,
+      obsSdLandWindMs: 1,
+    };
   }
   const obs = getObsIntermediate();
   const grid = result.context.grid;
@@ -1017,6 +1029,7 @@ export function intermediateFieldScore(result: PipelineResult): IntermediateFiel
     }
   }
   let seSst = 0;
+  let seSign = 0;
   let wSst = 0;
   let oA = 0;
   let oA2 = 0;
@@ -1045,6 +1058,7 @@ export function intermediateFieldScore(result: PipelineResult): IntermediateFiel
       const oAnom = (obsBlock[ci] ?? 0) - oMean;
       const d = mAnom - oAnom;
       seSst += w * d * d;
+      if (mAnom * oAnom < 0) seSign += w * d * d;
       wSst += w;
       oA += w * oAnom;
       oA2 += w * oAnom * oAnom;
@@ -1099,6 +1113,7 @@ export function intermediateFieldScore(result: PipelineResult): IntermediateFiel
   return {
     sstAnomRmseC: Math.sqrt(seSst / Math.max(1e-9, wSst)),
     obsSdSstAnomC: sdOf(oA, oA2, wSst),
+    sstSignErrC: Math.sqrt(seSign / Math.max(1e-9, wSst)),
     landWindRmseMs: Math.sqrt(seWind / Math.max(1e-9, wWind)),
     obsSdLandWindMs: sdOf(oV, oV2, wWind),
   };

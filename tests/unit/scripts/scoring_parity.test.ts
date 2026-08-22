@@ -84,6 +84,7 @@ describe('採点の一元化(P0-3)', () => {
     const fitnessV7 =
       fitnessV6 -
       W.wSstAnom * (im.sstAnomRmseC / Math.max(1e-9, im.obsSdSstAnomC)) -
+      W.wSstAnom * (im.sstSignErrC / Math.max(1e-9, im.obsSdSstAnomC)) -
       W.wLandWind * (im.landWindRmseMs / Math.max(1e-9, im.obsSdLandWindMs));
     expect(s.fitness).toBeCloseTo(fitnessV7, 12);
     expect(s.sstAnomRmseC).toBe(im.sstAnomRmseC);

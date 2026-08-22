@@ -31,6 +31,7 @@ function scores(sound: boolean, failures: string[] = []): Scores {
     fitnessV5: 82.5,
     fitnessV6: 82.4,
     sstAnomRmseC: 1.2,
+    sstSignErrC: 0.4,
     landWindRmseMs: 2.5,
     precipPhaseBandMeanDays: 65,
     precipPhaseRmseDays: 71,

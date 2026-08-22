@@ -152,6 +152,7 @@ describe('空間ホールドアウト分割(P1-1)', () => {
       const expectedV7 =
         expectedV6 -
         W.wSstAnom * (im.sstAnomRmseC / Math.max(1e-9, im.obsSdSstAnomC)) -
+        W.wSstAnom * (im.sstSignErrC / Math.max(1e-9, im.obsSdSstAnomC)) -
         W.wLandWind * (im.landWindRmseMs / Math.max(1e-9, im.obsSdLandWindMs));
       expect(s.fitness).toBeCloseTo(expectedV7, 10);
       expect(s.gateShare).toBeCloseTo(gateShareTerm, 10);

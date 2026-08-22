@@ -211,6 +211,7 @@ export interface Scores {
   fitnessV6: number;
   /** v7: SST 偏差 RMSE(°C)と陸上風速 RMSE(m/s)。無次元化前の生値 */
   sstAnomRmseC: number;
+  sstSignErrC: number;
   landWindRmseMs: number;
   /** v6 の位相距離: 帯別 RMSE の平均(日) */
   precipPhaseBandMeanDays: number;
@@ -446,9 +447,12 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
 
   // ---- v7(探索が最大化する量。2026-08-22 の事前登録)----
   // v6 + 中間場の係留(SST 偏差・陸上風速、観測 SD で無次元化)。
+  // v7b(2026-08-22 追記 3): SST 項に符号矛盾 RMSE を同じ重みで加える。
+  // 全球 RMSE では縁海の偽寒流の罰が 0.05 点に希釈された(旧物理が +0.40 勝つ)
   const fitness =
     fitnessV6 -
     W.wSstAnom * (im.sstAnomRmseC / Math.max(1e-9, im.obsSdSstAnomC)) -
+    W.wSstAnom * (im.sstSignErrC / Math.max(1e-9, im.obsSdSstAnomC)) -
     W.wLandWind * (im.landWindRmseMs / Math.max(1e-9, im.obsSdLandWindMs));
 
   // ---- 数値的健全性(2026-08-14)----
@@ -479,6 +483,7 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
     fitnessV5,
     fitnessV6,
     sstAnomRmseC: im.sstAnomRmseC,
+    sstSignErrC: im.sstSignErrC,
     landWindRmseMs: im.landWindRmseMs,
     precipPhaseBandMeanDays: f.precipPhaseBandMeanDays,
     precipPhaseRmseDays: f.precipPhaseRmseDays,
