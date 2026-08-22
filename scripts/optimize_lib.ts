@@ -4,7 +4,9 @@
 
 import { MODEL_CONSTANTS } from '../src/sim/constants';
 import type { PipelineResult } from '../src/sim/types';
-import { fieldScore, itczLineRmse, koppenScore, scoreRegionGates } from './scoring';
+import { fieldScore, itczLineRmse, koppenScore, scoreRegionGates,
+  intermediateFieldScore,
+} from './scoring';
 import { gateFoldAssignments, keepExcludingFold } from './holdout';
 import { EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
 import { CONSERVATIVE_STATS } from '../src/sim/step06_precipitation';
@@ -151,8 +153,11 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['somaliUpwellingC', 0, 4],
   // ITCZ の湿った陸への一般化吸引: 単独中立(マダガスカル・メキシコの局所改善)
   ['itczMoistLandPullDeg', 0, 5],
-  // 陸面摩擦: 単独では悪化(凝結率と綱引き)— 組み合わせは較正が決める
-  ['landSurfaceFrictionFactor', 0.6, 1],
+  // 陸面摩擦: 単独では悪化(凝結率と綱引き)— 組み合わせは較正が決める。
+  // v32(2026-08-22): 下限 0.6→0.3。観測の陸上 10m 風 2〜4 m/s 対 モデル 7〜9 m/s
+  // (係数 ≈ 0.35 相当)に届く範囲にする — 観測事実からの範囲設定で、
+  // 結果を見た緩和ではない(事前登録_目的関数v7 追記 1)
+  ['landSurfaceFrictionFactor', 0.3, 1],
   ['subpolarWinterLowHpa', 3, 7],
   ['tradeWindMs', 5, 7.5],
   // **段 38(2026-08-15): westerlyWindMs を探索空間から外した。**
@@ -202,6 +207,11 @@ export interface Scores {
   fitnessV4: number;
   /** v5 の値(全球位相 RMSE 版。v6 移行後は併記のみ) */
   fitnessV5: number;
+  /** v6 の値(帯別位相版。v7 移行後は併記のみ) */
+  fitnessV6: number;
+  /** v7: SST 偏差 RMSE(°C)と陸上風速 RMSE(m/s)。無次元化前の生値 */
+  sstAnomRmseC: number;
+  landWindRmseMs: number;
   /** v6 の位相距離: 帯別 RMSE の平均(日) */
   precipPhaseBandMeanDays: number;
   /**
@@ -332,6 +342,20 @@ export const OBJECTIVE_V6 = {
   ...OBJECTIVE_V5,
 } as const;
 
+/**
+ * 目的関数 v7(2026-08-22 に事前登録)。v6 + **中間場の係留** 2 項:
+ * SST 偏差(対 NOAA OI SST)と陸上 10m 風速(対 NCEP/NCAR R1)。最終地図しか
+ * 見ない物差しは途中の場が嘘でも報酬する(偽寒流への依存 −0.53)ので、
+ * 途中の場を観測に係留する。重みは wTempMean との対称性(4)で決め、
+ * 現状値を見た調整はしない。
+ * 事前登録: docs/事前登録_目的関数v7_中間場の係留_2026-08-22.md
+ */
+export const OBJECTIVE_V7 = {
+  ...OBJECTIVE_V6,
+  wSstAnom: 4,
+  wLandWind: 4,
+} as const;
+
 // 目的関数 v3(2026-08-02 に事前登録 — 利用者の許可を得て v2 から改訂)。
 // v2 も併記のため計算し続ける。v2 の定義は下記のとおり:
 //   fitnessV2 = 大分類% + 1.1×地域ゲート数 + 0.25×詳細%
@@ -357,6 +381,8 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
   const gateResults = scoreRegionGates(result);
   const itczRmse = itczLineRmse(result);
   const f = fieldScore(result, undefined, keep);
+  // v7: 中間場(海流 SST 偏差・陸上風速)。保留区画は未対応(全球で測る)
+  const im = intermediateFieldScore(result);
   let gates: number;
   /** v2・v3 が使う離散のゲート項(合格件数) */
   let gateTerm: number;
@@ -389,7 +415,7 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
 
   // ---- v3(2026-08-02〜2026-08-16 に探索が最大化していた量。以後は併記のみ)----
   // 各誤差を**観測自身の空間ばらつき**で割ってから重みを掛ける。
-  const W = OBJECTIVE_V6;
+  const W = OBJECTIVE_V7;
   /** ゲート項を除いた連続部分。v3 と v4 で共通なので一度だけ組む */
   const continuousV3 =
     k.majorPct +
@@ -414,9 +440,16 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
   // v4 に降水の季節位相(全球 RMSE)を足した。
   const fitnessV5 = fitnessV4 - W.wPrecipPhase * (f.precipPhaseRmseDays / W.phaseScaleDays);
 
-  // ---- v6(探索が最大化する量。2026-08-19 の事前登録)----
+  // ---- v6(2026-08-19。以後は併記のみ)----
   // 位相の距離を帯別 RMSE の平均へ置換。それ以外は v5 と同一。
-  const fitness = fitnessV4 - W.wPrecipPhase * (f.precipPhaseBandMeanDays / W.phaseScaleDays);
+  const fitnessV6 = fitnessV4 - W.wPrecipPhase * (f.precipPhaseBandMeanDays / W.phaseScaleDays);
+
+  // ---- v7(探索が最大化する量。2026-08-22 の事前登録)----
+  // v6 + 中間場の係留(SST 偏差・陸上風速、観測 SD で無次元化)。
+  const fitness =
+    fitnessV6 -
+    W.wSstAnom * (im.sstAnomRmseC / Math.max(1e-9, im.obsSdSstAnomC)) -
+    W.wLandWind * (im.landWindRmseMs / Math.max(1e-9, im.obsSdLandWindMs));
 
   // ---- 数値的健全性(2026-08-14)----
   // `npm run validate` と**同じ凍結済みの関門**を使う。判定の二重定義を作らない。
@@ -444,6 +477,9 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
     fitnessV3,
     fitnessV4,
     fitnessV5,
+    fitnessV6,
+    sstAnomRmseC: im.sstAnomRmseC,
+    landWindRmseMs: im.landWindRmseMs,
     precipPhaseBandMeanDays: f.precipPhaseBandMeanDays,
     precipPhaseRmseDays: f.precipPhaseRmseDays,
     /** ゲート項を除いた連続部分。目的関数をまたいで比べられる唯一の量 */

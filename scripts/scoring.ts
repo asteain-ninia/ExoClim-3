@@ -917,3 +917,189 @@ export function itczLineRmse(
   }
   return Math.sqrt(se / Math.max(1e-9, wsum));
 }
+
+// ---- 中間場の係留(目的関数 v7、2026-08-22)----
+// 最終地図しか見ない物差しは、途中の場(海流・風)が嘘でも報酬する
+// (偽寒流への依存 −0.53 がその帰結)。観測の中間場(NOAA PSL、2°、
+// tests/fixtures/obs_intermediate)にモデルの中間場を係留する 2 項。
+// 事前登録: docs/事前登録_目的関数v7_中間場の係留_2026-08-22.md
+
+interface ObsGrid2 {
+  width: number;
+  height: number;
+  missing: number;
+  values: number[];
+}
+
+let obsIntermediateCache: {
+  sstAnn: ObsGrid2;
+  windSpeedAnn: Float64Array; // 12 か月の |V| 平均(2° 格子、行 0 = 北端)
+} | null = null;
+
+function getObsIntermediate(): NonNullable<typeof obsIntermediateCache> {
+  if (obsIntermediateCache) return obsIntermediateCache;
+  const dir = path.join(process.cwd(), 'tests/fixtures/obs_intermediate');
+  const load = (name: string): ObsGrid2 =>
+    JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')) as ObsGrid2;
+  const sstAnn = load('sst_ann.json');
+  const n = sstAnn.width * sstAnn.height;
+  const windSpeedAnn = new Float64Array(n);
+  for (let m = 1; m <= 12; m++) {
+    const u = load(`uwnd10_m${String(m).padStart(2, '0')}.json`);
+    const v = load(`vwnd10_m${String(m).padStart(2, '0')}.json`);
+    for (let i = 0; i < n; i++) {
+      const uu = u.values[i] ?? 0;
+      const vv = v.values[i] ?? 0;
+      if (uu <= -9000 || vv <= -9000) {
+        windSpeedAnn[i] = -9999;
+        continue;
+      }
+      if ((windSpeedAnn[i] ?? 0) <= -9000) continue;
+      windSpeedAnn[i] = (windSpeedAnn[i] ?? 0) + Math.hypot(uu, vv) / 12;
+    }
+  }
+  obsIntermediateCache = { sstAnn, windSpeedAnn };
+  return obsIntermediateCache;
+}
+
+export interface IntermediateFieldScore {
+  /** SST 偏差(緯度円の海平均からの差)の RMSE °C、海セル |lat| ≤ 60、面積重み */
+  sstAnomRmseC: number;
+  /** 観測側の SST 偏差の空間 SD(無次元化用) */
+  obsSdSstAnomC: number;
+  /** 陸上 10m 風速(年平均 |V|)の RMSE m/s、陸率 ≥ 0.5 の 2° セル、面積重み */
+  landWindRmseMs: number;
+  /** 観測側の陸上風速の空間 SD */
+  obsSdLandWindMs: number;
+}
+
+export function intermediateFieldScore(result: PipelineResult): IntermediateFieldScore {
+  // 合成結果(テストの最小モック)には海流・気流が無いことがある。
+  // その場合は項を 0(SD 1)にして目的関数へ影響させない(本番は必ず持つ)
+  const ocean = (result as Partial<PipelineResult>).ocean;
+  const airflow = (result as Partial<PipelineResult>).airflow;
+  if (!ocean?.sstAnomalyC || !airflow?.monthlyWindU) {
+    return { sstAnomRmseC: 0, obsSdSstAnomC: 1, landWindRmseMs: 0, obsSdLandWindMs: 1 };
+  }
+  const obs = getObsIntermediate();
+  const grid = result.context.grid;
+  const land = result.context.terrain.landMask;
+  const f = Math.round(2 / grid.resolutionDeg);
+  const OW = obs.sstAnn.width;
+  const OH = obs.sstAnn.height;
+
+  // ---- SST 偏差: 2° ブロック平均(海セル)を作り、双方を「行の海平均からの差」にする ----
+  const modelBlock = new Float64Array(OW * OH).fill(NaN);
+  const obsBlock = new Float64Array(OW * OH).fill(NaN);
+  for (let cr = 0; cr < OH; cr++) {
+    const lat = 89 - cr * 2;
+    if (Math.abs(lat) > 60) continue;
+    for (let cc = 0; cc < OW; cc++) {
+      const ci = cr * OW + cc;
+      const o = obs.sstAnn.values[ci] ?? -9999;
+      if (o <= -9000) continue;
+      let s = 0;
+      let n = 0;
+      for (let dr = 0; dr < f; dr++) {
+        for (let dc = 0; dc < f; dc++) {
+          const gr = cr * f + dr;
+          const gc = cc * f + dc;
+          if (gr >= grid.heightCells || gc >= grid.widthCells) continue;
+          const gi = gr * grid.widthCells + gc;
+          if (land[gi]) continue;
+          s += ocean.sstAnomalyC[gi] ?? 0;
+          n++;
+        }
+      }
+      if (n === 0) continue;
+      modelBlock[ci] = s / n;
+      obsBlock[ci] = o;
+    }
+  }
+  let seSst = 0;
+  let wSst = 0;
+  let oA = 0;
+  let oA2 = 0;
+  for (let cr = 0; cr < OH; cr++) {
+    const lat = 89 - cr * 2;
+    const w = Math.cos((lat * Math.PI) / 180);
+    let mSum = 0;
+    let oSum = 0;
+    let n = 0;
+    for (let cc = 0; cc < OW; cc++) {
+      const ci = cr * OW + cc;
+      const mv = modelBlock[ci] ?? NaN;
+      if (Number.isNaN(mv)) continue;
+      mSum += mv;
+      oSum += obsBlock[ci] ?? 0;
+      n++;
+    }
+    if (n < 3) continue;
+    const mMean = mSum / n;
+    const oMean = oSum / n;
+    for (let cc = 0; cc < OW; cc++) {
+      const ci = cr * OW + cc;
+      const mv = modelBlock[ci] ?? NaN;
+      if (Number.isNaN(mv)) continue;
+      const mAnom = mv - mMean;
+      const oAnom = (obsBlock[ci] ?? 0) - oMean;
+      const d = mAnom - oAnom;
+      seSst += w * d * d;
+      wSst += w;
+      oA += w * oAnom;
+      oA2 += w * oAnom * oAnom;
+    }
+  }
+
+  // ---- 陸上風速: 月別 |V| の年平均を陸率 ≥ 0.5 の 2° セルで比べる ----
+  let seWind = 0;
+  let wWind = 0;
+  let oV = 0;
+  let oV2 = 0;
+  const months = airflow.monthlyWindU.length;
+  for (let cr = 0; cr < OH; cr++) {
+    const lat = 89 - cr * 2;
+    const w = Math.cos((lat * Math.PI) / 180);
+    for (let cc = 0; cc < OW; cc++) {
+      const ci = cr * OW + cc;
+      const ov = obs.windSpeedAnn[ci] ?? -9999;
+      if (ov <= -9000) continue;
+      let s = 0;
+      let nLand = 0;
+      let nAll = 0;
+      for (let dr = 0; dr < f; dr++) {
+        for (let dc = 0; dc < f; dc++) {
+          const gr = cr * f + dr;
+          const gc = cc * f + dc;
+          if (gr >= grid.heightCells || gc >= grid.widthCells) continue;
+          nAll++;
+          const gi = gr * grid.widthCells + gc;
+          if (!land[gi]) continue;
+          nLand++;
+          let sp = 0;
+          for (let m = 0; m < months; m++) {
+            sp += Math.hypot(airflow.monthlyWindU[m]?.[gi] ?? 0, airflow.monthlyWindV[m]?.[gi] ?? 0);
+          }
+          s += sp / Math.max(1, months);
+        }
+      }
+      if (nAll === 0 || nLand * 2 < nAll) continue;
+      const d = s / nLand - ov;
+      seWind += w * d * d;
+      wWind += w;
+      oV += w * ov;
+      oV2 += w * ov * ov;
+    }
+  }
+  const sdOf = (a: number, a2: number, ws: number): number => {
+    if (ws <= 0) return 1;
+    const mean = a / ws;
+    return Math.sqrt(Math.max(1e-12, a2 / ws - mean * mean));
+  };
+  return {
+    sstAnomRmseC: Math.sqrt(seSst / Math.max(1e-9, wSst)),
+    obsSdSstAnomC: sdOf(oA, oA2, wSst),
+    landWindRmseMs: Math.sqrt(seWind / Math.max(1e-9, wWind)),
+    obsSdLandWindMs: sdOf(oV, oV2, wWind),
+  };
+}

@@ -4,9 +4,10 @@
 // 合成結果で担保する。パイプラインは実行しない(採点層だけの検査)。
 
 import { describe, expect, it } from 'vitest';
-import { OBJECTIVE_V5, evaluateResult } from '../../../scripts/optimize_lib';
+import { OBJECTIVE_V7, evaluateResult } from '../../../scripts/optimize_lib';
 import {
   fieldScore,
+  intermediateFieldScore,
   itczLineRmse,
   koppenScore,
   scoreRegionGates,
@@ -48,7 +49,7 @@ describe('採点の一元化(P0-3)', () => {
     expect(s.fitnessV2).toBeCloseTo(fitnessV2, 12);
 
     // v3(2026-08-02〜08-16 に探索が最大化していた量。以後は併記のみ)
-    const W = OBJECTIVE_V5;
+    const W = OBJECTIVE_V7;
     const fitnessV3 =
       k.majorPct +
       1.1 * s.gates +
@@ -77,7 +78,15 @@ describe('採点の一元化(P0-3)', () => {
     // v6(2026-08-19 以降、探索が最大化する量)。位相の距離を帯別 RMSE の平均へ置換
     const fitnessV6 =
       fitnessV4 - W.wPrecipPhase * (f.precipPhaseBandMeanDays / W.phaseScaleDays);
-    expect(s.fitness).toBeCloseTo(fitnessV6, 12);
+    expect(s.fitnessV6).toBeCloseTo(fitnessV6, 12);
+    // v7(2026-08-22 以降、探索が最大化する量)。v6 + 中間場の係留 2 項
+    const im = intermediateFieldScore(result);
+    const fitnessV7 =
+      fitnessV6 -
+      W.wSstAnom * (im.sstAnomRmseC / Math.max(1e-9, im.obsSdSstAnomC)) -
+      W.wLandWind * (im.landWindRmseMs / Math.max(1e-9, im.obsSdLandWindMs));
+    expect(s.fitness).toBeCloseTo(fitnessV7, 12);
+    expect(s.sstAnomRmseC).toBe(im.sstAnomRmseC);
     expect(s.precipPhaseRmseDays).toBe(f.precipPhaseRmseDays);
     expect(s.precipPhaseBandMeanDays).toBe(f.precipPhaseBandMeanDays);
     expect(s.gateShare).toBeCloseTo(gateShare, 12);
