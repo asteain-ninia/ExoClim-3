@@ -1315,6 +1315,8 @@ export async function computePrecipitation(
    * 突き合わせる)。速度のために答えを動かしては本末転倒である。
    */
   const warmStart: Array<Float32Array | null> = new Array(MONTHS_PER_YEAR).fill(null);
+  /** 蒸発の季節変調係数(台帳 項目 3)の前反復値 — 緩和用 */
+  const evapSeasonF: Array<Float32Array | null> = new Array(MONTHS_PER_YEAR).fill(null);
 
   /**
    * 降水を**凝結量**として作る。
@@ -1420,6 +1422,30 @@ export async function computePrecipitation(
     const oceanE = evapCache.v.monthlyOceanEvapMm[m];
     for (let i = 0; i < N; i++) {
       src[i] = terrain.landMask[i] ? (etM?.[i] ?? 0) : (oceanE?.[i] ?? 0);
+    }
+    // 台帳 項目 3(2026-08-24): 海上蒸発の季節変調。前の結合反復の W で
+    // 大気側湿度を変調する: 蒸発 × ((1 − RH·f) / (1 − RH))、f = clamp((W_m/W̄)^k, 0.5, 1.2)。
+    // 冬に W が少ない海で RH が下がり蒸発が増える(実物の冬の蒸発極大)。
+    // 既定 k=0 では f=1 で係数 1 = 従来とビット一致。初回(W 無し)も変調なし
+    if (K.evapHumiditySeasonalExp > 0 && warmStart.every((w) => w !== null)) {
+      // **緩和が要る**(2026-08-24 実測): 前反復の W をそのまま使うと
+      // W→蒸発→W の正帰還が 2 周期振動になり結合反復が収束しない
+      // (k=1〜3 の全水準で健全性 ×)。係数 f を前反復の f と半々に混ぜ、
+      // 振れ幅も [0.7, 1.15] に絞る(教訓: 反復が 2 周期に割れたら遅延を疑う)
+      const rh = K.evapOceanRelHumidity;
+      const wPrevM = warmStart[m] as Float32Array;
+      const fPrev = evapSeasonF[m] ?? (evapSeasonF[m] = new Float32Array(N).fill(1));
+      for (let i = 0; i < N; i++) {
+        if (terrain.landMask[i]) continue;
+        let wBar = 0;
+        for (let mm = 0; mm < MONTHS_PER_YEAR; mm++) wBar += (warmStart[mm] as Float32Array)[i] ?? 0;
+        wBar /= MONTHS_PER_YEAR;
+        if (!(wBar > 1e-6)) continue;
+        const fRaw = Math.pow((wPrevM[i] ?? 0) / wBar, K.evapHumiditySeasonalExp);
+        const f = Math.min(1.15, Math.max(0.7, 0.5 * (fPrev[i] ?? 1) + 0.5 * fRaw));
+        fPrev[i] = f;
+        src[i] = (src[i] ?? 0) * ((1 - rh * f) / Math.max(1e-6, 1 - rh));
+      }
     }
     // 段 45b: コンベアの源泉・シンク対(既定 0 では conveyorPrep が null で不発。
     // 初回の結合反復は warmStart が無いので不発 — 2 回目以降で自己整合する)
