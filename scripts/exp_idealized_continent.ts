@@ -40,6 +40,17 @@ import { MONTHS_PER_YEAR } from '../src/domain/insolation';
 import { latDegOfRow } from '../src/domain/grid';
 import { KOPPEN_CLASSES, majorClassOf } from '../src/domain/koppen';
 import { openAccel } from './accel_cli';
+import { MODEL_CONSTANTS } from '../src/sim/constants';
+// DIAG_OVERRIDE 対応(2026-08-24: 45d の切り分けで定数を振るため)
+{
+  const K = MODEL_CONSTANTS as unknown as Record<string, number>;
+  if (process.env['DIAG_OVERRIDE']) {
+    for (const part of process.env['DIAG_OVERRIDE'].split(',')) {
+      const [n, v] = part.split('=');
+      if (n && n.trim() in K) { K[n.trim()] = Number(v); console.log(`[上書き] ${n.trim()} = ${v}`); }
+    }
+  }
+}
 
 const TWO = process.argv.includes('--two');
 const resIdx = process.argv.indexOf('--res');
