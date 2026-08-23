@@ -92,4 +92,11 @@ npm run dev        # 開発サーバ
 npm test           # ユニットテスト(Vitest)
 npm run typecheck  # tsc --noEmit
 npm run validate   # ヘッドレス検証(out/validate/ に PNG + 採点)
+npm run monitor    # 自走モニタ GUI(何が走っているか・AI が起こされるか)
 ```
+
+`npm run monitor` は [docs/道具_自走モニタ_2026-08-24.md](docs/道具_自走モニタ_2026-08-24.md)。
+**投げっぱなし(前景実行の孤児化)・二重起動・「計算は終わったのに AI が反応
+していない」を機械的に検出する。**利用者が状況を一目で見るための道具であり、
+AI は関与しない(消費しない)。自分が投げたジョブが「未追跡」と出ていたら、
+それは完了しても呼び戻されないということ。

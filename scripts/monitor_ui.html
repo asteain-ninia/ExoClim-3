@@ -1,0 +1,1050 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ExoClim-3 自走モニタ</title>
+    <style>
+      :root {
+        --bg: #0e1116;
+        --panel: #161b22;
+        --panel2: #1c232c;
+        --line: #2b3441;
+        --fg: #e6edf3;
+        --dim: #8b98a5;
+        --ok: #3fb950;
+        --warn: #d29922;
+        --danger: #f85149;
+        --info: #58a6ff;
+        --idle: #6e7681;
+        --ask: #a371f7;
+        --mono: ui-monospace, "Cascadia Mono", Consolas, "Noto Sans Mono", monospace;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #f6f8fa;
+          --panel: #ffffff;
+          --panel2: #f0f3f6;
+          --line: #d0d7de;
+          --fg: #1f2328;
+          --dim: #656d76;
+          --ok: #1a7f37;
+          --warn: #9a6700;
+          --danger: #cf222e;
+          --info: #0969da;
+          --idle: #6e7781;
+          --ask: #8250df;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font: 14px/1.6 "Yu Gothic UI", "Noto Sans JP", system-ui, sans-serif;
+      }
+      a { color: var(--info); }
+      code, .mono { font-family: var(--mono); font-size: 12.5px; }
+
+      header {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        background: var(--bg);
+        border-bottom: 1px solid var(--line);
+        padding: 10px 16px 0;
+      }
+      .banner {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 12px 16px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        border-left: 6px solid var(--idle);
+      }
+      .banner.ok { border-left-color: var(--ok); }
+      .banner.warn { border-left-color: var(--warn); }
+      .banner.danger { border-left-color: var(--danger); }
+      .banner.ask { border-left-color: var(--ask); }
+      .banner.halt { border-left-color: var(--idle); }
+      .banner.idle { border-left-color: var(--idle); }
+      .dot {
+        width: 14px; height: 14px; border-radius: 50%;
+        background: var(--idle); flex: none;
+      }
+      .ok .dot { background: var(--ok); }
+      .warn .dot { background: var(--warn); }
+      .danger .dot { background: var(--danger); animation: pulse 1.2s infinite; }
+      .ask .dot { background: var(--ask); }
+      @keyframes pulse { 50% { opacity: 0.25; } }
+      .banner h1 { font-size: 18px; margin: 0; font-weight: 700; }
+      .banner .why { color: var(--dim); font-size: 12.5px; margin-top: 2px; }
+      .banner .right { margin-left: auto; text-align: right; color: var(--dim); font-size: 12px; }
+
+      nav { display: flex; gap: 4px; padding: 10px 0 0; flex-wrap: wrap; }
+      nav button {
+        background: none; border: 1px solid transparent; border-bottom: none;
+        color: var(--dim); padding: 7px 14px; cursor: pointer; font: inherit;
+        border-radius: 8px 8px 0 0;
+      }
+      nav button.on { color: var(--fg); background: var(--panel); border-color: var(--line); font-weight: 700; }
+      nav .badge {
+        display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 9px;
+        background: var(--panel2); font-size: 11px; color: var(--fg);
+      }
+      nav .badge.bad { background: var(--danger); color: #fff; }
+      nav .badge.good { background: var(--ok); color: #fff; }
+
+      main { padding: 16px; max-width: 1500px; }
+      section { display: none; }
+      section.on { display: block; }
+
+      .card {
+        background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+        padding: 14px 16px; margin-bottom: 14px;
+      }
+      .card > h2 { margin: 0 0 10px; font-size: 14px; letter-spacing: 0.04em; color: var(--dim); font-weight: 700; }
+      .grid { display: grid; gap: 12px; }
+      .g2 { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+      .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+      .tile { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; }
+      .tile .k { font-size: 11.5px; color: var(--dim); }
+      .tile .v { font-size: 20px; font-weight: 700; font-family: var(--mono); }
+      .tile .r { font-size: 11px; color: var(--dim); }
+      .tile.ok { border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
+      .tile.bad { border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); }
+      .tile.ok .v { color: var(--ok); }
+      .tile.bad .v { color: var(--danger); }
+
+      table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+      th, td { text-align: left; padding: 5px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+      th { color: var(--dim); font-weight: 600; position: sticky; top: 0; background: var(--panel); cursor: pointer; }
+      tbody tr:hover { background: var(--panel2); }
+      td.num, th.num { text-align: right; font-family: var(--mono); }
+      .scroll { max-height: 62vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+
+      .pill {
+        display: inline-block; padding: 1px 8px; border-radius: 20px; font-size: 11px;
+        border: 1px solid var(--line); background: var(--panel2); white-space: nowrap;
+      }
+      .pill.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, var(--line)); }
+      .pill.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 50%, var(--line)); }
+      .pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); }
+      .pill.info { color: var(--info); }
+      .pill.dim { color: var(--dim); }
+
+      .bar { height: 8px; border-radius: 5px; background: var(--panel2); overflow: hidden; border: 1px solid var(--line); }
+      .bar > i { display: block; height: 100%; background: var(--info); }
+      .boundbar { position: relative; height: 6px; border-radius: 4px; background: var(--panel2); border: 1px solid var(--line); min-width: 90px; }
+      .boundbar > i { position: absolute; top: -2px; width: 3px; height: 10px; border-radius: 2px; background: var(--info); }
+      .boundbar.edge > i { background: var(--warn); }
+
+      pre.log {
+        background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+        padding: 9px 11px; overflow: auto; max-height: 220px; margin: 6px 0 0;
+        font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-all;
+      }
+      .quote {
+        border-left: 3px solid var(--line); padding: 2px 0 2px 10px; color: var(--dim);
+        white-space: pre-wrap; font-size: 12.5px; max-height: 6.5em; overflow: hidden;
+      }
+      .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+      .sp { flex: 1; }
+      .dim { color: var(--dim); }
+      input[type='search'], select {
+        background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+        border-radius: 7px; padding: 5px 9px; font: inherit; font-size: 12.5px;
+      }
+      details > summary { cursor: pointer; color: var(--dim); font-size: 12.5px; }
+      .stale { opacity: 0.55; }
+      svg.spark { display: block; width: 100%; height: 130px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div id="banner" class="banner idle">
+        <div class="dot"></div>
+        <div>
+          <h1 id="headline">読み込み中…</h1>
+          <div class="why" id="why"></div>
+        </div>
+        <div class="right">
+          <div id="clock" class="mono"></div>
+          <div id="meta"></div>
+        </div>
+      </div>
+      <nav id="tabs"></nav>
+    </header>
+    <main>
+      <section id="tab-概要" class="on"></section>
+      <section id="tab-計算とAI"></section>
+      <section id="tab-較正"></section>
+      <section id="tab-評価値"></section>
+      <section id="tab-パラメータ"></section>
+      <section id="tab-台帳"></section>
+    </main>
+
+    <script>
+      // ─── 表示の道具。状態の解釈はサーバ側、ここは並べるだけ ───
+      const $ = (s, r = document) => r.querySelector(s);
+      const el = (tag, attrs = {}, ...kids) => {
+        const n = document.createElement(tag);
+        for (const [k, v] of Object.entries(attrs)) {
+          if (v == null || v === false) continue;
+          if (k === 'class') n.className = v;
+          else if (k === 'html') n.innerHTML = v;
+          else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+          else n.setAttribute(k, v);
+        }
+        for (const k of kids.flat()) {
+          if (k == null || k === false) continue;
+          n.append(k.nodeType ? k : document.createTextNode(String(k)));
+        }
+        return n;
+      };
+      const dur = (s) => {
+        if (s == null) return '—';
+        if (s < 60) return s + '秒';
+        if (s < 3600) return Math.floor(s / 60) + '分';
+        if (s < 86400) return Math.floor(s / 3600) + '時間' + Math.floor((s % 3600) / 60) + '分';
+        return Math.floor(s / 86400) + '日' + Math.floor((s % 86400) / 3600) + '時間';
+      };
+      const jst = (iso) => {
+        if (!iso) return '—';
+        const d = new Date(iso);
+        return d.toLocaleString('ja-JP', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+      };
+      const num = (v, d = 3) => {
+        if (typeof v !== 'number' || !Number.isFinite(v)) return String(v ?? '—');
+        if (Number.isInteger(v)) return String(v);
+        const a = Math.abs(v);
+        if (a !== 0 && (a < 1e-3 || a >= 1e6)) return v.toExponential(2);
+        return v.toFixed(a < 1 ? Math.max(d, 3) : d).replace(/\.?0+$/, '');
+      };
+
+      const TABS = ['概要', '計算とAI', '較正', '評価値', 'パラメータ', '台帳'];
+      let current = localStorage.getItem('exoclim.tab') || '概要';
+      let S = null; // 最新の状態
+      const uiState = { paramFilter: '', paramSort: 'name', metric: null, run: null };
+
+      function renderTabs() {
+        const bad = {
+          計算とAI: S ? S.compute.clusters.filter((c) => c.tracked === false).length : 0,
+          評価値: S && S.validate && S.validate.gates ? S.validate.gates.total - S.validate.gates.pass : 0,
+          パラメータ: S && S.params ? S.params.atBound.length : 0,
+        };
+        const cnt = {
+          計算とAI: S ? S.compute.jobCount : 0,
+          較正: S ? S.runs.filter((r) => r.lastWriteAgeSec != null && r.lastWriteAgeSec < 900).length : 0,
+          台帳: S && S.ledger ? (S.ledger.counts['待'] || 0) + (S.ledger.counts['走'] || 0) : 0,
+        };
+        const nav = $('#tabs');
+        nav.replaceChildren(
+          ...TABS.map((t) =>
+            el(
+              'button',
+              {
+                class: t === current ? 'on' : '',
+                onclick: () => {
+                  current = t;
+                  localStorage.setItem('exoclim.tab', t);
+                  document.querySelectorAll('section').forEach((s) => s.classList.toggle('on', s.id === 'tab-' + t));
+                  renderTabs();
+                },
+              },
+              t,
+              bad[t] ? el('span', { class: 'badge bad' }, bad[t]) : cnt[t] ? el('span', { class: 'badge' }, cnt[t]) : null,
+            ),
+          ),
+        );
+      }
+
+      // ─── 汎用: どんな JSON でも表にする(指標が増えても直さない)───
+      function jsonTree(obj, depth = 0) {
+        if (obj == null) return el('span', { class: 'dim' }, 'なし');
+        if (typeof obj !== 'object') return el('span', { class: 'mono' }, num(obj));
+        if (Array.isArray(obj)) {
+          if (!obj.length) return el('span', { class: 'dim' }, '[]');
+          if (obj.every((v) => typeof v !== 'object'))
+            return el('span', { class: 'mono' }, '[' + obj.map((v) => num(v)).join(', ') + ']');
+          return el(
+            'div',
+            {},
+            obj.slice(0, 40).map((v, i) => el('details', { open: depth < 1 }, el('summary', {}, '[' + i + ']'), jsonTree(v, depth + 1))),
+          );
+        }
+        const t = el('table');
+        const tb = el('tbody');
+        for (const [k, v] of Object.entries(obj)) {
+          tb.append(
+            el('tr', {}, el('td', { class: 'dim', style: 'width:32%' }, k), el('td', {}, jsonTree(v, depth + 1))),
+          );
+        }
+        t.append(tb);
+        return t;
+      }
+
+      // ─── 折れ線 ───
+      function spark(idx, vals, label) {
+        const pts = vals.map((v, i) => [idx[i], v]).filter((p) => typeof p[1] === 'number');
+        if (pts.length < 2) return el('div', { class: 'dim' }, 'データ不足');
+        const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+        const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+        const W = 1000, H = 130, PL = 56, PR = 10, PT = 12, PB = 20;
+        const sx = (x) => PL + ((x - x0) / (x1 - x0 || 1)) * (W - PL - PR);
+        const sy = (y) => PT + (1 - (y - y0) / (y1 - y0 || 1)) * (H - PT - PB);
+        const d = pts.map((p, i) => (i ? 'L' : 'M') + sx(p[0]).toFixed(1) + ' ' + sy(p[1]).toFixed(1)).join(' ');
+        const last = pts[pts.length - 1];
+        const ns = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(ns, 'svg');
+        svg.setAttribute('class', 'spark');
+        svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+        svg.setAttribute('preserveAspectRatio', 'none');
+        const mk = (t, a) => {
+          const n = document.createElementNS(ns, t);
+          for (const [k, v] of Object.entries(a)) n.setAttribute(k, v);
+          return n;
+        };
+        for (const [y, anchor] of [[y1, 'max'], [y0, 'min']]) {
+          svg.append(mk('line', { x1: PL, x2: W - PR, y1: sy(y), y2: sy(y), stroke: 'currentColor', 'stroke-opacity': 0.15 }));
+          const tx = mk('text', { x: PL - 6, y: sy(y) + 4, 'text-anchor': 'end', fill: 'currentColor', 'fill-opacity': 0.55, 'font-size': 11 });
+          tx.textContent = num(y, 2);
+          svg.append(tx);
+        }
+        svg.append(mk('path', { d, fill: 'none', stroke: 'var(--info)', 'stroke-width': 2 }));
+        svg.append(mk('circle', { cx: sx(last[0]), cy: sy(last[1]), r: 3.5, fill: 'var(--info)' }));
+        const lb = mk('text', { x: PL, y: H - 5, fill: 'currentColor', 'fill-opacity': 0.55, 'font-size': 11 });
+        lb.textContent = `${label}  #${x0}→#${x1}  最新 ${num(last[1], 3)}`;
+        svg.append(lb);
+        return svg;
+      }
+
+      // ─── 各タブ ───
+      function renderOverview() {
+        const v = S.verdict;
+        const work = S.compute.clusters.filter((c) => !c.parent && c.kind !== '開発サーバ');
+        const cards = [];
+
+        cards.push(
+          el(
+            'div',
+            { class: 'card' },
+            el('h2', {}, 'いま走っているもの'),
+            work.length
+              ? el(
+                  'div',
+                  { class: 'grid g2' },
+                  work.map((c) =>
+                    el(
+                      'div',
+                      { class: 'tile', style: 'padding:11px 13px' },
+                      el(
+                        'div',
+                        { class: 'row' },
+                        el('span', { class: 'pill info' }, c.kind),
+                        el('b', { class: 'mono' }, c.script || '(不明)'),
+                        c.duplicate ? el('span', { class: 'pill bad' }, '二重起動') : null,
+                        c.tracked === false
+                          ? el('span', { class: 'pill bad' }, '未追跡 — 終わっても誰も気づかない')
+                          : el('span', { class: 'pill ok', title: c.trackedHow || '' }, '追跡 ' + (c.trackedBy || '')),
+                        c.workerCount ? el('span', { class: 'pill dim' }, 'ワーカー ' + c.workerCount) : null,
+                      ),
+                      c.args ? el('div', { class: 'mono dim', style: 'word-break:break-all' }, c.args) : null,
+                      el('div', { class: 'dim' }, `経過 ${dur(c.elapsedSec)} / CPU ${num(c.cpuSec, 0)}秒 / ${num(c.memMB, 0)}MB / pid ${c.pids.join(',')}`),
+                    ),
+                  ),
+                )
+              : el('div', { class: 'dim' }, 'このリポジトリの計算プロセスは 0 件。'),
+          ),
+        );
+
+        // AI の自走
+        const s0 = S.ai.sessions[0];
+        cards.push(
+          el(
+            'div',
+            { class: 'card' },
+            el('h2', {}, 'AI は監視しているか'),
+            el(
+              'div',
+              { class: 'tiles' },
+              tile('計算プロセス', S.compute.procCount, work.length ? 'ジョブ ' + work.length + ' 件' : '', work.length > 0 ? 'ok' : ''),
+              tile('二重起動', work.filter((c) => c.duplicate).length, '同じ出力を取り合う', work.some((c) => c.duplicate) ? 'bad' : 'ok'),
+              tile('未追跡ジョブ', work.filter((c) => c.tracked === false).length, '完了で呼び戻されない', work.some((c) => c.tracked === false) ? 'bad' : 'ok'),
+              tile('直近セッション', s0 ? s0.short : '—', s0 ? dur(s0.lastAgeSec) + '前に更新' : ''),
+              tile('完了に未反応', S.ai.sessions.filter((s) => s.flag).length, 'AI が冷えたまま', S.ai.sessions.some((s) => s.flag) ? 'bad' : 'ok'),
+              tile('差し戻し回数', S.flags.guardCount, 'Stop フック'),
+              tile('裁定待ち', S.flags.pending ? 'あり' : 'なし', '', S.flags.pending ? 'bad' : 'ok'),
+              tile('停止札', S.flags.halt ? 'あり' : 'なし', ''),
+            ),
+            s0 && s0.lastText
+              ? el(
+                  'details',
+                  { open: true, style: 'margin-top:10px' },
+                  el('summary', {}, `AI が最後に言ったこと(${s0.short} / ${dur(s0.lastAgeSec)}前 / ${s0.stopReason || s0.lastType || '—'})`),
+                  el('div', { class: 'quote', style: 'max-height:none' }, s0.lastText),
+                )
+              : null,
+            S.flags.pending
+              ? el('details', { open: true }, el('summary', {}, '裁定待ちの内容'), el('pre', { class: 'log' }, S.flags.pending.text))
+              : null,
+          ),
+        );
+
+        // 較正の進捗
+        const r0 = S.runs[0];
+        if (r0) {
+          cards.push(
+            el(
+              'div',
+              { class: 'card' },
+              el('h2', {}, `較正 ${r0.name} の進捗`),
+              runProgress(r0),
+            ),
+          );
+        }
+
+        // 評価値の見出し
+        if (S.validate) {
+          cards.push(
+            el(
+              'div',
+              { class: 'card' },
+              el('h2', {}, `評価値(${S.validate.file} / ${dur(S.validate.ageSec)}前)`),
+              verdictPills(S.validate),
+              el('div', { class: 'tiles', style: 'margin-top:10px' }, S.validate.headline.map(headTile)),
+            ),
+          );
+        }
+
+        cards.push(
+          el(
+            'div',
+            { class: 'card' },
+            el('h2', {}, '直近に書かれたファイル'),
+            el(
+              'div',
+              { class: 'scroll', style: 'max-height:230px' },
+              el(
+                'table',
+                {},
+                el('tbody', {}, S.recentFiles.map((f) => el('tr', {}, el('td', { class: 'dim mono' }, dur(f.ageSec) + '前'), el('td', { class: 'mono' }, f.path), el('td', { class: 'num dim' }, f.sizeKB + 'KB')))),
+              ),
+            ),
+          ),
+        );
+
+        $('#tab-概要').replaceChildren(...cards);
+      }
+
+      function tile(k, v, r, cls) {
+        return el('div', { class: 'tile ' + (cls || '') }, el('div', { class: 'k' }, k), el('div', { class: 'v' }, v), r ? el('div', { class: 'r' }, r) : null);
+      }
+      function headTile(h) {
+        const cls = h.ok == null ? '' : h.ok ? 'ok' : 'bad';
+        const ref = h.ref == null ? '' : (h.better === 'high' ? '基準 ≧ ' : '基準 ≦ ') + num(h.ref, 2);
+        return tile(h.label, num(h.value, 2) + (h.unit || ''), ref, cls);
+      }
+      function verdictPills(v) {
+        const p = (name, o) =>
+          el(
+            'span',
+            { class: 'pill ' + (o.pass == null ? 'dim' : o.pass ? 'ok' : 'bad'), title: (o.failures || []).join(' / ') },
+            name + ' ' + (o.pass == null ? '—' : o.pass ? '合格' : '不合格'),
+          );
+        const g = v.gates;
+        return el(
+          'div',
+          { class: 'row' },
+          p('回帰', v.verdicts.regression),
+          p('途中目標', v.verdicts.interim),
+          p('最終受入', v.verdicts.acceptance),
+          g ? el('span', { class: 'pill ' + (g.pass === g.total ? 'ok' : 'warn') }, `地域ゲート ${g.pass}/${g.total}`) : null,
+          v.diagnostics ? el('span', { class: 'pill ' + (v.diagnostics.status === 'ok' ? 'ok' : 'bad') }, '診断 ' + v.diagnostics.status) : null,
+          el('span', { class: 'sp' }),
+          el('span', { class: 'pill dim' }, (v.runLabel || '') + ' @ ' + (v.gitCommit || '').slice(0, 7) + (v.gitDirty ? ' (dirty)' : '')),
+        );
+      }
+
+      function runProgress(r) {
+        const live = r.lastWriteAgeSec != null && r.lastWriteAgeSec < 900;
+        const body = [];
+        body.push(
+          el(
+            'div',
+            { class: 'row' },
+            el('span', { class: 'pill ' + (live ? 'ok' : 'dim') }, live ? '更新中' : '停止(最終書込 ' + dur(r.lastWriteAgeSec) + '前)'),
+            r.phase ? el('span', { class: 'pill info' }, '局面 ' + r.phase) : null,
+            r.sweep != null ? el('span', { class: 'pill' }, '掃引 ' + r.sweep + ' 巡目') : null,
+            el('span', { class: 'pill' }, '評価 ' + (r.evals ?? '—') + ' 回'),
+            r.perIterSec ? el('span', { class: 'pill' }, '1 回 ' + dur(r.perIterSec)) : null,
+            r.meta && r.meta.startedAt ? el('span', { class: 'pill dim' }, '開始 ' + jst(r.meta.startedAt) + '(' + dur(r.startedAgeSec) + '前)') : null,
+          ),
+        );
+        if (r.progress) {
+          body.push(
+            el(
+              'div',
+              { style: 'margin-top:8px' },
+              el('div', { class: 'bar' }, el('i', { style: 'width:' + (r.progress.frac * 100).toFixed(1) + '%;' + (live ? '' : 'opacity:.45') })),
+              el(
+                'div',
+                { class: 'dim', style: 'font-size:12px;margin-top:3px' },
+                (live ? 'この巡 ' : '止まった位置 ') +
+                  `${r.progress.cursor}/${r.progress.total} 定数(${(r.progress.frac * 100).toFixed(0)}%)` +
+                  (live && r.progress.etaSec ? ` — 残り目安 ${dur(r.progress.etaSec)}` : ''),
+              ),
+            ),
+          );
+        }
+        if (r.lastRow) {
+          body.push(
+            el(
+              'div',
+              { class: 'tiles', style: 'margin-top:10px' },
+              Object.entries(r.lastRow)
+                .filter(([, v]) => typeof v === 'number')
+                .map(([k, v]) => tile(k, num(v, 2), '')),
+            ),
+          );
+        }
+        if (r.bestFit != null) {
+          body.push(el('div', { class: 'dim', style: 'margin-top:8px' }, '最良 fit ' + num(r.bestFit, 3)));
+        }
+        return el('div', {}, ...body);
+      }
+
+      function renderCompute() {
+        const cards = [];
+        cards.push(
+          el(
+            'div',
+            { class: 'card' },
+            el('h2', {}, '判定の根拠'),
+            el('ul', { style: 'margin:0;padding-left:20px' }, S.verdict.reasons.map((r) => el('li', {}, r))),
+            el(
+              'p',
+              { class: 'dim', style: 'font-size:12px;margin-bottom:0' },
+              '「追跡」= ハーネスの背景ジョブ台帳(tasks/*.output)に、そのジョブの開始以降に作られた/更新された記録があること。' +
+                'run_in_background で投げたジョブは完了時に AI が必ず呼び戻される。未追跡のジョブは、終わっても誰も気づかない。',
+            ),
+          ),
+        );
+
+        cards.push(
+          el(
+            'div',
+            { class: 'card' },
+            el('h2', {}, `計算ジョブ ${S.compute.jobCount} 件(プロセス ${S.compute.procCount} 本)`),
+            el(
+              'div',
+              { class: 'scroll' },
+              el(
+                'table',
+                {},
+                el('thead', {}, el('tr', {}, ['種別', 'スクリプト', '引数', '経過', 'CPU秒', 'MB', 'pid', '追跡'].map((h) => el('th', {}, h)))),
+                el(
+                  'tbody',
+                  {},
+                  S.compute.clusters.map((c) =>
+                    el(
+                      'tr',
+                      {},
+                      el('td', {}, c.parent ? el('span', { class: 'dim' }, '└ ') : null, el('span', { class: 'pill' }, c.kind), c.duplicate ? el('span', { class: 'pill bad' }, '二重') : null),
+                      el('td', { class: 'mono' }, c.script || '—'),
+                      el('td', { class: 'mono dim', style: 'max-width:420px;word-break:break-all' }, c.args || '—'),
+                      el('td', { class: 'num' }, dur(c.elapsedSec)),
+                      el('td', { class: 'num' }, num(c.cpuSec, 0)),
+                      el('td', { class: 'num' }, num(c.memMB, 0)),
+                      el('td', { class: 'num dim' }, c.pids.join(' ')),
+                      el(
+                        'td',
+                        {},
+                        c.tracked === false
+                          ? el('span', { class: 'pill bad' }, '未追跡')
+                          : el('span', { class: 'pill ok', title: (c.trackedHow || '') + ' ' + (c.trackedTask || '') }, (c.trackedBy || 'あり') + (c.trackedHow ? '(' + c.trackedHow + ')' : '')),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            S.compute.others.length
+              ? el(
+                  'details',
+                  { style: 'margin-top:8px' },
+                  el('summary', {}, `計算に数えなかったプロセス ${S.compute.others.length} 本(シェル・エディタ・AI 本体など)`),
+                  el('pre', { class: 'log' }, S.compute.others.map((o) => `${o.pid}\t${o.name}\t${dur(o.elapsedSec)}\t${o.cmd}`).join('\n')),
+                )
+              : null,
+          ),
+        );
+
+        cards.push(
+          el(
+            'div',
+            { class: 'card' },
+            el('h2', {}, `AI セッション(直近 ${S.ai.sessions.length} 本)`),
+            el(
+              'div',
+              { class: 'grid g2' },
+              S.ai.sessions.map((s) =>
+                el(
+                  'div',
+                  { class: 'tile' + (s.lastAgeSec > 3600 ? ' stale' : ''), style: 'padding:11px 13px' },
+                  el(
+                    'div',
+                    { class: 'row' },
+                    el('b', { class: 'mono' }, s.short),
+                    s.slug ? el('span', { class: 'pill dim' }, s.slug) : null,
+                    el('span', { class: 'pill ' + (s.lastAgeSec < 180 ? 'ok' : 'dim') }, dur(s.lastAgeSec) + '前'),
+                    el('span', { class: 'pill' }, s.stopReason || s.lastType || '—'),
+                    s.flag ? el('span', { class: 'pill bad' }, s.flag) : null,
+                  ),
+                  el(
+                    'div',
+                    { class: 'dim', style: 'font-size:12px' },
+                    `追跡タスク ${s.taskCount} 件` +
+                      (s.taskNewestAgeSec != null ? ` / 最新 ${dur(s.taskNewestAgeSec)}前` : '') +
+                      ` / 会話 ${s.transcriptMB ?? '—'}MB` +
+                      (s.lastUserAgeSec != null ? ` / 利用者発話 ${dur(s.lastUserAgeSec)}前` : ''),
+                  ),
+                  s.lastToolNames.length ? el('div', { class: 'dim mono', style: 'font-size:11.5px' }, '最後の道具: ' + s.lastToolNames.join(', ')) : null,
+                  s.lastText ? el('div', { class: 'quote', style: 'margin-top:6px' }, s.lastText) : null,
+                ),
+              ),
+            ),
+            el('div', { class: 'dim mono', style: 'font-size:11px;margin-top:8px' }, S.ai.transcriptsDir),
+            el('div', { class: 'dim mono', style: 'font-size:11px' }, S.ai.tasksBase),
+          ),
+        );
+        $('#tab-計算とAI').replaceChildren(...cards);
+      }
+
+      // 古い run の中身は、選ばれたときだけサーバから取りに行く
+      const runCache = {};
+      const runPending = new Set();
+      function resolveRun(name) {
+        const base = S.runs.find((x) => x.name === name);
+        if (!base) return null;
+        if (base.detail) return base;
+        if (runCache[name]) return { ...runCache[name], lastWriteAgeSec: base.lastWriteAgeSec };
+        if (!runPending.has(name)) {
+          runPending.add(name);
+          fetch('/api/run?name=' + encodeURIComponent(name))
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => {
+              runPending.delete(name);
+              if (d) {
+                runCache[name] = d;
+                if (uiState.run === name) renderRuns();
+              }
+            })
+            .catch(() => runPending.delete(name));
+        }
+        return base;
+      }
+
+      function renderRuns() {
+        const cards = [];
+        if (!S.runs.length) {
+          $('#tab-較正').replaceChildren(el('div', { class: 'card dim' }, '較正の記録が見つからない。'));
+          return;
+        }
+        if (!uiState.run || !S.runs.some((r) => r.name === uiState.run)) uiState.run = S.runs[0].name;
+        const r = resolveRun(uiState.run);
+        if (!r) return;
+
+        cards.push(
+          el(
+            'div',
+            { class: 'card' },
+            el(
+              'div',
+              { class: 'row' },
+              el('h2', { style: 'margin:0' }, 'run'),
+              el(
+                'select',
+                {
+                  onchange: (e) => {
+                    uiState.run = e.target.value;
+                    uiState.metric = null;
+                    renderRuns();
+                  },
+                },
+                S.runs.map((x) => el('option', { value: x.name, selected: x.name === uiState.run }, `${x.name}(${dur(x.lastWriteAgeSec)}前 / 評価 ${x.evals ?? '—'})`)),
+              ),
+            ),
+            el('div', { style: 'margin-top:10px' }, runProgress(r)),
+            r.meta
+              ? el(
+                  'div',
+                  { class: 'row', style: 'margin-top:8px' },
+                  el('span', { class: 'pill dim' }, '目的 ' + (r.meta.objectiveBasis || '—')),
+                  el('span', { class: 'pill dim' }, 'commit ' + String(r.meta.gitCommit || '').slice(0, 7) + (r.meta.gitDirty ? ' (dirty)' : '')),
+                  r.meta.fingerprint ? el('span', { class: 'pill dim', title: JSON.stringify(r.meta.fingerprint) }, '指紋 空間 ' + r.meta.fingerprint.space) : null,
+                  r.meta.holdoutFold != null ? el('span', { class: 'pill' }, 'fold ' + r.meta.holdoutFold) : null,
+                )
+              : null,
+            r.consoleTail ? el('pre', { class: 'log' }, r.consoleTail) : null,
+          ),
+        );
+
+        const keys = r.series.keys;
+        if (keys.length) {
+          if (!uiState.metric || !keys.includes(uiState.metric)) uiState.metric = keys.includes('fit') ? 'fit' : keys[0];
+          cards.push(
+            el(
+              'div',
+              { class: 'card' },
+              el(
+                'div',
+                { class: 'row' },
+                el('h2', { style: 'margin:0' }, '推移'),
+                ...keys.map((k) =>
+                  el(
+                    'button',
+                    {
+                      class: 'pill ' + (k === uiState.metric ? 'info' : 'dim'),
+                      style: 'cursor:pointer',
+                      onclick: () => {
+                        uiState.metric = k;
+                        renderRuns();
+                      },
+                    },
+                    k,
+                  ),
+                ),
+              ),
+              spark(r.series.idx, r.series.series[uiState.metric], uiState.metric),
+            ),
+          );
+        }
+
+        if (r.bestScores) {
+          cards.push(
+            el(
+              'div',
+              { class: 'card' },
+              el('h2', {}, '最良点の評価値(state の bestScores をそのまま)'),
+              el(
+                'div',
+                { class: 'tiles' },
+                Object.entries(r.bestScores)
+                  .filter(([, v]) => typeof v === 'number')
+                  .map(([k, v]) => tile(k, num(v, 3), '')),
+              ),
+              el('details', {}, el('summary', {}, '数値以外も含む生の中身'), jsonTree(r.bestScores)),
+            ),
+          );
+        }
+        $('#tab-較正').replaceChildren(...cards);
+      }
+
+      function renderValidate() {
+        if (!S.validate) {
+          $('#tab-評価値').replaceChildren(el('div', { class: 'card dim' }, 'out/validate/report.json が無い。npm run validate で作られる。'));
+          return;
+        }
+        const v = S.validate;
+        const cards = [];
+        cards.push(
+          el(
+            'div',
+            { class: 'card' },
+            el('h2', {}, `${v.file} — ${jst(v.generatedAt)}(${dur(v.ageSec)}前)`),
+            verdictPills(v),
+            el('div', { class: 'tiles', style: 'margin-top:10px' }, v.headline.map(headTile)),
+            ...['regression', 'interim', 'acceptance'].map((k) => {
+              const o = v.verdicts[k];
+              if (!o.failures || !o.failures.length) return null;
+              return el('div', { style: 'margin-top:8px' }, el('b', {}, { regression: '回帰', interim: '途中目標', acceptance: '最終受入' }[k] + ' の不合格理由'), el('ul', { style: 'margin:2px 0 0;padding-left:20px' }, o.failures.map((f) => el('li', { class: 'dim' }, f))));
+            }),
+          ),
+        );
+
+        if (v.gates) {
+          cards.push(
+            el(
+              'div',
+              { class: 'card' },
+              el('h2', {}, `地域ゲート ${v.gates.pass}/${v.gates.total}`),
+              el(
+                'div',
+                { class: 'scroll' },
+                el(
+                  'table',
+                  {},
+                  el('thead', {}, el('tr', {}, ['', '地域', '占有', '中身'].map((h) => el('th', {}, h)))),
+                  el(
+                    'tbody',
+                    {},
+                    [...v.gates.items].sort((a, b) => a.pass - b.pass).map((g) =>
+                      el(
+                        'tr',
+                        {},
+                        el('td', {}, el('span', { class: 'pill ' + (g.pass ? 'ok' : 'bad') }, g.pass ? '○' : '×')),
+                        el('td', { class: 'mono' }, g.id),
+                        el('td', { class: 'num' }, typeof g.share === 'number' ? (g.share * 100).toFixed(0) + '%' : '—'),
+                        el('td', { class: 'dim' }, g.detail || ''),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
+        if (v.stepTimingsMs) {
+          const tot = Object.values(v.stepTimingsMs).reduce((a, b) => a + b, 0);
+          cards.push(
+            el(
+              'div',
+              { class: 'card' },
+              el('h2', {}, `1 回の計算にかかる時間(合計 ${(tot / 1000).toFixed(1)} 秒)`),
+              el(
+                'table',
+                {},
+                el(
+                  'tbody',
+                  {},
+                  Object.entries(v.stepTimingsMs)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([k, ms]) =>
+                      el(
+                        'tr',
+                        {},
+                        el('td', { class: 'mono' }, k),
+                        el('td', { class: 'num' }, (ms / 1000).toFixed(1) + '秒'),
+                        el('td', { style: 'width:55%' }, el('div', { class: 'bar' }, el('i', { style: 'width:' + ((ms / tot) * 100).toFixed(1) + '%' }))),
+                      ),
+                    ),
+                ),
+              ),
+            ),
+          );
+        }
+
+        cards.push(
+          el(
+            'div',
+            { class: 'card' },
+            el('h2', {}, 'レポート全文(そのまま — 指標が増えてもここに出る)'),
+            el('details', {}, el('summary', {}, '展開'), el('div', { class: 'scroll', style: 'padding:8px' }, jsonTree(v.raw))),
+          ),
+        );
+        $('#tab-評価値').replaceChildren(...cards);
+      }
+
+      function renderParams() {
+        if (!S.params) {
+          $('#tab-パラメータ').replaceChildren(el('div', { class: 'card dim' }, 'best_*.json が見つからない。'));
+          return;
+        }
+        const p = S.params;
+        let rows = p.rows;
+        const f = uiState.paramFilter.trim().toLowerCase();
+        if (f) rows = rows.filter((r) => r.name.toLowerCase().includes(f));
+        if (uiState.paramSort === 'sens') rows = [...rows].sort((a, b) => (b.sens ?? -1) - (a.sens ?? -1));
+        else if (uiState.paramSort === 'bound') rows = [...rows].sort((a, b) => (b.atBound ? 1 : 0) - (a.atBound ? 1 : 0) || a.name.localeCompare(b.name));
+
+        const cards = [];
+        cards.push(
+          el(
+            'div',
+            { class: 'card' },
+            el('h2', {}, `パラメータ ${p.count} 個(出所 ${S.paramSource || '—'} / 探索空間 ${p.spaceCount} 個)`),
+            p.spaceCount === 0
+              ? el('div', { class: 'pill bad', style: 'margin-bottom:8px' }, 'scripts/optimize_lib.ts の SPACE を読めなかった — 書式が変わった可能性(下限・上限の欄が空になる)')
+              : null,
+            el(
+              'div',
+              { class: 'tiles' },
+              tile('端に張り付き', p.atBound.length, '空間の上限/下限', p.atBound.length ? 'bad' : 'ok'),
+              tile('空間の外', p.outsideSpace, '掃引されない定数'),
+              tile('値が無い', (p.missing || []).length, '空間にあるのに最良点に無い', (p.missing || []).length ? 'bad' : 'ok'),
+              tile('探索対象', p.spaceCount, 'optimize_lib.ts の SPACE'),
+            ),
+            (p.missing || []).length
+              ? el('div', { class: 'row', style: 'margin-top:8px' }, el('span', { class: 'dim', style: 'font-size:12px' }, '値が無い: '), p.missing.map((n) => el('span', { class: 'pill dim mono' }, n)))
+              : null,
+            p.atBound.length
+              ? el(
+                  'div',
+                  { style: 'margin-top:10px' },
+                  el('div', { class: 'dim', style: 'font-size:12px' }, '端張り付き = 空間が狭すぎる疑い(教訓: 死んだ機構の原因はすべて探索空間の外の定数だった)'),
+                  el('div', { class: 'row', style: 'margin-top:4px' }, p.atBound.map((b) => el('span', { class: 'pill warn' }, `${b.name} ${b.side === 'hi' ? '↑' : '↓'} ${num(b.value, 3)}`))),
+                )
+              : null,
+          ),
+        );
+
+        cards.push(
+          el(
+            'div',
+            { class: 'card' },
+            el(
+              'div',
+              { class: 'row', style: 'margin-bottom:8px' },
+              el('input', {
+                type: 'search',
+                placeholder: '名前で絞り込み',
+                value: uiState.paramFilter,
+                oninput: (e) => {
+                  uiState.paramFilter = e.target.value;
+                  renderParams();
+                  const i = $('#tab-パラメータ input[type=search]');
+                  if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); }
+                },
+              }),
+              el(
+                'select',
+                {
+                  onchange: (e) => {
+                    uiState.paramSort = e.target.value;
+                    renderParams();
+                  },
+                },
+                [
+                  ['name', '名前順'],
+                  ['sens', '感度順'],
+                  ['bound', '端張り付き優先'],
+                ].map(([v2, l]) => el('option', { value: v2, selected: uiState.paramSort === v2 }, l)),
+              ),
+              el('span', { class: 'dim' }, `${rows.length} 件`),
+            ),
+            el(
+              'div',
+              { class: 'scroll' },
+              el(
+                'table',
+                {},
+                el('thead', {}, el('tr', {}, ['定数', '値', '下限', '上限', '位置', '感度'].map((h) => el('th', { class: h === '定数' ? '' : 'num' }, h)))),
+                el(
+                  'tbody',
+                  {},
+                  rows.map((r) =>
+                    el(
+                      'tr',
+                      {},
+                      el('td', { class: 'mono' }, r.name, r.inSpace ? null : el('span', { class: 'pill dim', style: 'margin-left:6px' }, '空間外')),
+                      el('td', { class: 'num' }, num(r.value, 4)),
+                      el('td', { class: 'num dim' }, r.lo == null ? '—' : num(r.lo, 3)),
+                      el('td', { class: 'num dim' }, r.hi == null ? '—' : num(r.hi, 3)),
+                      el(
+                        'td',
+                        { class: 'num' },
+                        r.frac == null
+                          ? '—'
+                          : el(
+                              'div',
+                              { class: 'boundbar' + (r.atBound ? ' edge' : ''), title: (r.frac * 100).toFixed(1) + '%' },
+                              el('i', { style: 'left:calc(' + Math.min(100, Math.max(0, r.frac * 100)).toFixed(1) + '% - 1.5px)' }),
+                            ),
+                      ),
+                      el('td', { class: 'num dim' }, r.sens == null ? '—' : num(r.sens, 3)),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        $('#tab-パラメータ').replaceChildren(...cards);
+      }
+
+      function renderLedger() {
+        const cards = [];
+        if (S.ledger) {
+          const names = { 走: '走行中', 待: '着手待ち', 保: '保留', 継: '継続', 済: '完了' };
+          cards.push(
+            el(
+              'div',
+              { class: 'card' },
+              el('h2', {}, `${S.ledger.file}(${dur(S.ledger.ageSec)}前に更新)`),
+              S.ledger.items.length
+                ? el('div', { class: 'tiles' }, Object.entries(S.ledger.counts).map(([k, n]) => tile(names[k] || k, n, '')))
+                : el('div', { class: 'pill bad' }, '項目を解析できなかった — 台帳の書式(「N. **[状態] 題**」)が変わった可能性'),
+              el(
+                'div',
+                { class: 'scroll', style: 'margin-top:10px' },
+                el(
+                  'table',
+                  {},
+                  el(
+                    'tbody',
+                    {},
+                    S.ledger.items.map((i) =>
+                      el(
+                        'tr',
+                        {},
+                        el('td', { class: 'num dim', style: 'width:36px' }, i.no),
+                        el('td', { style: 'width:70px' }, el('span', { class: 'pill ' + (i.state === '済' ? 'ok' : i.state === '走' ? 'info' : i.state === '待' ? 'warn' : 'dim') }, names[i.state] || i.state)),
+                        el('td', {}, i.title),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+        cards.push(
+          el(
+            'div',
+            { class: 'card' },
+            el('h2', {}, 'git'),
+            el(
+              'div',
+              { class: 'row' },
+              el('span', { class: 'pill mono' }, S.git.hash || '—'),
+              el('span', {}, S.git.subject || ''),
+              el('span', { class: 'pill ' + (S.git.dirty ? 'warn' : 'ok') }, S.git.dirty ? '未コミット ' + S.git.changedCount + ' 件' : 'clean'),
+              el('span', { class: 'dim' }, jst(S.git.when)),
+            ),
+            S.git.changed.length ? el('pre', { class: 'log' }, S.git.changed.join('\n')) : null,
+          ),
+        );
+        $('#tab-台帳').replaceChildren(...cards);
+      }
+
+      // ─── 取得ループ ───
+      let failStreak = 0;
+      async function load() {
+        try {
+          const res = await fetch('/api/state', { cache: 'no-store' });
+          S = await res.json();
+          failStreak = 0;
+        } catch (e) {
+          failStreak++;
+          $('#headline').textContent = 'サーバに繋がらない(' + failStreak + ' 回)';
+          $('#banner').className = 'banner danger';
+          return;
+        }
+        const v = S.verdict;
+        $('#banner').className = 'banner ' + v.level;
+        $('#headline').textContent = v.headline;
+        $('#why').textContent = v.reasons.slice(0, 2).join(' ');
+        $('#meta').textContent = `収集 ${S.buildMs}ms / ${S.root}`;
+        const icon = { ok: '●', warn: '▲', danger: '■', ask: '?', halt: '□', idle: '○' }[v.level] || '○';
+        document.title = `${icon} ${v.headline} — ExoClim モニタ`;
+        renderTabs();
+        renderOverview();
+        renderCompute();
+        renderRuns();
+        renderValidate();
+        renderParams();
+        renderLedger();
+      }
+
+      setInterval(() => {
+        if (S) $('#clock').textContent = new Date().toLocaleTimeString('ja-JP', { hour12: false });
+      }, 1000);
+      load();
+      setInterval(load, 5000);
+    </script>
+  </body>
+</html>

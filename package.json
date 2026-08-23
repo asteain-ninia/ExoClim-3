@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "validate": "tsx scripts/validate.ts"
+    "validate": "tsx scripts/validate.ts",
+    "monitor": "node scripts/monitor_server.mjs"
   },
   "dependencies": {
     "react": "^19.0.0",
