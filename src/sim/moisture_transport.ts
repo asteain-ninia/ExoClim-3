@@ -28,6 +28,16 @@ import { latDegOfRow, wrapCol } from '@/domain/grid';
 /** 1 か月の秒数(30.44 日) */
 export const SECONDS_PER_MONTH = 30.44 * 86400;
 
+/**
+ * 解き方の全体上書き(**診断専用**。既定 null では 1 命令も効かない)。
+ *
+ * `scripts/diag_transport_equiv.ts` が、パイプラインを丸ごと参照実装
+ * (線緩和 SOR)で走らせて新経路と突き合わせるために使う。
+ * step06 の `COUPLING_OVERRIDE` / `VIRGA_OVERRIDE` と同じ作りで、
+ * **通常実行では触られない**。較正やゲームからは設定しないこと。
+ */
+export const TRANSPORT_SOLVER_OVERRIDE: { mode: 'auto' | 'relaxation' | null } = { mode: null };
+
 export interface MoistureTransportOptions {
   /** 水平拡散係数 m²/s(渦による混合。0 で純移流) */
   /**
@@ -105,6 +115,19 @@ export interface MoistureTransportOptions {
    * 上げるなら、その配置で収束することを実測してからにすること。
    */
   relaxation?: number;
+  /**
+   * 解き方の選択(2026-08-23、積み残し 11)。**答えを変えない** — どちらも
+   * 同じ方程式の同じ不動点へ収束する。速度だけの量なので探索空間には入れない。
+   *
+   *   'auto'（既定）  閾値凝結が無いときは **BiCGSTAB(前処理 = 線緩和 2 掃引)**。
+   *                   閾値凝結があるときは従来の線緩和 SOR。
+   *   'relaxation'    常に従来の線緩和 SOR(参照実装。同値検証で使う)。
+   *
+   * `relaxation`(ω)を明示したときは 'relaxation' と同じ扱いにする。
+   * ω の掃引(scripts/bench_transport_relaxation.ts)が測っているのは
+   * 線緩和そのものなので、Krylov に化けると測定の意味が変わるため。
+   */
+  solver?: 'auto' | 'relaxation';
 }
 
 export interface MoistureTransportResult {
@@ -118,6 +141,11 @@ export interface MoistureTransportResult {
    * 返さなければ水が消え、全球水収支が合わなくなる。
    */
   exportedMm: Float32Array;
+  /**
+   * 費やした**線緩和の掃引数**(Krylov 経路では前処理として走った掃引の合計)。
+   * 解き方が変わっても「1 掃引 = 全セルを 1 回なめる仕事」で数え方を揃える。
+   * Krylov から線緩和へ落ちた場合は両方の合計(費用を隠さない)。
+   */
   iterations: number;
   /**
    * 最終反復での**方程式の残差** max|S − C(W) − ∇·(WV)| / 平均S(無次元)。
@@ -171,7 +199,21 @@ export function solveMoistureTransport(
   // 落とす**。答えは残差で判定するので、どちらに転んでも解は同じである。
   let relaxation = options.relaxation ?? 1.6;
   const allowFallback = options.relaxation === undefined;
-  const capacity = options.holdingCapacityMm ?? null;
+  // **容量が全セル 0 なら「閾値凝結なし」と厳密に同じ**なので、ここで畳む。
+  //   C = rate·max(0, W − 0) = rate·W   (W ≥ 0 は風上流束の M 行列性から従う)
+  // 畳んでおくと、容量 0 を渡した呼び出しも線形経路(下の Krylov)へ入り、
+  // 「容量 0 は従来と厳密に一致する」不変量が**同じ道筋を通ることで**保たれる。
+  const capacityGiven = options.holdingCapacityMm ?? null;
+  let capacityIsZero = capacityGiven !== null;
+  if (capacityGiven) {
+    for (let i = 0; i < N; i++) {
+      if ((capacityGiven[i] ?? 0) > 0) {
+        capacityIsZero = false;
+        break;
+      }
+    }
+  }
+  const capacity = capacityIsZero ? null : capacityGiven;
   const vExport = options.verticalExportRatePerMonth ?? null;
 
   const aM = radiusKm * 1000;
@@ -395,10 +437,272 @@ export function solveMoistureTransport(
   const rowRhs = new Float64Array(W);
   const rowY = new Float64Array(W);
 
+  // ============================================================
+  // 線形経路: 線緩和を前処理に使う BiCGSTAB(2026-08-23、積み残し 11)
+  // ============================================================
+  //
+  // **なぜ解き方を変えたか**(docs/実験記録_輸送ソルバの高速化_2026-08-23.md):
+  //   閾値凝結が無いとき、この系は **A w = S の線形方程式**である
+  //   (床 max(0,·) は不動点では不活性 — A は M 行列で S ≥ 0 なら解も ≥ 0)。
+  //   地球 1° の実測で、線緩和 SOR の縮小比は **0.93/掃引**しかなく、
+  //   1 評価あたり 228 回 × 平均 145 掃引 × 1.6ms = **55 秒 = 全体の 29%** を
+  //   占めていた。ω を最適値(1.8)へ寄せても 1.34 倍、実装の詰め
+  //   (逆数の先取り・残差評価の間引き)を足しても 1.75 倍で頭打ち。
+  //   **残りは反復数にしかない。**
+  //   線緩和 2 掃引を前処理にした BiCGSTAB は、同じ方程式を **2.69 倍少ない
+  //   掃引**(1 評価で 33,162 → 12,308)で解く。輸送部分は 55.0 → 25.1 秒
+  //   (2.2 倍)、1 評価の全体は **1.26〜1.32 倍**になった。
+  //   採点は動かない(ケッペン小 43.8% / 大 74.4% / 年降水 RMSE 608mm が一致)。
+  //
+  // **不動点は変わらない。** A も S も収束判定
+  // (max|S − C(W) − ∇·(WV)| / 平均S ≤ tolerance)も 1 ビットも変えていない。
+  // 違うのは同じ解へ寄る道筋だけで、ω が答えを変えないのと同じ理由である。
+  //
+  // **なぜ GPU にしなかったか**: この掃引は赤黒 SOR ではなく、行ごとの
+  // 周期三重対角を直接解く線緩和である。列方向(Thomas 漸化式)も
+  // 行方向(ガウス=ザイデル)も逐次なので、1 掃引の中で並列にできるのは
+  // 月の 12 本だけ — ディスパッチには 3 桁足りない。GPU へ載せるには
+  // 赤黒化(= 極の剛性で破綻)か PCR + zebra への作り替えが要り、
+  // さらに f32 では下の同値要求(相対 1e-6)に届かない。
+  // 輸送は全体の 29% なので上限は 1.4 倍しかなく、**危険な作り替えに
+  // 見合わない**と判断した(較正は並列プロセスで回るので CPU の利得は
+  // そのまま掛かるが、GPU は EBM と取り合いになる、という事情もある)。
+  //
+  // 前処理は**零から固定回数だけ掃く**ので、線緩和が発散する配置
+  // (拡散の無い純移流)でも数値が爆発することはない。ただし**前処理として
+  // 有害にはなる** — 過緩和した掃引は誤差を増幅する演算子なので、そのまま
+  // 使うと純移流で 30 倍遅くなる(実測)。だから ω は下の試し打ちで選ぶ。
+  // それでも BiCGSTAB は破綻しうる(ρ→0 / ω→0)ので、**破綻・非有限・
+  // 予算超過はすべて従来の線緩和へ落とす**。収束しない解は黙って返さない。
+
+  /** 前処理に使う線緩和の掃引数(実測で 2 が最良: k=1 で 1.39s、2 で 0.57s、4 で 0.61s) */
+  const PRECOND_SWEEPS = 2;
+  /**
+   * 前処理の ω の候補。**配置ごとに実測で選ぶ**(下の「ω の安全性を試し打ちする」)。
+   * 先頭が試す値、末尾が安全側の値。
+   *
+   * 固定できない理由は従来の線緩和とまったく同じで、**拡散支配か移流支配かで
+   * 逆転する**からである(2026-08-23 の実測、1° 合成場):
+   *   拡散 0      ω=1.6 で 1303 掃引 / ω=1.0 で **30 掃引**
+   *   拡散 3e6    ω=1.6 で **108 掃引** / ω=1.0 で 206 掃引
+   * 過緩和した線緩和は移流支配では発散するので、2 掃引だけ掛けても
+   * **誤差を増幅する演算子**になり、前処理として害になる。
+   */
+  const PRECOND_OMEGAS = [1.6, 1.0];
+  /** Krylov に賭ける掃引の上限。これを超えたら線緩和へ落とす(無駄打ちを短く切る) */
+  const KRYLOV_SWEEP_BUDGET = 2000;
+
+  /**
+   * 線緩和 1 掃引を任意の右辺へ適用する(前処理用)。
+   * 本体のループと違い **床で切らない** — ここで解くのは補正量であって
+   * 水蒸気量ではないので、負を許さないと前処理にならない。
+   */
+  const relaxSweepInto = (
+    x: Float64Array,
+    rhs: Float64Array,
+    omega: number,
+    forward: boolean,
+  ): void => {
+    for (let rr = 0; rr < H; rr++) {
+      const row = forward ? rr : H - 1 - rr;
+      const base = row * W;
+      for (let col = 0; col < W; col++) {
+        const i = base + col;
+        const north = row > 0 ? (cNArr[i] ?? 0) * (x[i - W] ?? 0) : 0;
+        const south = row < H - 1 ? (cSArr[i] ?? 0) * (x[i + W] ?? 0) : 0;
+        rowRhs[col] = (rhs[i] ?? 0) + north + south;
+      }
+      let prev = 0;
+      for (let col = 0; col < W; col++) {
+        const a = -(cWArr[base + col] ?? 0);
+        const den = denArr[base + col] ?? 1;
+        const val = ((rowRhs[col] ?? 0) - (col === 0 ? 0 : a * prev)) / (den !== 0 ? den : 1);
+        rowY[col] = val;
+        prev = val;
+      }
+      for (let col = W - 2; col >= 0; col--) {
+        rowY[col] = (rowY[col] ?? 0) - (cpArr[base + col] ?? 0) * (rowY[col + 1] ?? 0);
+      }
+      const gamma = gammaArr[row] ?? -1;
+      const aFirst = -(cWArr[base] ?? 0);
+      const num = (rowY[0] ?? 0) + (aFirst * (rowY[W - 1] ?? 0)) / gamma;
+      const denom = 1 + (zArr[base] ?? 0) + (aFirst * (zArr[base + W - 1] ?? 0)) / gamma;
+      const fac = denom !== 0 ? num / denom : 0;
+      for (let col = 0; col < W; col++) {
+        const i = base + col;
+        x[i] = (x[i] ?? 0) + omega * ((rowY[col] ?? 0) - fac * (zArr[i] ?? 0) - (x[i] ?? 0));
+      }
+    }
+  };
+
+  /** y ← A x。**本体の掃引が使う係数そのもの**(別の離散化を持ち込まない) */
+  const applyA = (x: Float64Array, y: Float64Array): void => {
+    for (let row = 0; row < H; row++) {
+      const base = row * W;
+      for (let col = 0; col < W; col++) {
+        const i = base + col;
+        const iE = base + (col + 1 === W ? 0 : col + 1);
+        const iW = base + (col === 0 ? W - 1 : col - 1);
+        let acc =
+          (diagArr[i] ?? 0) * (x[i] ?? 0) -
+          (cEArr[i] ?? 0) * (x[iE] ?? 0) -
+          (cWArr[i] ?? 0) * (x[iW] ?? 0);
+        if (row > 0) acc -= (cNArr[i] ?? 0) * (x[i - W] ?? 0);
+        if (row < H - 1) acc -= (cSArr[i] ?? 0) * (x[i + W] ?? 0);
+        y[i] = acc;
+      }
+    }
+  };
+
+  /** 無次元残差 max|v| / 平均S。**NaN を素通りさせない**書き方にする */
+  const scaledMaxAbs = (v: Float64Array): number => {
+    let m = 0;
+    for (let i = 0; i < N; i++) {
+      const d = Math.abs(v[i] ?? 0);
+      if (!(d <= m)) m = d;
+    }
+    return m / meanSource;
+  };
+
+  const dotOf = (a: Float64Array, b: Float64Array): number => {
+    let s = 0;
+    for (let i = 0; i < N; i++) s += (a[i] ?? 0) * (b[i] ?? 0);
+    return s;
+  };
+
+  // ω を明示された呼び出しは従来経路へ回す(ω の掃引が測っているのは
+  // 線緩和そのものなので、Krylov に化けると測定の意味が変わる)
+  const solverMode = TRANSPORT_SOLVER_OVERRIDE.mode ?? options.solver ?? 'auto';
+  const useKrylov =
+    capacity === null && solverMode === 'auto' && options.relaxation === undefined;
+  let krylovDone = false;
+  let krylovSweeps = 0;
+  if (useKrylov) {
+    const scratch = new Float64Array(8 * N);
+    const rVec = scratch.subarray(0, N);
+    const rHat = scratch.subarray(N, 2 * N);
+    const pVec = scratch.subarray(2 * N, 3 * N);
+    const vVec = scratch.subarray(3 * N, 4 * N);
+    const sVec = scratch.subarray(4 * N, 5 * N);
+    const tVec = scratch.subarray(5 * N, 6 * N);
+    const pHat = scratch.subarray(6 * N, 7 * N);
+    const sHat = scratch.subarray(7 * N, 8 * N);
+    let precondOmega = PRECOND_OMEGAS[0] ?? 1.6;
+    const applyPrecond = (rhs: Float64Array, out: Float64Array, omega: number): void => {
+      out.fill(0);
+      for (let j = 0; j < PRECOND_SWEEPS; j++) relaxSweepInto(out, rhs, omega, j % 2 === 0);
+      krylovSweeps += PRECOND_SWEEPS;
+    };
+    const precond = (rhs: Float64Array, out: Float64Array): void =>
+      applyPrecond(rhs, out, precondOmega);
+    applyA(cur, vVec);
+    for (let i = 0; i < N; i++) rVec[i] = (sourceMmPerMonth[i] ?? 0) - (vVec[i] ?? 0);
+    rHat.set(rVec);
+    const res0 = scaledMaxAbs(rVec);
+    // **参照実装より緩い解を返さない。** 許容差 1e-5 で止めた解はそれ自体が
+    // 厳密解から 1e-6 ほど離れており(scripts/diag_transport_equiv.ts の
+    // 「物差し」節)、止め方が違えばその範囲で答えがずれる。Krylov は
+    // 1 桁詰めるのが安い(実測 +2 割の掃引)ので、**内側の目標を 1 桁厳しく
+    // 取って**、返す場を従来より厳密解へ寄せる。届かなければ許容差そのもので
+    // 受ける(下の最終確認)。
+    const innerTol = tolerance * 0.1;
+    if (Number.isFinite(res0) && res0 > innerTol) {
+      // ---- ω の安全性を試し打ちする(同次反復の増幅率)----
+      //
+      // 見るのは「誤差だけを掃いたとき縮むか」= 右辺を 0 にした緩和
+      //   e ← G_ω e     (relaxSweepInto に rhs = 0 を渡すとこれになる)
+      // で、**過緩和が発散する配置では増幅率が 1 を超える**。
+      // 前処理として残差を減らせるかを 1 掃引で測る素朴な指標は使えない
+      // (2026-08-23 に実測: 過緩和は 1 回だけ見ると常に負けて見え、
+      //  拡散支配でも ω=1.0 を選んでしまい 2 倍損をした)。
+      //
+      // 判定は**慣らし 1 巡の後の 1 巡**(前進 + 後退)で行う。実測の切れ目は
+      // 拡散 1e5(増幅 2.4 〜 3.6)と 3e5(0.60 〜 0.98)の間にあり、
+      // ω=1.6 が有利になる境目と一致する。
+      // 種は決定的(乱数を使わない = 同じ入力で同じ結果)。
+      // 費用は 4 掃引で、krylovSweeps に足して隠さない。
+      {
+        const trial = PRECOND_OMEGAS[0] ?? 1.6;
+        const safe = PRECOND_OMEGAS[PRECOND_OMEGAS.length - 1] ?? 1.0;
+        sVec.fill(0); // 同次(右辺 0)
+        for (let i = 0; i < N; i++) sHat[i] = Math.sin(i * 0.7) + Math.cos(i * 0.13);
+        let growth = 1;
+        for (let k = 0; k < 4; k++) {
+          const before = scaledMaxAbs(sHat);
+          relaxSweepInto(sHat, sVec, trial, k % 2 === 0);
+          const after = scaledMaxAbs(sHat);
+          if (k >= 2) growth *= after / Math.max(1e-300, before);
+        }
+        krylovSweeps += 4;
+        precondOmega = Number.isFinite(growth) && growth < 1 ? trial : safe;
+      }
+      let rho = 1;
+      let alpha = 1;
+      let omegaK = 1;
+      pVec.fill(0);
+      vVec.fill(0);
+      const budget = Math.min(maxIterations, KRYLOV_SWEEP_BUDGET);
+      while (krylovSweeps + 2 * PRECOND_SWEEPS <= budget) {
+        const rhoNew = dotOf(rHat, rVec);
+        if (!Number.isFinite(rhoNew) || rhoNew === 0) break;
+        const beta = (rhoNew / rho) * (alpha / omegaK);
+        if (!Number.isFinite(beta)) break;
+        for (let i = 0; i < N; i++) {
+          pVec[i] = (rVec[i] ?? 0) + beta * ((pVec[i] ?? 0) - omegaK * (vVec[i] ?? 0));
+        }
+        rho = rhoNew;
+        precond(pVec, pHat);
+        applyA(pHat, vVec);
+        const denAlpha = dotOf(rHat, vVec);
+        if (!Number.isFinite(denAlpha) || denAlpha === 0) break;
+        alpha = rho / denAlpha;
+        for (let i = 0; i < N; i++) sVec[i] = (rVec[i] ?? 0) - alpha * (vVec[i] ?? 0);
+        if (scaledMaxAbs(sVec) <= innerTol) {
+          for (let i = 0; i < N; i++) cur[i] = (cur[i] ?? 0) + alpha * (pHat[i] ?? 0);
+          break;
+        }
+        precond(sVec, sHat);
+        applyA(sHat, tVec);
+        const tt = dotOf(tVec, tVec);
+        if (!Number.isFinite(tt) || tt === 0) break;
+        omegaK = dotOf(tVec, sVec) / tt;
+        if (!Number.isFinite(omegaK) || omegaK === 0) break;
+        for (let i = 0; i < N; i++) {
+          cur[i] = (cur[i] ?? 0) + alpha * (pHat[i] ?? 0) + omegaK * (sHat[i] ?? 0);
+          rVec[i] = (sVec[i] ?? 0) - omegaK * (tVec[i] ?? 0);
+        }
+        const res = scaledMaxAbs(rVec);
+        if (!Number.isFinite(res) || res > 1e6 * res0) break; // 破綻
+        if (res <= innerTol) break;
+      }
+    }
+    {
+      // **返す場そのもので確かめ直す。** 漸化式で持ち回した残差は丸めで
+      // 真の残差から離れうるし、床で切った後の残差でなければ意味がない。
+      // 破綻して途中で抜けた場合もここで落ちる(黙って採用しない)
+      for (let i = 0; i < N; i++) if (!((cur[i] ?? 0) >= 0)) cur[i] = 0;
+      applyA(cur, vVec);
+      for (let i = 0; i < N; i++) vVec[i] = (sourceMmPerMonth[i] ?? 0) - (vVec[i] ?? 0);
+      const finalRes = scaledMaxAbs(vVec);
+      if (Number.isFinite(finalRes) && finalRes <= tolerance) {
+        residual = finalRes;
+        converged = true;
+        krylovDone = true;
+        iterations = krylovSweeps;
+      }
+    }
+    // **収束を確かめられなければ従来の線緩和へ落とす。**
+    // 初期値へ戻すのは、途中で止めた Krylov の反復子から線緩和を始めると
+    // 「どこから来た解か」が実行ごとに変わりうるため(決定性を保つ)
+    if (!krylovDone) cur.set(initial);
+  }
+
   let sweeps = 0;
-  for (let it = 1; it <= maxIterations; it++) {
+  // **Krylov で解けたときは従来の線緩和には入らない**(同じ方程式の別解法)。
+  // 落ちてきたときは 1 から回し、費用は krylovSweeps を足して報告する
+  for (let it = krylovDone ? maxIterations + 1 : 1; it <= maxIterations; it++) {
     sweeps++;
-    iterations = sweeps;
+    iterations = krylovSweeps + sweeps;
     let maxImbalance = 0;
     // 行の掃引順を交互にする(南北方向の情報は行から行へ伝わるので、
     // 風向と揃った掃引が来る回で一気に進む)。決定的なので再現する。
@@ -508,14 +812,17 @@ export function solveMoistureTransport(
   }
 
   for (let i = 0; i < N; i++) {
-    waterMm[i] = cur[i] ?? 0;
+    // **非負性はモデルの不変量**(風上流束を使う理由そのもの)。線緩和は
+    // 掃引ごとに床で切るので既に非負だが、Krylov の反復子は補正の重ね合わせ
+    // なので、丸めの範囲で負に出うる。ここで一度だけ床で受ける
+    // (不動点は S ≥ 0 と M 行列性から非負なので、床は答えを変えない)
+    const wi = Math.max(0, cur[i] ?? 0);
+    waterMm[i] = wi;
     // 凝結で除いた水は必ず同じセルの降水に計上する(漏れを作らない)。
     // 閾値ありのときは「持てる量を超えたぶん」だけが降る
-    const excess = capacity
-      ? Math.max(0, (cur[i] ?? 0) - Math.max(0, capacity[i] ?? 0))
-      : (cur[i] ?? 0);
+    const excess = capacity ? Math.max(0, wi - Math.max(0, capacity[i] ?? 0)) : wi;
     condensationMm[i] = Math.max(1e-6, condensationRatePerMonth[i] ?? 0) * excess;
-    exportedMm[i] = vExport ? Math.max(0, vExport[i] ?? 0) * (cur[i] ?? 0) : 0;
+    exportedMm[i] = vExport ? Math.max(0, vExport[i] ?? 0) * wi : 0;
   }
   return { waterMm, condensationMm, exportedMm, iterations, residual, converged };
 }
