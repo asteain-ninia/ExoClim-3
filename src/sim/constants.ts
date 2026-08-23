@@ -9,7 +9,7 @@ export const MODEL_CONSTANTS = {
    * 外向き長波放射 OLR = olrA + olrB·T の切片(W/m²、T=0°C 時)。
    * Budyko 系の初期値 208 から、輸送・雲構造確定後に全球平均 14.5°C へ再較正。
    */
-  olrAWm2: 204.98,
+  olrAWm2: 205.504,
   /** OLR の温度感度(W/m²/°C)。水蒸気フィードバック込みの実効値 */
   olrBWm2PerC: 2.1,
   /** 温室効果強度 g に対する OLR 低下(W/m² per log2(g)) */
@@ -18,7 +18,7 @@ export const MODEL_CONSTANTS = {
    * 南北拡散熱輸送係数(W/m²/K、単位球面ラプラシアン基準)。極向き熱輸送の主役
    * (傾圧渦)を表し、帯状平均の子午面プロファイルを支配する。
    */
-  diffusionWm2PerK: 0.4964,
+  diffusionWm2PerK: 0.51944,
   /**
    * 南北熱輸送の**大気質量への依存**(段 40、2026-08-16)。
    * 実効拡散係数に `(表面気圧 bar)^この指数` を掛ける。
@@ -93,7 +93,7 @@ export const MODEL_CONSTANTS = {
    * 直すなら熱容量ではなく移流結合の側で、両者は対で動かす必要がある
    * (片方だけ動かすと必ず悪化するので座標降下では谷を渡れない)。
    */
-  landEffectiveWaterDepthM: 0.5000000000000001,
+  landEffectiveWaterDepthM: 1.61,
   /**
    * 陸が**完全に乾いたとき**の実効熱容量の、湿潤時に対する比(0〜1)。
    * 実効深さ = landEffectiveWaterDepthM × (frac + (1 − frac) × 年平均湿り具合)。
@@ -124,7 +124,7 @@ export const MODEL_CONSTANTS = {
    * 地表アルベド: 季節雪氷(森林マスキング・融解を織り込んだ実効値)。
    * 高くすると融雪が日射最大期に食い込み北半球の夏が壊れる(較正ログ)。
    */
-  albedoIce: 0.3412,
+  albedoIce: 0.36191999999999996,
   /** 雪氷アルベドへの遷移開始温度(°C、陸)と遷移幅(°C) */
   iceOnsetC: -6,
   iceRampWidthC: 5,
@@ -136,12 +136,12 @@ export const MODEL_CONSTANTS = {
    * 周極海峡(陸を含まない緯度行)を跨ぐ南北拡散の低減率。
    * 遮られない地衡流水路は南北熱交換を抑える(南極周極流の効果、地理中立)。
    */
-  circumpolarChannelFactor: 0.476,
+  circumpolarChannelFactor: 0.4796,
   /**
    * 周極海峡行の海上の雲増強(実在の南大洋は惑星で最も雲が多い海域。
    * 遮られない西風の吹送距離 → 常時ストーム雲。トポロジー判定で地理中立)
    */
-  channelCloudBoost: 0.4888000000000001,
+  channelCloudBoost: 0.4110400000000001,
   /**
    * 陸の対流・前線雲の強さ。0 = 無効(従来と厳密一致)。
    *
@@ -168,28 +168,28 @@ export const MODEL_CONSTANTS = {
    * **効く場所の分布**を決めるこちらだけを較正に委ねる。
    * 選定理由は docs/較正計画_v15_2026-08-07.md。
    */
-  landCloudSupplyNormMm: 63.00800000000001,
+  landCloudSupplyNormMm: 59.04000000000001,
   /** 雲アルベドの循環変調: 沈降域(亜熱帯高圧帯)での低減率と ITCZ での増加率 */
   subsidenceCloudReduction: 0.5,
   /** 沈降晴天の海上での効き(貿易風積雲・層積雲が残るため陸より弱い) */
-  subsidenceOceanFactor: 0.32884099,
-  convectiveCloudBoost: 0.50116,
+  subsidenceOceanFactor: 0.34504099,
+  convectiveCloudBoost: 0.44716000000000006,
   /** ストームトラック帯(海上)の雲増加率と雲アルベド上限 */
-  stormTrackCloudBoost: 0.5472,
+  stormTrackCloudBoost: 0.52,
   cloudAlbedoMax: 0.41728000000000004,
   /** 夏半球のストーム雲の海上残存率(陸側ジェットは弱まるが海は夏も曇天) */
-  stormCloudSummerOcean: 0.6259999999999999,
+  stormCloudSummerOcean: 0.5655199999999998,
   /** 雲変調に使う ITCZ 幅の倍率(実物の雲帯は降水影響圏より狭い) */
-  itczCloudWidthFactor: 0.94203325,
+  itczCloudWidthFactor: 0.91611325,
   /** 寒流(SST 負偏差)上の層積雲デッキ: 偏差 -2°C で雲 +この比率 */
-  stratocumulusBoostPerNegC: 0.6607200000000001,
+  stratocumulusBoostPerNegC: 0.6780000000000002,
   /** 冬(月日射 < 年平均)の陸上における移流結合の低減率(接地逆転層) */
-  winterInversionAdvectionFactor: 0.35,
+  winterInversionAdvectionFactor: 0.364,
   /**
    * 冬の接地逆転層は移流だけでなく拡散(自由大気との混合)も絶縁する。
    * 内陸度 1 の冬に拡散をこの係数まで低減(シベリア・南極内陸の冬の冷え込み)
    */
-  winterInversionDiffusionFactor: 0.65866,
+  winterInversionDiffusionFactor: 0.70766,
   /** 周極海峡行の海洋混合層の増深倍率(遮られない流路の深い鉛直混合) */
   channelMixedLayerBoost: 3.0,
   /** 気温減率(°C/km、標高降尺度と OLR 標高補正に使用) */
@@ -204,7 +204,7 @@ export const MODEL_CONSTANTS = {
    */
   boundaryCurrentOpennessGate: 1,
   /** 海流 SST 偏差を EBM に注入する結合係数(W/m²/K) */
-  sstAnomalyCouplingWm2PerK: 25.932799999999997,
+  sstAnomalyCouplingWm2PerK: 24.420799999999996,
   /**
    * 蒸発冷却の係数(W/m² per mm/日)。**実蒸発散の陸平均偏差**に掛ける。
    * 潜熱の物理値は λρ = 28.4 W/m² per mm/日。地表から出た潜熱の一部は
@@ -255,7 +255,7 @@ export const MODEL_CONSTANTS = {
    * 凝結の時定数を作る基準風速(m/s)。λ = U_ref / L で、L は既存の
    * moistureDecay*Km。**「水が消える距離」を「凝結寿命」として写す**ための係数。
    */
-  condensationRefWindMs: 9.15246579349041,
+  condensationRefWindMs: 7.70446579349041,
   /**
    * 水蒸気の渦拡散係数(m²/s)。**移動性低気圧による輸送**をここで表す。
    *
@@ -293,7 +293,7 @@ export const MODEL_CONSTANTS = {
    * 流される誤った物理になる(較正ログ 2026-07-29)。到達距離 ≈ 結合/(B+Dk²)
    * 換算で 1500〜2500 km 相当。
    */
-  zonalAdvectionCouplingWm2PerK: 54.6,
+  zonalAdvectionCouplingWm2PerK: 59.784000000000006,
   /** EBM 積分年数と 1 年のステップ数 */
   ebmYears: 4,
   ebmStepsPerYear: 240,
@@ -310,9 +310,9 @@ export const MODEL_CONSTANTS = {
   /**
    * 海上の季節追従の減衰(Log/Pasta: ITCZ は海上でほとんど動かない)。
    * 経度列の帯内陸率 0 のときの追従率倍率(1 = 減衰なし) */
-  itczOceanFollowDamp: 0.90932,
+  itczOceanFollowDamp: 0.9795200000000001,
   /** 大陸モンスーンによる追加引き寄せ(度、夏半球の陸割合 1.0 のとき) */
-  itczMonsoonPullDeg: 4,
+  itczMonsoonPullDeg: 4.36,
   /**
    * 高所加熱によるモンスーン増強(帯内の陸平均標高 1km あたりの引き寄せ倍率増)。
    * チベット高原型の熱源が水蒸気トラフを大きく北上させる効果(WL#32 の趣旨)。
@@ -335,7 +335,7 @@ export const MODEL_CONSTANTS = {
    * SPACE 非投入。**0 = 無効(従来とビット一致)。**
    * docs/事前登録_v31物理バッチ_2026-08-21.md 件 2
    */
-  itczMoistLandPullDeg: 0,
+  itczMoistLandPullDeg: 0.54,
   /** 経度平滑化後に混ぜ戻す生値の割合(0 = 完全平滑)。モンスーンの経度局所性を保つ */
   itczSmoothLocalBlend: 0.25,
   /** ITCZ 影響帯の半幅(度) */
@@ -350,7 +350,7 @@ export const MODEL_CONSTANTS = {
    * 赤道常湿帯: 年平均 ITCZ 線の残留影響(0〜1)。実物の熱赤道近傍は年 2 回の
    * 通過と近接で乾季にも雨が残る(赤道 = 雨林の定量化)。幅は半幅 ×0.7
    */
-  equatorialItczResidual: 0.42839999999999995,
+  equatorialItczResidual: 0.3183999999999999,
   /** 経度方向平滑化の半幅(度)。広すぎるとモンスーンの経度応答が希釈される */
   itczSmoothingHalfWidthDeg: 12,
 
@@ -435,7 +435,7 @@ export const MODEL_CONSTANTS = {
    * 「自転方向の東」に大陸が近い側(= 寒流の流れる海盆東縁)ほど強い。
    * 海上の基準重みへの加算倍率と、その減衰距離(km)
    */
-  subtropicalCellEastBoost: 0.6000000000000001,
+  subtropicalCellEastBoost: 0.53712,
   subtropicalCellEastScaleKm: 2200,
   /**
    * 夏の亜熱帯高気圧の**西方張り出し**(段 39、2026-08-16)。
@@ -513,7 +513,7 @@ export const MODEL_CONSTANTS = {
 
   // ---- Step 4 気流 (docs/spec/04_気流.md) ----
   /** 貿易風・偏西風・極東風の基準風速(m/s) */
-  tradeWindMs: 6.92,
+  tradeWindMs: 5.800000000000001,
   westerlyWindMs: 9,
   polarEasterlyMs: 3,
   /** 気圧勾配風の結合係数(m/s per hPa/1000km): 回転成分と横断成分 */
@@ -588,7 +588,7 @@ export const MODEL_CONSTANTS = {
    *
    * **0 = 無効(従来とビット一致)。** 幾何のみ・湿り非依存・逆行対応。
    */
-  monsoonTroughSubsRelief: 0.005599999999999994,
+  monsoonTroughSubsRelief: 0,
   /**
    * R-H 位相 (H − eastH) の規格化。0.1 = C→B 群の実測中央値。
    * これで割って 0〜1 に clamp した値が緩和のゲートになる
@@ -612,7 +612,7 @@ export const MODEL_CONSTANTS = {
    * **0 = 無効(従来とビット一致)。** 将来は混合層深さから導出する余地あり。
    * 事前登録: docs/事前登録_循環の暦の遅れ_2026-08-18.md
    */
-  circulationLagMonths: 0.88,
+  circulationLagMonths: 0.9927999999999999,
   /**
    * **風帯の暦の遅れ**(段 46b、2026-08-18)。風帯・亜熱帯リッジの季節シフト
    * (step02)が参照する赤緯を、この月数だけ遅らせる。ITCZ の遅れ
@@ -648,7 +648,7 @@ export const MODEL_CONSTANTS = {
    * **1 = 無効(従来とビット一致)。**輸送方程式の移流もこの風を見る。
    * 事前登録: docs/事前登録_v31物理バッチ_2026-08-21.md 件 3
    */
-  landSurfaceFrictionFactor: 1,
+  landSurfaceFrictionFactor: 0.386764643015731,
 
   // ---- Step 6 降水 (docs/spec/06_降水.md) ----
   /**
@@ -664,13 +664,13 @@ export const MODEL_CONSTANTS = {
    * 月・半球ごとに取水計 = 給水計(水は創らない)。
    * 事前登録: docs/事前登録_コンベア接続_2026-08-18.md
    */
-  conveyorStrength: 19.8,
+  conveyorStrength: 33,
   /**
    * コンベアの緯度窓の極側の縁(リッジからの度数)。窓 = ITCZ 極側〜リッジ+これ。
    * 45b-2 の分解で、+5 のリテラルはゴビ(40°N)まで給水帯を延ばして B→D を
    * 作った。地域名指しの手直しはせず、定数化して較正に決めさせる(v27 候補)
    */
-  conveyorLatPolewardDeg: 5.64,
+  conveyorLatPolewardDeg: 7.08,
   /** コンベアの緯度窓の縁の減衰幅(度)。窓の外は線形にこの幅で 0 へ */
   conveyorLatSoftDeg: 3,
   /** コンベアの給水帯の奥行き(km)。東海岸からの減衰距離。SPACE 非投入 */
@@ -678,11 +678,11 @@ export const MODEL_CONSTANTS = {
   /** コンベアの取水域の奥行き(km)。大陸東岸沖の海の減衰距離。SPACE 非投入 */
   conveyorFetchKm: 2500,
   /** 水蒸気供給の海上減衰距離(km) */
-  moistureDecayOceanKm: 1627.209395029582,
+  moistureDecayOceanKm: 1701.8698752073944,
   /** 陸上減衰距離(km、再循環なしの素の値) */
-  moistureDecayLandKm: 1733.36,
+  moistureDecayLandKm: 1783.5482424630225,
   /** 陸面再蒸発の強さ(0〜1、二回目のパスで局所降水に比例) */
-  landRecyclingStrength: 0.4212743448968977,
+  landRecyclingStrength: 0.4113543448968977,
   /**
    * R3 土壌水分(地域降水 FB §7): 根群域の植物利用可能水量(mm)。
    * 0 = 無効(旧来の「当月降水に比例」へ戻す)。熱帯林の深根系は 2〜3m 級で
@@ -768,7 +768,7 @@ export const MODEL_CONSTANTS = {
    * (特に春)が 0 に陥没し、タイガが夏乾 Ds に誤判定される対策。
    * 乾季が連続する所(サバナ等)は隣接月も乾いており不変
    */
-  precipMonthBlend: 0.2,
+  precipMonthBlend: 0.18323200000000003,
   /** 風上追跡の最大距離(km) */
   moistureTraceMaxKm: 5200,
   /**
@@ -778,7 +778,7 @@ export const MODEL_CONSTANTS = {
    */
   fetchOpenOceanCapKm: 2000,
   /** ITCZ 収束の降水増幅(中心で ×(1+この値)) */
-  itczLiftBoost: 1.9569521274590866,
+  itczLiftBoost: 2.0289521274590867,
   /**
    * ITCZ 傘の海洋性ゲート: 供給(無次元)がこの値で傘が全開。乾燥内陸の
    * トラフ直下(アラビア型)では傘が開かず、湿潤収束(ベンガル型)では開く
@@ -787,34 +787,34 @@ export const MODEL_CONSTANTS = {
   /** ストームトラック(温帯低気圧帯)の増幅 */
   stormTrackBoost: 0.4,
   /** 寒候期のストームトラック追加増幅 */
-  stormTrackWinterBoost: 0.15000000000000008,
+  stormTrackWinterBoost: 0.16800000000000007,
   /** 地形性上昇の増幅(基準勾配あたり) */
-  orographicBoost: 1.2008,
+  orographicBoost: 1.3928000000000003,
   /** 風下雨陰の最大抑制(0〜1 が残存率の下限) */
   rainShadowFloor: 0.25955999999999996,
   /** 亜熱帯高圧帯(沈降域)の抑制率(0〜1)。下降枝全域(リッジ−16°〜+5°)に適用 */
-  subsidenceSuppression: 0.774464,
+  subsidenceSuppression: 0.7642240000000001,
   /** 沈降抑制に対する ITCZ 影響の防護係数(1 = 完全防護) */
-  subsidenceItczProtection: 0.7862,
+  subsidenceItczProtection: 0.74952,
   /**
    * 亜熱帯高気圧の西翼(大陸東岸側)の湿潤化: 順行自転では東に海が近いセルほど
    * 沈降抑制を緩める(バミューダ高気圧西縁の湿潤流の相当物)。減衰距離 km。
    */
-  eastCoastSubsidenceRelief: 0.79784,
+  eastCoastSubsidenceRelief: 0.85328,
   eastCoastSubsidenceDecayKm: 802,
   /** \u6771\u5cb8\u7de9\u548c\u306e\u4f9b\u7d66\u5b9f\u7e3e\u30b2\u30fc\u30c8(\u3053\u306e\u4f9b\u7d66\u3067\u5168\u958b\u3002\u4e7e\u3044\u305f\u6d41\u5165\u306e\u6d77\u3092\u9664\u5916) */
   eastReliefSupplyNorm: 0.51072,
   /** 寒候期でも残る前線性の最低水蒸気(qRel の下限。弱い前線雪の表現) */
   stormMinQRel: 0.55,
   /** 高温湿潤の陸での対流性増幅(T≥22°C かつ供給豊富で最大 +この倍率) */
-  warmHumidConvectiveBoost: 0,
+  warmHumidConvectiveBoost: 0.016,
   /** 対流性増幅の供給正規化(この供給で全開。二乗で立ち上げ半乾燥を除外) */
   warmHumidSupplyNorm: 2.5904,
   /**
    * 前線収束の持ち上げ(WL#29 セル衝突線の定量化)。湿潤空気の極向き移流 ×
    * 供給の極向き勾配に比例。ITCZ 傘とストーム帯の間(梅雨帯)を埋める
    */
-  frontalLiftBoost: 1.0995199999999998,
+  frontalLiftBoost: 1.2,
   /**
    * 前線の窓の赤道側の縁(度)。|lat| > |リッジ| − この値 でしか発火しない。
    * **6 という名前の無い数がベタ書きされていたものに名前を与えた**(2026-08-11)。
@@ -909,7 +909,7 @@ export const MODEL_CONSTANTS = {
   upwindBlockScanKm: 900,
   upwindBlockFloor: 1,
   /** 寒流沿岸の追加抑制率 */
-  coldCoastSuppression: 0.25,
+  coldCoastSuppression: 0.264,
   /** 全球スケール係数(供給×持ち上げ → mm/月) */
   precipScaleMmPerUnit: 8.2,
 
