@@ -677,6 +677,13 @@ export const MODEL_CONSTANTS = {
   conveyorCoastKm: 500,
   /** コンベアの取水域の奥行き(km)。大陸東岸沖の海の減衰距離。SPACE 非投入 */
   conveyorFetchKm: 2500,
+  /**
+   * **冬のストーム帯の赤道側への張り出し**(度、v33 件 1、2026-08-23)。
+   * 冬(winterDepth01)に比例してストーム帯の赤道側の縁を下げる。
+   * 亜熱帯の冬雨(地中海型)を作る機構 — モデルは G が平坦で冬雨を持たない。
+   * **0 = 無効(従来とビット一致)。**
+   */
+  winterStormEquatorwardReachDeg: 0,
   /** 水蒸気供給の海上減衰距離(km) */
   moistureDecayOceanKm: 1701.8698752073944,
   /** 陸上減衰距離(km、再循環なしの素の値) */

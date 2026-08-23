@@ -2509,7 +2509,13 @@ function convertToPrecip(
       }
 
       // ストームトラック(リッジの極側〜極前線先の台形プラトー、寒候期に増強)
-      const stLo = Math.abs(ridge) + 4;
+      // v33 件 1(2026-08-23): **冬だけストーム帯が赤道側へ張り出す。**
+      // 実物の地中海型は「冬に高気圧が退いてストームトラックの南縁が届く」で
+      // 成立するが、モデルの帯は常にリッジ+4°から始まるため亜熱帯へ決して
+      // 届かず、亜熱帯の冬雨の G が平坦(振幅 0.10)だった(2026-08-18 の分解)。
+      // 既定 0 でビット一致。事前登録: docs/事前登録_亜熱帯の冬雨機構_2026-08-23.md
+      const stLo =
+        Math.abs(ridge) + 4 - K.winterStormEquatorwardReachDeg * winterDepth01;
       const stHi = Math.abs(pf) + 12;
       const aLat = Math.abs(lat);
       let stormW = 0;
