@@ -129,6 +129,7 @@ async function main(): Promise<void> {
   // ---- 2. 亜熱帯〜温帯の陸を、大陸内の東西位置で分ける ----
   interface Cell {
     w: number;
+    lat: number;
     frac: number;
     classId: number;
     annual: number;
@@ -156,6 +157,7 @@ async function main(): Promise<void> {
           t += r.temperature.monthlyTemperatureC[m]?.[i] ?? 0;
         }
         cells.push({
+          lat,
           w: cw,
           // 東西位置。0 = 西端、1 = 東端(自転が順行なので風上は西)
           frac: s.len === 1 ? 0.5 : k / (s.len - 1),
@@ -198,6 +200,27 @@ async function main(): Promise<void> {
         ` ${wm((c) => c.driest).toFixed(1).padStart(7)}` +
         ` ${wm((c) => c.t).toFixed(1).padStart(6)}°C   ${top}`,
     );
+  }
+
+  // ---- 2b. 東岸・西岸を緯度で割る(2026-08-24、45d の切り分け)----
+  // 25〜55° を混ぜると 35° 以北の Dfa/Dfb(正しい)が分母を薄める。
+  // 東岸湿潤(Cfa/Cwa)は亜熱帯 25〜35° の現象なのでそこだけでも見る
+  console.log('');
+  console.log('【2b】東岸・西岸を緯度で割る(亜熱帯 25〜35° / 温帯 35〜55°)');
+  for (const [lo, hi, name] of [BANDS[0], BANDS[4]] as Array<[number, number, string]>) {
+    for (const [la0, la1, lname] of [[25, 35, '亜熱帯 25-35'], [35, 55, '温帯 35-55']] as Array<[number, number, string]>) {
+      const g = cells.filter((c) => c.frac * 100 >= lo && c.frac * 100 <= hi && Math.abs(c.lat) >= la0 && Math.abs(c.lat) < la1);
+      if (g.length === 0) continue;
+      const wsum = g.reduce((a, c) => a + c.w, 0);
+      const share = (pred: (sym: string) => boolean): number =>
+        (100 * g.reduce((a, c) => a + (pred(KOPPEN_CLASSES[c.classId] ?? '') ? c.w : 0), 0)) / wsum;
+      const annual = g.reduce((a, c) => a + c.w * c.annual, 0) / wsum;
+      console.log(
+        `  ${name.padEnd(14)} ${lname.padEnd(12)} 年降水 ${annual.toFixed(0).padStart(4)}mm  ` +
+          `Cfa+Cwa ${share((s) => s === 'Cfa' || s === 'Cwa').toFixed(1)}%  Cs* ${share((s) => s.startsWith('Cs')).toFixed(1)}%  ` +
+          `Cfb+Cfc ${share((s) => s === 'Cfb' || s === 'Cfc').toFixed(1)}%  B ${share((s) => s.startsWith('B')).toFixed(1)}%  D ${share((s) => s.startsWith('D')).toFixed(1)}%`,
+      );
+    }
   }
 
   // ---- 3. 期待される構造の素の数値(判定はしない) ----
