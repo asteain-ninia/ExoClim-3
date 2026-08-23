@@ -48,7 +48,10 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['subsidenceSuppression', 0.5, 0.82],
   ['subsidenceItczProtection', 0.6, 0.95],
   ['eastCoastSubsidenceRelief', 0.5, 0.95],
-  ['eastCoastSubsidenceDecayKm', 600, 1300],
+  // v33(2026-08-24): 上限 1300→2000。亜熱帯高気圧の西縁は大陸内へ 2000〜3000km
+  // 及ぶ(湾流〜ミシシッピ、東シナ海〜四川)。3000 は単独掃引で大分類 −0.84 の
+  // ため登録規則で 2000 を上限に(docs/事前登録_東岸沈降緩和の減衰距離)
+  ['eastCoastSubsidenceDecayKm', 600, 2000],
   // **外した(2026-08-17)**: 範囲 [0.4, 1.2] は供給の分布の下に沈んで
   // ゲートが 96% 常時飽和(死んだ範囲)。掃引で生かすと東岸緩和が絞られて
   // **本丸の C→B 地域(米南東・東アジア)が乾く**逆効果と確認。
