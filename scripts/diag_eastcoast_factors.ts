@@ -6,6 +6,14 @@ import { runPipelineWithPrecipDiag } from '../src/sim/pipeline';
 import { EARTH_PARAMS, type PlanetParams } from '../src/domain/planetParams';
 import { latDegOfRow } from '../src/domain/grid';
 import { openAccel } from './accel_cli';
+import { MODEL_CONSTANTS } from '../src/sim/constants';
+const K = MODEL_CONSTANTS as unknown as Record<string, number>;
+if (process.env['DIAG_OVERRIDE']) {
+  for (const part of process.env['DIAG_OVERRIDE'].split(',')) {
+    const [n, v] = part.split('=');
+    if (n && n.trim() in K) { K[n.trim()] = Number(v); console.log(`[上書き] ${n.trim()} = ${v}`); }
+  }
+}
 
 const EARTH = process.argv.includes('--earth');
 async function main(): Promise<void> {
