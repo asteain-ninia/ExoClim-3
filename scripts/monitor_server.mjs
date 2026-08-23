@@ -692,23 +692,36 @@ function collectValidate() {
 
 export function parseSpace() {
   const t = readTextOr(CFG.spaceFile, 1 << 20);
-  if (!t) return {};
+  const empty = { space: {}, disabled: [] };
+  if (!t) return empty;
   const start = t.indexOf('export const SPACE');
-  if (start < 0) return {};
+  if (start < 0) return empty;
   const body = t.slice(start, t.indexOf('\n];', start) + 3);
-  const out = {};
+
   const re = /\[\s*'([A-Za-z0-9_]+)'\s*,\s*(-?[\d.eE+-]+)\s*,\s*(-?[\d.eE+-]+)\s*\]/g;
-  let m;
-  while ((m = re.exec(body))) {
-    const lo = Number(m[2]);
-    const hi = Number(m[3]);
-    if (Number.isFinite(lo) && Number.isFinite(hi)) out[m[1]] = { lo, hi };
-  }
-  return out;
+  const pick = (text) => {
+    const out = {};
+    let m;
+    re.lastIndex = 0;
+    while ((m = re.exec(text))) {
+      const lo = Number(m[2]);
+      const hi = Number(m[3]);
+      if (Number.isFinite(lo) && Number.isFinite(hi)) out[m[1]] = { lo, hi };
+    }
+    return out;
+  };
+
+  // **コメント行を先に落とす。** この literal には理由を書いた注記が多く、
+  // 無効化した定数がタプルの形のまま残っている(死んだ機構の記録)。
+  // 生のまま拾うと、掃引されていない定数を「探索対象」に数えてしまう。
+  const live = body.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+  const space = pick(live);
+  const disabled = Object.keys(pick(body)).filter((n) => !(n in space));
+  return { space, disabled };
 }
 
 export function analyzeParams(params, sensitivity) {
-  const space = parseSpace();
+  const { space, disabled } = parseSpace();
   if (!params) return null;
   const rows = [];
   for (const [name, value] of Object.entries(params)) {
@@ -742,6 +755,8 @@ export function analyzeParams(params, sensitivity) {
     atBound: rows.filter((r) => r.atBound).map((r) => ({ name: r.name, value: r.value, side: r.atBound, lo: r.lo, hi: r.hi })),
     outsideSpace: rows.filter((r) => !r.inSpace).length,
     missing,
+    /** SPACE の中でコメントアウトされている = 掃引から外した定数。 */
+    disabled,
     rows,
   };
 }

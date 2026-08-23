@@ -101,7 +101,12 @@ export function classifyProc(p: RawProc, now?: number): Proc;
 export function clusterProcs(procs: Proc[]): Cluster[];
 /** 副作用あり: clusters と sessions に判定結果(tracked / flag)を書き込む。 */
 export function judge(clusters: Cluster[], sessions: Session[], flags: Flags): Verdict;
-export function parseSpace(): Record<string, { lo: number; hi: number }>;
+export function parseSpace(): {
+  /** いま掃引されている定数の範囲。 */
+  space: Record<string, { lo: number; hi: number }>;
+  /** SPACE の中でコメントアウトされている = 掃引から外した定数。 */
+  disabled: string[];
+};
 export function analyzeParams(
   params: Record<string, unknown> | null,
   sensitivity: Record<string, number> | null,
@@ -111,6 +116,7 @@ export function analyzeParams(
   atBound: { name: string; value: number; side: 'lo' | 'hi'; lo: number | null; hi: number | null }[];
   outsideSpace: number;
   missing: string[];
+  disabled: string[];
   rows: {
     name: string;
     value: number;

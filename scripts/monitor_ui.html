@@ -866,10 +866,19 @@
               tile('端に張り付き', p.atBound.length, '空間の上限/下限', p.atBound.length ? 'bad' : 'ok'),
               tile('空間の外', p.outsideSpace, '掃引されない定数'),
               tile('値が無い', (p.missing || []).length, '空間にあるのに最良点に無い', (p.missing || []).length ? 'bad' : 'ok'),
+              tile('掃引から外した', (p.disabled || []).length, 'SPACE でコメントアウト'),
               tile('探索対象', p.spaceCount, 'optimize_lib.ts の SPACE'),
             ),
             (p.missing || []).length
-              ? el('div', { class: 'row', style: 'margin-top:8px' }, el('span', { class: 'dim', style: 'font-size:12px' }, '値が無い: '), p.missing.map((n) => el('span', { class: 'pill dim mono' }, n)))
+              ? el('div', { class: 'row', style: 'margin-top:8px' }, el('span', { class: 'dim', style: 'font-size:12px' }, '値が無い: '), p.missing.map((n) => el('span', { class: 'pill bad mono' }, n)))
+              : null,
+            (p.disabled || []).length
+              ? el(
+                  'div',
+                  { class: 'row', style: 'margin-top:6px' },
+                  el('span', { class: 'dim', style: 'font-size:12px' }, '掃引から外してある(死んだ機構の記録): '),
+                  p.disabled.map((n) => el('span', { class: 'pill dim mono' }, n)),
+                )
               : null,
             p.atBound.length
               ? el(

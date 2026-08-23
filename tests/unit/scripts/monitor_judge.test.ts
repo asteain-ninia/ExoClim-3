@@ -4,8 +4,9 @@
 // 機械で**判定するところにある。判定が静かに壊れると、寝落ちを見逃す側へ
 // 倒れる(誤って「追跡あり」と言う)。そこを固定する。
 
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { classifyProc, clusterProcs, judge } from '../../../scripts/monitor_server.mjs';
+import { classifyProc, clusterProcs, judge, parseSpace } from '../../../scripts/monitor_server.mjs';
 
 const NOW = Date.UTC(2026, 7, 24, 0, 0, 0); // 判定は現在時刻を見ないので固定してよい
 const agoMs = (sec: number) => NOW - sec * 1000;
@@ -212,5 +213,30 @@ describe('judge — AI が起こされるかの判定', () => {
     expect(cs.every((c) => c.tracked)).toBe(true);
     expect(v.level).toBe('warn');
     expect(v.headline).toContain('二重起動');
+  });
+});
+
+describe('parseSpace — 探索空間の読み取り', () => {
+  // 実ファイル(scripts/optimize_lib.ts)を読む。ここが静かにずれると、
+  // 掃引されていない定数を「探索対象」に数え、端張り付きの判定まで狂う。
+  it('コメントアウトされたタプルを探索対象に数えない', () => {
+    const src = readFileSync(new URL('../../../scripts/optimize_lib.ts', import.meta.url), 'utf8');
+    const body = src.slice(src.indexOf('export const SPACE'), src.indexOf('\n];', src.indexOf('export const SPACE')));
+    // 独立な数え方: 行頭が // でない行のタプルだけを数える
+    const tuple = /\[\s*'([A-Za-z0-9_]+)'\s*,\s*-?[\d.eE+-]+\s*,\s*-?[\d.eE+-]+\s*\]/;
+    const lines = body.split('\n');
+    const activeNames = lines.filter((l) => !l.trim().startsWith('//') && tuple.test(l)).map((l) => tuple.exec(l)![1]!);
+    const commentedNames = lines.filter((l) => l.trim().startsWith('//') && tuple.test(l)).map((l) => tuple.exec(l)![1]!);
+
+    const { space, disabled } = parseSpace();
+    expect(Object.keys(space).sort()).toEqual([...activeNames].sort());
+    expect(disabled.sort()).toEqual([...new Set(commentedNames)].filter((n) => !activeNames.includes(n)).sort());
+    // 空でないこと(正規表現が全落ちして「0 件」になる壊れ方を弾く)
+    expect(Object.keys(space).length).toBeGreaterThan(10);
+  });
+
+  it('掃引対象と掃引から外した定数は重ならない', () => {
+    const { space, disabled } = parseSpace();
+    for (const n of disabled) expect(space[n]).toBeUndefined();
   });
 });
