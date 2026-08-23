@@ -70,11 +70,27 @@ export function computeOceanCurrent(
     const needRows = Math.max(1, Math.round(spanDeg / grid.resolutionDeg));
     // 北半球: 極側 = row 減、赤道側 = row 増。南半球は逆
     const step = (lat >= 0) === towardEquator ? 1 : -1;
+    // 岸滑り(boundaryCurrentCoastSlipCells > 0): 陸に当たったら海側へ列を逃がす。
+    // 海側 = 寒流(海盆東縁、towardEquator=false)なら自転の逆、暖流なら自転向き
+    const seaward = (towardEquator ? 1 : -1) * (prograde ? 1 : -1);
+    const slipMax = Math.max(0, Math.round(K.boundaryCurrentCoastSlipCells));
+    let walkCol = col;
     let open = 0;
     for (let d = 1; d <= needRows; d++) {
       const r2 = row + step * d;
       if (r2 < 0 || r2 >= H) break;
-      if (land[r2 * W + col]) break;
+      if (land[r2 * W + walkCol]) {
+        let slipped = false;
+        for (let sgl = 1; sgl <= slipMax; sgl++) {
+          const c3 = (((walkCol + seaward * sgl) % W) + W) % W;
+          if (!land[r2 * W + c3]) {
+            walkCol = c3;
+            slipped = true;
+            break;
+          }
+        }
+        if (!slipped) break;
+      }
       if (requireWidth) {
         // 幅チェック(warmGateWidthCheck = 1、事前登録 v31 件 1): 暖流は赤道の
         // 熱の搬入なので、搬入路は列 1 本でなく経度方向にも開いている必要が
@@ -82,7 +98,7 @@ export function computeOceanCurrent(
         // 細い水路(縁海西縁 → 赤道のすき間)を連続に減衰する
         let sea = 1; // 中央列(直上で海と確認済み)
         for (const dc of [-2, -1, 1, 2]) {
-          if (!land[r2 * W + ((col + dc + W * 4) % W)]) sea++;
+          if (!land[r2 * W + ((walkCol + dc + W * 4) % W)]) sea++;
         }
         open += sea / 5;
       } else {
