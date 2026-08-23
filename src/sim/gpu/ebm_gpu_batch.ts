@@ -63,7 +63,7 @@ const LEVEL_PARAM_WORDS = 32;
 const MAX_STEPS = 16384;
 /**
  * maxSteps の値の輸出(単発版 ebm_gpu.ts の MAX_STEPS と同値)。
- * 掃引のバッチ実行器(scripts/sweep_batch_lib.ts)が worker_threads 側の
+ * バッチ実行器(scripts/gpu_batch_pool.ts — 掃引と較正が共有)が worker_threads 側の
  * 代理 EbmAccel に **同期プロパティとして**渡すために要る — step05 は
  * `ebmAccel.maxSteps` を同期に読んで年数の倍化を抑えるので、
  * 代理側は主スレッドへ問い合わせずに答えられなければならない。

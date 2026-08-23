@@ -1,4 +1,5 @@
 // worker_threads 用のブートストラップ(素の .mjs — tsx を経由せず Node が直接読む)。
+// 掃引(sweep_batch_worker.ts)と較正(optimize_batch_worker.ts)の両方がここを通る。
 //
 // なぜ要るか(2026-08-21 実測):
 //   `npx tsx` で立てた主スレッドから `new Worker('～.ts')` すると、tsx のローダが

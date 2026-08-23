@@ -8,7 +8,7 @@
 import * as readline from 'node:readline';
 import { runPipeline } from '../src/sim/pipeline';
 import { MODEL_CONSTANTS } from '../src/sim/constants';
-import { EARTH_PARAMS } from '../src/domain/planetParams';
+import { optimizeRunParams } from './optimize_cheap';
 import { disqualifyIfUnsound, evaluateResult, UNSOLVED_FITNESS } from './optimize_lib';
 import { EBM_SOLVER, EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
 import { openAccel } from './accel_cli';
@@ -54,7 +54,7 @@ rl.on('line', (line) => {
       EBM_SOLVER_STATS.capHits = 0;
       EBM_SOLVER_STATS.maxSweeps = 0;
       EBM_SOLVER_STATS.fullCapacityYears = 0;
-      const result = await runPipeline(EARTH_PARAMS, accel.opts);
+      const result = await runPipeline(optimizeRunParams(), accel.opts);
       const scores = evaluateResult(result, msg.holdoutFold);
       // 予算内で解けなかった定数ベクトルは**失格**にする(減点ではない)。
       // capHits は evaluateNumericalSoundness が見ない量なのでここに残す。

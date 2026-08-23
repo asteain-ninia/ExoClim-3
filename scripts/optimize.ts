@@ -1,7 +1,16 @@
 // モデル定数の自動較正(地球を教師データにしたブラックボックス最適化)。
 // 実行: npx tsx scripts/optimize.ts --minutes 50 --parallel 3
 // 状態は out/optimize/state.json に常時保存され、再実行で続きから回る。
-// --parallel N でワーカープロセス N 本の同時評価(既定 1 = 逐次 in-process)。
+// --parallel N で N 点の同時評価(既定 1 = 逐次 in-process)。
+//
+// **並列評価の実行機構(2026-08-23 に載せ替え)**:
+//   既定は worker_threads + EBM の GPU バッチ束ね(scripts/optimize_batch_lib.ts)。
+//   較正の 1 バッチ(同時 N 点)がそのまま EBM の L=N バッチになる。
+//   探索の手順(座標降下・スクリーニング・停滞判定・state 保存・来歴指紋・
+//   ログ形式)は一切変えていない — 変えたのは「N 点を評価する機構」だけで、
+//   旧経路(子プロセス)との同値は scripts/diag_optimize_batch_equiv.ts で確認する。
+//   環境変数 `EXOCLIM_OPT_BACKEND=proc` で旧経路(子プロセス)へ戻せる。
+//   EXOCLIM_GPU=0(CPU 経路)のときは主スレッドに GPU が無いので自動で proc になる。
 //
 // 目的関数(2026-07-31 に事前凍結 — docs/較正記録.md 参照):
 //   fitness = 大分類% + 1.1×地域ゲート数 + 0.25×詳細%
@@ -16,8 +25,10 @@ import * as readline from 'node:readline';
 import { runPipeline } from '../src/sim/pipeline';
 import { openAccel } from './accel_cli';
 import { MODEL_CONSTANTS } from '../src/sim/constants';
-import { EARTH_PARAMS } from '../src/domain/planetParams';
 import { EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
+import { releaseGpu } from '../src/sim/gpu/device_node';
+import { optimizeCheapNote, optimizeRunParams } from './optimize_cheap';
+import { createOptimizeEvalPool, type OptimizeEvalPool } from './optimize_batch_lib';
 import {
   SPACE,
   UNSOLVED_FITNESS,
@@ -166,7 +177,25 @@ function mulberry32(seed: number): () => number {
 // ---- 評価バックエンド(逐次 or ワーカープール)----
 interface Backend {
   evalBatch(vectors: Array<{ tag: string; vector: Record<string, number> }>): Promise<Scores[]>;
-  close(): void;
+  /** 常駐資源(子プロセス / スレッド / GPU)を畳む。**必ず await する**
+   *  — スレッド経路はデバイスの破棄まで含むので、待たずに終えると exit 139 */
+  close(): Promise<void>;
+}
+
+/**
+ * 並列評価の実行機構の選択。既定は 'thread'(worker_threads + EBM バッチ)。
+ * `EXOCLIM_OPT_BACKEND=proc` で旧経路(子プロセス)へ戻す。
+ * EXOCLIM_GPU=0 のときは主スレッドに GPU が無いので thread は成立しない
+ * (バッチの束ねは主スレッドの GPU が前提)ため、自動で proc に落とす。
+ */
+function chooseBackendKind(): 'thread' | 'proc' {
+  const want = process.env['EXOCLIM_OPT_BACKEND'];
+  if (want === 'proc') return 'proc';
+  if (want && want !== 'thread') {
+    throw new Error(`EXOCLIM_OPT_BACKEND は thread か proc(指定値: ${want})`);
+  }
+  if (process.env['EXOCLIM_GPU'] === '0') return 'proc';
+  return 'thread';
 }
 
 function sequentialBackend(state: OptState): Backend {
@@ -178,7 +207,7 @@ function sequentialBackend(state: OptState): Backend {
       for (const it of items) {
         Object.assign(MODEL_CONSTANTS, it.vector);
         const t0 = Date.now();
-        const result = await runPipeline(EARTH_PARAMS, accel.opts);
+        const result = await runPipeline(optimizeRunParams(), accel.opts);
         const s = evaluateResult(result, HOLDOUT_FOLD);
         // **逐次経路にも失格の判定を入れる(2026-08-14)。** ここには判定が
         // 1 つも無く、--parallel 1 の較正は数値的に無防備だった。
@@ -189,8 +218,8 @@ function sequentialBackend(state: OptState): Backend {
       }
       return out;
     },
-    close() {
-      void accelReady.then((a) => a.close());
+    async close() {
+      (await accelReady).close();
     },
   };
 }
@@ -201,7 +230,12 @@ interface WorkerHandle {
   busy: boolean;
 }
 
-function poolBackend(state: OptState, n: number): Backend {
+/**
+ * **旧経路**: 子プロセス N 本の同時評価(2026-08-23 まで既定)。
+ * `EXOCLIM_OPT_BACKEND=proc` と EXOCLIM_GPU=0 のときだけ使う。
+ * 新経路(threadPoolBackend)との同値は scripts/diag_optimize_batch_equiv.ts。
+ */
+function procPoolBackend(state: OptState, n: number): Backend {
   const workers: WorkerHandle[] = [];
   for (let i = 0; i < n; i++) {
     // 実行名を引数として渡す(ワーカー本体は使わない)。
@@ -258,8 +292,45 @@ function poolBackend(state: OptState, n: number): Backend {
       await Promise.all(lanes);
       return results;
     },
-    close() {
+    async close() {
       for (const w of workers) w.proc.kill();
+    },
+  };
+}
+
+/**
+ * **新経路**: worker_threads N 本 + EBM の GPU バッチ束ね(既定)。
+ *
+ * 較正の 1 バッチ(同時 N 点)がそのまま EBM の L=N バッチになる。
+ * 評価そのものの手順は子プロセス版(optimize_worker.ts)と 1 対 1 で同じ
+ * (scripts/optimize_batch_worker.ts)。ログの採番も従来どおり**完了順**。
+ *
+ * 中断まわりが良くなる副産物: 子プロセスが無いので**孤児が出ない**
+ * (2026-08-02 に 8 個の孤児が評価速度を 3 倍遅くした件。stop_optimize.ps1 は
+ * 親の `--run <名前>` で狙い撃ちできるので、従来どおり効く)。
+ */
+function threadPoolBackend(state: OptState, n: number): Backend {
+  // プールは**最初の評価のときに立てる**(GPU の取得と tsx のスレッド起動を
+  // 較正の準備段階に前倒ししない。来歴の照合で終わる走行があるため)
+  let poolReady: Promise<OptimizeEvalPool> | null = null;
+  const ensure = (): Promise<OptimizeEvalPool> => (poolReady ??= createOptimizeEvalPool(n));
+  return {
+    async evalBatch(items) {
+      const pool = await ensure();
+      const outcomes = await pool.run(
+        items.map((it) => ({ tag: it.tag, vector: it.vector, holdoutFold: HOLDOUT_FOLD })),
+        // **完了順に記録する**(旧経路は先に返した子から logEval していた)
+        (idx, o) => logEval(state, items[idx]!.tag, o.scores, o.sec, o.ebmYears, o.ebmIters),
+      );
+      return outcomes.map((o) => o.scores);
+    },
+    async close() {
+      // スレッドと GPU 常駐資源を畳んでからデバイスを破棄する(でないと exit 139)
+      try {
+        if (poolReady) await (await poolReady).close();
+      } finally {
+        releaseGpu();
+      }
     },
   };
 }
@@ -399,6 +470,14 @@ async function main(): Promise<void> {
    * 待たないと、抜けられたはずの谷を捨てる。N=60 の 0.211 損はまさにこれ。
    */
   const stallLimit = Math.max(0, Math.round(arg('--stall', 124)));
+  /**
+   * **評価数の上限**(既定 0 = 無制限。2026-08-23 追加)。
+   * 探索の中身には一切効かない — 停止ファイルと同じ「バッチの切れ目で抜ける」
+   * 判定をもう一つ足しただけである。旧経路と新経路を**同じ評価数で**比べる
+   * (scripts/diag_optimize_batch_equiv.ts)ために要る。時間で切ると経路の
+   * 速さの差がそのまま評価数の差になり、ログを突き合わせられない。
+   */
+  const maxEvals = Math.max(0, Math.round(arg('--max-evals', 0)));
   /** 最良を最後に更新した評価番号。**再開時はその時点から数え直す**
    *  (前回の走行での停滞をこの走行へ持ち込まない) */
   let lastBestEvalNo = 0;
@@ -406,7 +485,17 @@ async function main(): Promise<void> {
   const state = loadState();
   initEvalCounter(state);
   const rand = mulberry32(state.seed + state.sweep * 977 + state.evals);
-  const backend = parallel > 1 ? poolBackend(state, parallel) : sequentialBackend(state);
+  // 検証専用の安い設定が効いていたら**必ず表に出す**(本番の較正と取り違えない)
+  const cheap = optimizeCheapNote();
+  if (cheap) console.log(`[較正] **検証専用の安い設定が効いている**: ${cheap}`);
+  const backendKind = chooseBackendKind();
+  if (parallel > 1) console.log(`[較正] 並列評価の機構: ${backendKind}(並列 ${parallel})`);
+  const backend =
+    parallel > 1
+      ? backendKind === 'thread'
+        ? threadPoolBackend(state, parallel)
+        : procPoolBackend(state, parallel)
+      : sequentialBackend(state);
 
   if (state.bestFit === -Infinity) {
     const [s] = await backend.evalBatch([{ tag: 'baseline', vector: state.best }]);
@@ -454,6 +543,12 @@ async function main(): Promise<void> {
       } catch {
         /* 消せなくても止まることを優先する */
       }
+      break;
+    }
+
+    // 評価数の上限(--max-evals)。停止ファイルと同じくバッチの切れ目でだけ見る
+    if (maxEvals > 0 && state.evals >= maxEvals) {
+      console.log(`評価数の上限に達したので終了します(${state.evals} 評価 / 上限 ${maxEvals})`);
       break;
     }
 
@@ -624,7 +719,7 @@ async function main(): Promise<void> {
     saveState(state);
   }
 
-  backend.close();
+  await backend.close();
   saveState(state);
   const b = state.bestScores;
   console.log(
