@@ -1432,7 +1432,10 @@ export async function computePrecipitation(
       // W→蒸発→W の正帰還が 2 周期振動になり結合反復が収束しない
       // (k=1〜3 の全水準で健全性 ×)。係数 f を前反復の f と半々に混ぜ、
       // 振れ幅も [0.7, 1.15] に絞る(教訓: 反復が 2 周期に割れたら遅延を疑う)
-      const rh = K.evapOceanRelHumidity;
+      // 定式化(2 版、2026-08-24): RH を変調すると (1−RH)=0.2 が相対的に大きく
+      // 動き、W の ±20% が蒸発の ±80% になる(ループ利得 ≈ 4、緩和でも発散)。
+      // **湿度欠損 (1−RH) を直接 (W̄/W_m)^k で変調**すれば利得は k そのもの。
+      // 乾いた月(W が平均より少ない)ほど欠損が大きく蒸発が増える — 物理は同じ
       const wPrevM = warmStart[m] as Float32Array;
       const fPrev = evapSeasonF[m] ?? (evapSeasonF[m] = new Float32Array(N).fill(1));
       for (let i = 0; i < N; i++) {
@@ -1440,11 +1443,12 @@ export async function computePrecipitation(
         let wBar = 0;
         for (let mm = 0; mm < MONTHS_PER_YEAR; mm++) wBar += (warmStart[mm] as Float32Array)[i] ?? 0;
         wBar /= MONTHS_PER_YEAR;
-        if (!(wBar > 1e-6)) continue;
-        const fRaw = Math.pow((wPrevM[i] ?? 0) / wBar, K.evapHumiditySeasonalExp);
-        const f = Math.min(1.15, Math.max(0.7, 0.5 * (fPrev[i] ?? 1) + 0.5 * fRaw));
+        const wm = wPrevM[i] ?? 0;
+        if (!(wBar > 1e-6) || !(wm > 1e-6)) continue;
+        const fRaw = Math.pow(wBar / wm, K.evapHumiditySeasonalExp);
+        const f = Math.min(1.3, Math.max(0.75, 0.5 * (fPrev[i] ?? 1) + 0.5 * fRaw));
         fPrev[i] = f;
-        src[i] = (src[i] ?? 0) * ((1 - rh * f) / Math.max(1e-6, 1 - rh));
+        src[i] = (src[i] ?? 0) * f;
       }
     }
     // 段 45b: コンベアの源泉・シンク対(既定 0 では conveyorPrep が null で不発。
