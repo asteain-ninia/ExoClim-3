@@ -5,7 +5,7 @@
 import { MODEL_CONSTANTS } from '../src/sim/constants';
 import type { PipelineResult } from '../src/sim/types';
 import { fieldScore, itczLineRmse, koppenScore, scoreRegionGates,
-  intermediateFieldScore,
+  intermediateFieldScore, REGION_GATES,
 } from './scoring';
 import { gateFoldAssignments, keepExcludingFold } from './holdout';
 import { EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
@@ -401,10 +401,13 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
   } else {
     const training = gateResults.filter((g) => gateFolds[g.id] !== holdoutFold);
     gates = training.filter((g) => g.pass).length;
-    gateTerm = (17 * gates) / Math.max(1, training.length);
+    // ゲート集合 v2(2026-08-24)で 17→21 件になったため、正規化定数は
+    // ハードコードせず総数に追随させる(全球較正との尺を揃える意図は不変)
+    gateTerm = (REGION_GATES.length * gates) / Math.max(1, training.length);
     // 連続版も同じ規則で正規化する(fold ごとに訓練地域数が違うため)
     gateShareTerm =
-      (17 * training.reduce((s, g) => s + g.share, 0)) / Math.max(1, training.length);
+      (REGION_GATES.length * training.reduce((s, g) => s + g.share, 0)) /
+      Math.max(1, training.length);
     itczTerm = 0;
   }
   // ---- v2(旧定義)。比較のために必ず計算して併記する ----

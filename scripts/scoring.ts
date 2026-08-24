@@ -208,6 +208,48 @@ export const REGION_GATES: RegionGate[] = [
     mode: 'major',
     expect: 'E',
   },
+  // ---- ゲート集合 v2(2026-08-24 追加。docs/事前登録_地域ゲート追加_ゲート集合v2_2026-08-24.md)----
+  // 利用者指摘(v33 採用時): 極東シベリア・アラスカの大分類が長期不一致。
+  // 観測: D 100%(Dfc 66, Dsc 29, Dwc 4)
+  {
+    id: 'fareast_siberia_continental',
+    latMin: 58,
+    latMax: 68,
+    lonMin: 145,
+    lonMax: 175,
+    mode: 'major',
+    expect: 'D',
+  },
+  // 観測: D 92%(Dfc 68, Dsc 17)、E 8%
+  {
+    id: 'alaska_continental',
+    latMin: 61,
+    latMax: 68,
+    lonMin: -160,
+    lonMax: -142,
+    mode: 'major',
+    expect: 'D',
+  },
+  // 観測: D 81% が過半だが利用者の照準は「B(BSk 15%)が出ない」こと → present
+  {
+    id: 'canada_west_b_present',
+    latMin: 49,
+    latMax: 53,
+    lonMin: -122,
+    lonMax: -110,
+    mode: 'present',
+    expect: 'B',
+  },
+  // 観測: C 100%(Cfa 97, Cwa 3)。la_plata は退行トラッカーのみだったのでゲート化
+  {
+    id: 'argentina_humid',
+    latMin: -35,
+    latMax: -27,
+    lonMin: -62,
+    lonMax: -52,
+    mode: 'major',
+    expect: 'C',
+  },
 ];
 
 export interface RegionGateResult {

@@ -310,7 +310,7 @@ export function computeOceanCurrent(
       // 岸)には掛けない。SST は年一枚なので夏半球は ITCZ 年最大変位の深い側で
       // 判定する(月別 SST 化はしない)。
       if (
-        K.somaliUpwellingC !== 0 &&
+        (K.somaliUpwellingC as number) !== 0 &&
         absLat <= separationLat &&
         nearWestBoundaryKm < K.boundaryCurrentReachKm
       ) {

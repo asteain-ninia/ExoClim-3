@@ -76,7 +76,7 @@ describe('空間ホールドアウト分割(P1-1)', () => {
     }
   });
 
-  it('地域ゲートは全 17 件が事前登録され、区画は決定的', () => {
+  it('地域ゲートは全 21 件(ゲート集合 v2)が事前登録され、区画は決定的', () => {
     const folds = gateFoldAssignments();
     expect(Object.keys(folds).length).toBe(REGION_GATES.length);
     for (const g of REGION_GATES) {
@@ -112,7 +112,7 @@ describe('空間ホールドアウト分割(P1-1)', () => {
       const keep = keepExcludingFold(f);
       const k = koppenScore(result, undefined, keep);
       const fld = fieldScore(result, undefined, keep);
-      const gateTerm = (17 * s.gates) / training.length;
+      const gateTerm = (REGION_GATES.length * s.gates) / training.length;
       // v2(旧定義。併記のために計算し続けている)
       const expectedV2 =
         k.majorPct +
@@ -142,7 +142,7 @@ describe('空間ホールドアウト分割(P1-1)', () => {
       // **連続版のゲート項が訓練対象数で正規化される**ことを確かめる
       // (絶対数のままだと fold ごとに項の最大値が揃わない — P1-3 と同じ理由)
       const gateShareTerm =
-        (17 * training.reduce((acc, g) => acc + g.share, 0)) / training.length;
+        (REGION_GATES.length * training.reduce((acc, g) => acc + g.share, 0)) / training.length;
       const expectedV4 =
         expectedV3 - 1.1 * gateTerm + 1.1 * gateShareTerm - W.wPrecipQuantile * fld.precipQuantileLogErr;
       expect(s.fitnessV4).toBeCloseTo(expectedV4, 10);
