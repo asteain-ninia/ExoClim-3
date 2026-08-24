@@ -80,6 +80,25 @@ interface OptState {
 function currentVector(): Record<string, number> {
   const v: Record<string, number> = {};
   for (const [name] of SPACE) v[name] = MODEL_CONSTANTS[name] as number;
+  // --seed-file <json>: 新規 run の初期点を constants.ts 既定でなく JSON で与える
+  // (2026-08-25、v34 の教訓: 掃引が既に見つけた良点 a=0.6 に較正の降下が
+  //  到達できず停滞した。良点を種に再降下させるための入口。**再開時は無視**
+  //  される — 初期化のときしか呼ばれない)。SPACE 外のキーは知らない名前として
+  //  拒否し、値は範囲へ収める。
+  const sfIdx = process.argv.indexOf('--seed-file');
+  if (sfIdx >= 0) {
+    const p = process.argv[sfIdx + 1];
+    if (!p) throw new Error('--seed-file にパスが無い');
+    const raw = JSON.parse(fs.readFileSync(p, 'utf8')) as Record<string, number>;
+    const seedVec = (raw as { vector?: Record<string, number> }).vector ?? raw;
+    for (const [k, val] of Object.entries(seedVec)) {
+      if (typeof val !== 'number') continue;
+      const spec = SPACE.find(([n]) => n === k);
+      if (!spec) throw new Error(`--seed-file に SPACE 外の定数: ${k}`);
+      v[k] = Math.min(spec[2], Math.max(spec[1], val));
+    }
+    console.log(`[較正] 種を --seed-file から読み込み: ${p}(${Object.keys(seedVec).length} 定数)`);
+  }
   return v;
 }
 
