@@ -23,6 +23,8 @@ export interface Proc {
   /** 計算ジョブとして数えるか(ラッパ・シェル・モニタ自身は false)。 */
   isJob: boolean;
   isSelf: boolean;
+  /** このリポジトリのスクリプトと判断できたか。 */
+  ours: boolean;
   script: string | null;
   args: string;
   cmd: string;
@@ -133,7 +135,12 @@ export interface Verdict {
   reasons: string[];
 }
 
-export function classifyProc(p: RawProc, now?: number): Proc;
+export function classifyProc(
+  p: RawProc,
+  now?: number,
+  /** そのスクリプトがこのリポジトリのものかを判定する(試験で差し替える)。 */
+  ownedBy?: (dir: string, script: string | null) => boolean,
+): Proc;
 export function clusterProcs(procs: Proc[]): Cluster[];
 /**
  * 走っている計算を、起動コマンドの原文で持ち主のセッションへ結びつける。

@@ -207,7 +207,10 @@ const PS_SCRIPT = `
 $ErrorActionPreference='SilentlyContinue'
 [Console]::OutputEncoding=[Text.Encoding]::UTF8
 $inv=[Globalization.CultureInfo]::InvariantCulture
-Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*ExoClim-3*' } | ForEach-Object {
+Get-CimInstance Win32_Process | Where-Object {
+  $_.CommandLine -like '*ExoClim-3*' -or
+  $_.CommandLine -match '(scripts|tests|out)[\\\\/][\\w.\\-]+\\.(ts|mjs|cjs|js|py|ps1)'
+} | ForEach-Object {
   [pscustomobject]@{
     pid     = $_.ProcessId
     ppid    = $_.ParentProcessId
@@ -237,7 +240,12 @@ const getProcs = memo(3000, async () => {
  * コマンド行全体を種別の正規表現に当ててはいけない — git のコミット文に
  * 含まれる語をスクリプト名と誤読する(2026-08-24 に実際に踏んだ)。
  */
-export function classifyProc(p, now = Date.now()) {
+/** そのスクリプトがこのリポジトリのものか(既定は実ファイルの有無で見る)。 */
+function scriptIsOurs(dir, script) {
+  return !!script && exists(path.join(ROOT, dir, script));
+}
+
+export function classifyProc(p, now = Date.now(), ownedBy = scriptIsOurs) {
   const cmd = String(p.cmd ?? '');
   const name = String(p.name ?? '');
   // リポジトリ内のスクリプトを**最後の出現**で拾う。node_modules の
@@ -245,6 +253,20 @@ export function classifyProc(p, now = Date.now()) {
   const hits = [...cmd.matchAll(/(?:^|[\s"'/\\])(scripts|tests|out)[/\\]([\w.-]+\.(?:ts|mjs|cjs|js|py|ps1))/gi)];
   const last = hits.length ? hits[hits.length - 1] : null;
   const script = last ? last[2] : null;
+
+  /**
+   * このリポジトリのものか。
+   *
+   * コマンド行に絶対パスが載らない起動(リポジトリの中で `node scripts/x.mjs`)
+   * があるので、プロセスの絞り込みを `*ExoClim-3*` だけにしてはいけない —
+   * **走っているのに「計算 0 件」と報告する**という最悪の外し方をする
+   * (2026-08-24 に実測。モニタ自身すら見えていなかった)。
+   * 代わりに `scripts/…` の形も拾い、**実ファイルがこのリポジトリに在るか**で
+   * 他プロジェクトのものを弾く(例: 別プロジェクトの scripts/session_check.js)。
+   * 作業ディレクトリは Win32_Process から取れないので、これが実用的な上限。
+   */
+  const marked = /exoclim-3/i.test(cmd);
+  const ours = marked || (last ? ownedBy(last[1], script) : false);
 
   let kind = null;
   if (script) {
@@ -276,8 +298,10 @@ export function classifyProc(p, now = Date.now()) {
     name,
     kind: kind ?? 'その他',
     /** 計算ジョブとして数えるか。ラッパや素性不明は数えない。 */
-    isJob: CFG.procNames.includes(name.toLowerCase()) && kind != null && kind !== 'self',
+    isJob: ours && CFG.procNames.includes(name.toLowerCase()) && kind != null && kind !== 'self',
     isSelf: kind === 'self',
+    /** このリポジトリのものと判断できたか。false = 他プロジェクトの同名スクリプト等。 */
+    ours,
     script,
     args,
     cmd: cmd.slice(0, 500),
@@ -1075,7 +1099,15 @@ async function buildState() {
       procCount: procs.filter((p) => p.isJob).length,
       jobCount: clusters.filter((c) => !c.parent).length,
       clusters,
-      others: procs.filter((p) => !p.isJob && !p.isSelf).map((p) => ({ pid: p.pid, name: p.name, elapsedSec: p.elapsedSec, cmd: p.cmd.slice(0, 160) })),
+      others: procs
+        .filter((p) => !p.isJob && !p.isSelf)
+        .map((p) => ({
+          pid: p.pid,
+          name: p.name,
+          elapsedSec: p.elapsedSec,
+          why: p.ours === false ? 'このリポジトリのスクリプトではない' : 'シェル・道具・素性不明',
+          cmd: p.cmd.slice(0, 160),
+        })),
     },
     ai: { sessions, transcriptsDir: transcriptsDir().replace(/\\/g, '/'), tasksBase: tasksBase().replace(/\\/g, '/') },
     runs,

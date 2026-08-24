@@ -129,6 +129,29 @@ describe('classifyProc — コマンド行の誤読を防ぐ', () => {
     expect(p.kind).toBe('掃引');
   });
 
+  it('回帰: 絶対パスを含まない起動も計算として見える', () => {
+    // 2026-08-24 実測: `*ExoClim-3*` だけで絞ると合致 0 件になり、
+    // 走っているのに「計算 0 件」と報告する — 最悪の外し方。
+    const p = classifyProc(
+      { pid: 9, ppid: 9999, name: 'node.exe', started: iso(10), cpuSec: 0, memMB: 10, cmd: 'node scripts/optimize.ts --run v34' },
+      NOW,
+      () => true,
+    );
+    expect(p.isJob).toBe(true);
+    expect(p.ours).toBe(true);
+    expect(p.kind).toBe('較正');
+  });
+
+  it('他プロジェクトの同名スクリプトは弾く(実ファイルがこのリポジトリに無い)', () => {
+    const p = classifyProc(
+      { pid: 9, ppid: 9999, name: 'node.exe', started: iso(10), cpuSec: 0, memMB: 10, cmd: 'node scripts/session_check.js' },
+      NOW,
+      () => false,
+    );
+    expect(p.ours).toBe(false);
+    expect(p.isJob).toBe(false);
+  });
+
   it('自分自身(モニタ)は計算に数えない', () => {
     const p = classifyProc(
       { pid: 9, ppid: 1, name: 'node.exe', started: iso(10), cpuSec: 0, memMB: 10, cmd: 'node scripts/monitor_server.mjs' },
