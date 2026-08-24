@@ -502,7 +502,8 @@
             r.meta && r.meta.startedAt ? el('span', { class: 'pill dim' }, '開始 ' + jst(r.meta.startedAt) + '(' + dur(r.startedAgeSec) + '前)') : null,
           ),
         );
-        if (r.progress) {
+        // 終わった run で cursor が 0 に戻っていると「先頭で止まった」ように見える
+        if (r.progress && (live || r.progress.cursor > 0)) {
           body.push(
             el(
               'div',
