@@ -52,6 +52,11 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // 及ぶ(湾流〜ミシシッピ、東シナ海〜四川)。3000 は単独掃引で大分類 −0.84 の
   // ため登録規則で 2000 を上限に(docs/事前登録_東岸沈降緩和の減衰距離)
   ['eastCoastSubsidenceDecayKm', 600, 2000],
+  // v34(2026-08-24): 沈降の海盆非対称(descW の源泉側)。単独掃引で単調改善・
+  // 守り無傷(a 0→0.6: 東岸 descW 0.97→0.74、continuousV3 +0.33、大分類 +0.25、
+  // argentina share 0.079→0.159)。docs/事前登録_沈降の海盆非対称_2026-08-24.md
+  ['subsidenceBasinAsymmetry', 0, 0.8],
+  ['subsidenceBasinAsymDecayKm', 800, 3000],
   // **外した(2026-08-17)**: 範囲 [0.4, 1.2] は供給の分布の下に沈んで
   // ゲートが 96% 常時飽和(死んだ範囲)。掃引で生かすと東岸緩和が絞られて
   // **本丸の C→B 地域(米南東・東アジア)が乾く**逆効果と確認。

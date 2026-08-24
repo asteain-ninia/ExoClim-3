@@ -614,7 +614,7 @@ export function formatLevel(p: LevelReport): string {
     `  5% ${p.dryTail.p05.toFixed(0).padStart(5)}(観測 ${p.dryTail.obsP05.toFixed(0)})` +
     `  50% ${p.dryTail.p50.toFixed(0).padStart(5)}(観測 ${p.dryTail.obsP50.toFixed(0)})\n` +
     `       分布形: 平均対数誤差 ${p.quantileLogErr.toFixed(3)}` +
-    `  連続部分 ${p.continuousV3.toFixed(3)}  被覆の和 ${p.gateShare.toFixed(2)}/17\n` +
+    `  連続部分 ${p.continuousV3.toFixed(3)}  被覆の和 ${p.gateShare.toFixed(2)}/${REGION_GATES.length}\n` +
     `       分位(モデル/観測): ` +
     p.quantiles.map(([q, m, o]) => `${q}% ${m.toFixed(0)}/${o.toFixed(0)}`).join('  ') +
     '\n' +

@@ -990,6 +990,69 @@ export async function computePrecipitation(
     }
   }
 
+  // ---- 沈降の海盆非対称の幾何場(2026-08-24、事前登録_沈降の海盆非対称)----
+  // g[i] = exp(−海盆西縁距離/decay) × 幅ゲート。月に依らないので一度だけ作る。
+  // 亜熱帯高気圧は海盆東側の細胞であり、海盆西部(大陸東岸沖)では沈降が
+  // 開く、の幾何。幅ゲート (幅°−35)/20 は境界流の 55° と同じ尺で、
+  // 地中海・アラビア海・ベンガル湾・メキシコ湾を自動除外する(縁海の教訓)。
+  // **subsidenceBasinAsymmetry = 0 なら作らない = 従来とビット一致。**
+  let basinAsymG: Float32Array | null = null;
+  if ((K.subsidenceBasinAsymmetry as number) !== 0) {
+    basinAsymG = new Float32Array(grid.cellCount);
+    const dir = params.body.rotationDirection >= 0 ? 1 : -1;
+    const W = grid.widthCells;
+    const widthGateOf = (widthDeg: number): number =>
+      Math.min(1, Math.max(0, (widthDeg - 35) / 20));
+    /** 海セルの幅ゲート(陸セルが東の海から引き継ぐために別持ち) */
+    const oceanWidthGate = new Float32Array(grid.cellCount);
+    for (let row = 0; row < grid.heightCells; row++) {
+      const dxKm = Math.max(20, cellWidthKm(grid, row, params.body.radiusKm));
+      for (let col = 0; col < W; col++) {
+        const i = row * W + col;
+        if (terrain.landMask[i]) continue;
+        // 自転の西向きに海上を辿り、最初の陸まで(= 海盆西縁距離)
+        let dWest = -1;
+        for (let d = 1; d < W; d++) {
+          const j = row * W + wrapCol(grid, col - dir * d);
+          if (terrain.landMask[j]) {
+            dWest = d;
+            break;
+          }
+        }
+        if (dWest < 0) continue; // 全周が海の行(南大洋)= 非対称なし
+        let dEast = -1;
+        for (let d = 1; d < W; d++) {
+          const j = row * W + wrapCol(grid, col + dir * d);
+          if (terrain.landMask[j]) {
+            dEast = d;
+            break;
+          }
+        }
+        const widthCells = dWest + (dEast < 0 ? W : dEast) - 1;
+        const wg = widthGateOf(widthCells * grid.resolutionDeg);
+        oceanWidthGate[i] = wg;
+        basinAsymG[i] =
+          Math.exp(-(dWest * dxKm) / K.subsidenceBasinAsymDecayKm) * wg;
+      }
+      // 陸セル: 東の海までの距離(eastOceanKm)で減衰し、その海の幅ゲートを引き継ぐ
+      for (let col = 0; col < W; col++) {
+        const i = row * W + col;
+        if (!terrain.landMask[i]) continue;
+        const dKm = eastOceanKm[i] ?? 1e9;
+        if (dKm >= 1e8) continue; // 東に海が無い(西岸・内陸)= 非対称なし
+        const maxScan = Math.max(10, Math.round(4400 / dxKm));
+        for (let d = 1; d <= maxScan; d++) {
+          const j = row * W + wrapCol(grid, col + dir * d);
+          if (!terrain.landMask[j]) {
+            basinAsymG[i] =
+              Math.exp(-dKm / K.subsidenceBasinAsymDecayKm) * (oceanWidthGate[j] ?? 0);
+            break;
+          }
+        }
+      }
+    }
+  }
+
   // ---- 段 45b: モンスーンコンベア(事前登録_コンベア接続_2026-08-18)----
   // 夏半球の亜熱帯で「大陸東岸沖の暖流域」から水を取り、その東海岸帯へ注ぐ。
   // 取水は前反復の W に比例(在る水しか運べない)。給水は海岸帯まで —
@@ -1371,7 +1434,7 @@ export async function computePrecipitation(
       windBelt.monthlyRidgeLatSDeg[m] ?? -31,
       windBelt.monthlyPolarFrontLatNDeg[m] ?? 60,
       windBelt.monthlyPolarFrontLatSDeg[m] ?? -60,
-      dyKm, ocean, eastOceanKm, eastOceanSstA, meanItczCenters, crestElev,
+      dyKm, ocean, eastOceanKm, eastOceanSstA, basinAsymG, meanItczCenters, crestElev,
       coldAnomalyCache, diagM, G,
       // 前反復が解いた W と、リッジの経度別の押し上げ量を渡す
       // **前反復が解いた W** を渡す(前線の判定に使う。既定では見られない)。
@@ -1681,6 +1744,7 @@ export async function computePrecipitation(
       ocean,
       eastOceanKm,
       eastOceanSstA,
+      basinAsymG,
       meanItczCenters,
       crestElev,
       coldAnomalyCache,
@@ -2349,6 +2413,8 @@ function convertToPrecip(
   ocean: OceanCurrentResult,
   eastOceanKm: Float32Array,
   eastOceanSstA: Float32Array,
+  /** 沈降の海盆非対称の幾何場(null = 機構 off。事前登録 2026-08-24) */
+  basinAsymG: Float32Array | null,
   meanItczCenters: Float32Array,
   crestElev: Float32Array,
   /**
@@ -2617,6 +2683,17 @@ function convertToPrecip(
       } else {
         const d = aLat < descLo ? descLo - aLat : aLat - descHi;
         descW = Math.exp(-(d * d) / 16);
+      }
+      // 沈降の海盆非対称(2026-08-24、事前登録_沈降の海盆非対称): 帯を
+      // 海盆西部で開く(源泉側)。陸は供給実績ゲート付き(アラビアの守り)
+      if (basinAsymG) {
+        const gB = basinAsymG[i] ?? 0;
+        if (gB > 0) {
+          const supplyGateB = terrain.landMask[i]
+            ? Math.min(1, (supply[i] ?? 0) / K.eastReliefSupplyNorm)
+            : 1;
+          descW *= 1 - K.subsidenceBasinAsymmetry * gB * supplyGateB;
+        }
       }
       // 注(2026-07-31): 沈降の気圧場駆動(高圧下で増強/湿潤低圧下で緩和)は
       // 両方向とも実測否定 — 増強はリッジ帯自体が +6hPa で飽和して一様乾燥化

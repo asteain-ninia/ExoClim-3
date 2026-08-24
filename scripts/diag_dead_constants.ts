@@ -93,6 +93,16 @@ async function main(): Promise<void> {
   console.log(`2° 格子・EBM 短縮。${SPACE.length} 定数のうち ${START}〜${START + COUNT - 1} を見る\n`);
   console.log('定数                                  変更        最大差mm  影響%   判定');
 
+  // **条件付き随伴(2026-08-24)**: 親が既定 0 の機構の「子」定数は、親を
+  // 点けないと 1 ビットも動かない(構造的に当然)。較正は親 > 0 の候補も
+  // 探索するので、子の生存性は**親を点けた局所基準との差**で測るのが正しい。
+  // ここに載せた定数は、随伴の上書きを掛けた基準と比べる(2 走かかる)。
+  // むやみに増やさないこと — 載せるのは「親 0 で不発」が設計である組だけ。
+  const CONDITIONAL_COMPANIONS: Record<string, Record<string, number>> = {
+    // docs/事前登録_沈降の海盆非対称_2026-08-24.md: a=0 で機構ごと不発が設計
+    subsidenceBasinAsymDecayKm: { subsidenceBasinAsymmetry: 0.6 },
+  };
+
   const dead: string[] = [];
   for (let k = START; k < Math.min(SPACE.length, START + COUNT); k++) {
     const entry = SPACE[k];
@@ -101,10 +111,22 @@ async function main(): Promise<void> {
     const cur = K[name] ?? 0;
     // ±20%。0 のものは範囲の 10% 分だけ動かす
     const next = cur === 0 ? lo + 0.1 * (hi - lo) : cur * 1.2 > hi ? cur * 0.8 : cur * 1.2;
+    const companions = CONDITIONAL_COMPANIONS[String(name)];
+    let refP = baseP;
+    const saved: Record<string, number> = {};
+    if (companions) {
+      for (const [cn, cv] of Object.entries(companions)) {
+        saved[cn] = K[cn] ?? 0;
+        K[cn] = cv;
+      }
+      // 随伴を点けた局所基準(子の摂動だけの差を見るため)
+      refP = clone((await runPipeline(P)).precipitation.monthlyPrecipMm);
+    }
     K[name] = next;
     const r = await runPipeline(P);
-    const { maxAbs, frac } = diffAgainst(baseP, r.precipitation.monthlyPrecipMm);
+    const { maxAbs, frac } = diffAgainst(refP, r.precipitation.monthlyPrecipMm);
     K[name] = cur;
+    if (companions) for (const [cn, cv] of Object.entries(saved)) K[cn] = cv;
     // **完全に 0 のときだけ「効いていない」と言う。** 丸めた要約では言わない
     const same = maxAbs === 0;
     if (same) dead.push(String(name));
