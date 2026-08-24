@@ -20,7 +20,7 @@ const iso = (sec: number) => new Date(agoMs(sec)).toISOString();
 /** 生きている追跡 1 件。alive=false なら見張りが死んでいる。 */
 const track = (
   id: string,
-  kind: 'background' | 'monitor' | 'workflow' | 'agent',
+  kind: 'background' | 'monitor' | 'workflow' | 'agent' | 'wakeup' | 'cron',
   startedSec: number,
   extra: Record<string, unknown> = {},
 ) => ({
@@ -57,6 +57,9 @@ const session = (
     unansweredDone,
     lastType: 'assistant',
     stopReason: 'end_turn',
+    /** セッション本体が生きているか(既定は生存)。 */
+    sessionAlive: true as boolean | null,
+    sessionWhy: '生存',
     outstanding,
     armedCount: outstanding.length,
     doneCount: 0,
@@ -65,6 +68,12 @@ const session = (
     taskNewestAgeSec: null as number | null,
     truncated: false,
     flag: null as string | null,
+    // judge が書き込む(試験からも読む)
+    armed: false,
+    working: false,
+    liveTracks: [] as ReturnType<typeof track>[],
+    deadTracks: [] as ReturnType<typeof track>[],
+    midTurn: false,
   };
   Object.defineProperty(row, 'launches', { value: launches, enumerable: false });
   return row;
@@ -364,6 +373,36 @@ describe('judge — AI が起こされるかの判定', () => {
     expect(ss[0]!.flag).toBe('完了通知に未反応');
     expect(v.level).toBe('danger');
     expect(v.headline).toContain('反応していない');
+  });
+
+  it('回帰: 死んだセッションの追跡は armed に数えない(寝落ち見逃しを防ぐ)', () => {
+    // 端末を閉じた後でも会話ログには未解除の追跡が残る。それを armed と
+    // 数えると、誰も起こされないのに「見守られている」と言ってしまう。
+    const cs = clusterProcs(jobProcs('optimize.ts', '--run v35', 900, [1]));
+    const ss = [
+      session('dead', 600, [track('bmon', 'monitor', 800)], [
+        { atMs: agoMs(905), tool: 'Bash', command: 'npx tsx scripts/optimize.ts --run v35' },
+      ]),
+    ];
+    ss[0]!.sessionAlive = false;
+    ss[0]!.sessionWhy = '台帳に無い(終了済み)';
+    attributeJobs(cs, ss);
+    const v = judge(cs, ss, flagsNone);
+    expect(ss[0]!.armed).toBe(false);
+    expect(cs[0]!.watch).toBe('orphan');
+    expect(v.level).toBe('danger');
+    expect(v.reasons.join(' ')).toContain('セッション本体が終了');
+  });
+
+  it('死んだセッションは「作業中」にもしない', () => {
+    const ss = [session('dead', 10, [])];
+    ss[0]!.sessionAlive = false;
+    ss[0]!.stopReason = 'tool_use';
+    const cs = clusterProcs(jobProcs('sweep_lever.ts', '--x', 60, [1]));
+    attributeJobs(cs, ss);
+    const v = judge(cs, ss, flagsNone);
+    expect(ss[0]!.working).toBe(false);
+    expect(v.level).toBe('danger');
   });
 
   it('裁定待ちの札があれば、それが最優先', () => {

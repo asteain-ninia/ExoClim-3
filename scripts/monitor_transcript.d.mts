@@ -5,7 +5,7 @@
 export interface Track {
   id: string;
   /** background = 背景ジョブ / monitor = 見張り / workflow = 作業列 / agent = 下請け */
-  kind: 'background' | 'monitor' | 'workflow' | 'agent';
+  kind: 'background' | 'monitor' | 'workflow' | 'agent' | 'wakeup' | 'cron';
   /** 日本語の説明(画面に出す)。 */
   what: string;
   /** 追跡が始まった時刻。**プロセスの誕生時刻とほぼ一致する。** */
@@ -40,6 +40,8 @@ export interface SessionRead {
   firstTs: number | null;
   /** 文字列は現れたが、その道具の結果ではなかったので捨てた件数(ログの引用)。 */
   quotedArmings?: number;
+  /** 構造化フィールド(toolUseResult)から拾った追跡の件数。 */
+  structuredArmings?: number;
   lastTs: number | null;
   /** AI が自分で書いた最後の時刻(通知の到着は含めない)。 */
   lastAssistantAt: number | null;

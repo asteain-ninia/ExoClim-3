@@ -214,6 +214,7 @@ $ErrorActionPreference='SilentlyContinue'
 [Console]::OutputEncoding=[Text.Encoding]::UTF8
 $inv=[Globalization.CultureInfo]::InvariantCulture
 Get-CimInstance Win32_Process | Where-Object {
+  $_.Name -eq 'claude.exe' -or
   $_.CommandLine -like '*ExoClim-3*' -or
   $_.CommandLine -match '(scripts|tests|out)[\\\\/][\\w.\\-]+\\.(ts|mjs|cjs|js|py|ps1)'
 } | ForEach-Object {
@@ -222,6 +223,7 @@ Get-CimInstance Win32_Process | Where-Object {
     ppid    = $_.ParentProcessId
     name    = $_.Name
     started = $(if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o',$inv) } else { $null })
+    filetime = $(if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc().ToString() } else { $null })
     cpuSec  = [math]::Round((($_.KernelModeTime + $_.UserModeTime) / 1e7), 1)
     memMB   = [math]::Round($_.WorkingSetSize / 1MB, 1)
     cmd     = $_.CommandLine
@@ -319,7 +321,75 @@ export function classifyProc(p, now = Date.now(), ownedBy = scriptIsOurs) {
     elapsedSec: startedMs ? Math.round((now - startedMs) / 1000) : null,
     cpuSec: p.cpuSec,
     memMB: p.memMB,
+    /** Windows の FILETIME。pid の再利用を弾くのに使う。 */
+    filetime: p.filetime ?? null,
   };
+}
+
+/**
+ * **セッションが本当に生きているか。**
+ *
+ * 会話ログ上「未解除の追跡」が残っていても、端末を閉じた後なら誰も起こされない。
+ * これを見分けないと、死んだセッションの置き土産を「追跡あり」と数えて
+ * **寝落ちを見逃す** — この道具の最悪の外し方。
+ *
+ * OS の事実だけで確かめる(2026-08-24 に実測。台帳 1ms + パイプ 6ms):
+ *   1. ~/.claude/sessions/<pid>.json に pid・procStart(FILETIME)・パイプ名が載る
+ *   2. その pid の claude.exe が居て、**起動時刻(FILETIME)も一致する**
+ *      (pid は再利用されるので番号の一致だけでは足りない)
+ *   3. messagingSocketPath の名前付きパイプが実在する = 本体が待ち受けている
+ */
+function collectLiveSessions(procs) {
+  const dir = path.join(os.homedir(), '.claude', 'sessions');
+  let pipes = new Set();
+  try {
+    pipes = new Set(fs.readdirSync('\\\\.\\pipe\\'));
+  } catch {
+    pipes = new Set();
+  }
+  const byPid = new Map();
+  for (const p of procs) if (p.pid != null) byPid.set(Number(p.pid), p);
+
+  // FILETIME の下 1 桁は丸めが入るので切り捨てて比べる。**必ず BigInt**
+  // (FILETIME は 1.3e17。Number では精度が落ち、生存を死亡と誤る)。
+  const trunc10 = (x) => x - (x % 10n);
+
+  const byId = new Map();
+  let files = [];
+  try {
+    files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+  } catch {
+    return { known: false, byId, pipeCount: pipes.size };
+  }
+  for (const f of files) {
+    let j;
+    try {
+      j = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+    } catch {
+      continue;
+    }
+    if (!j || !j.sessionId) continue;
+    const pr = byPid.get(Number(j.pid));
+    const pidOk = !!pr && /^claude\.exe$/i.test(String(pr.name));
+    let startOk = false;
+    if (pidOk && pr.filetime && j.procStart) {
+      try {
+        startOk = trunc10(BigInt(pr.filetime)) === trunc10(BigInt(j.procStart));
+      } catch {
+        startOk = false;
+      }
+    }
+    const pipeName = String(j.messagingSocketPath ?? '').split('\\').pop();
+    const pipeOk = !!pipeName && (pipes.has(pipeName) || pipes.has('LOCAL\\' + pipeName));
+    byId.set(j.sessionId, {
+      pid: j.pid,
+      name: j.name ?? null,
+      cwd: j.cwd ?? null,
+      alive: pidOk && startOk && pipeOk,
+      why: !pidOk ? 'claude.exe が居ない' : !startOk ? 'pid が再利用されている' : !pipeOk ? '待ち受けが無い' : '生存',
+    });
+  }
+  return { known: true, byId, pipeCount: pipes.size };
 }
 
 /**
@@ -436,7 +506,7 @@ const transcripts = createTranscriptWatcher({
  * 札(.output)は表示のためだけに読む — 札は最初の出力が出た時刻に
  * 生まれるので、起動時刻の証拠にはならない(2026-08-24 の誤検知の原因)。
  */
-function collectSessions(procs) {
+function collectSessions(procs, live) {
   const tbase = tasksBase();
   const { sessions } = transcripts.read();
   const out = [];
@@ -482,10 +552,16 @@ function collectSessions(procs) {
           pollSec && t.lastEventMs ? Math.max(0, Math.round((t.lastEventMs + pollSec * 1000 - nowMs()) / 1000)) : null,
       };
     });
+    const reg = live && live.byId ? live.byId.get(r.id) : null;
     const row = {
       id: r.id,
       short: r.short,
       slug: r.slug ?? null,
+      /** セッション本体が生きているか。null = 台帳を読めない。 */
+      sessionAlive: reg ? reg.alive : live && live.known ? false : null,
+      sessionWhy: reg ? reg.why : live && live.known ? '台帳に無い(終了済み)' : '台帳を読めない',
+      sessionName: reg ? reg.name : null,
+      pid: reg ? reg.pid : null,
       transcriptMB: r.sizeMB ?? null,
       truncated: !!r.truncated,
       /** 会話ログを何時間ぶん読めているか。短いと古い追跡を取りこぼす。 */
@@ -939,8 +1015,10 @@ export function judge(clusters, sessions, flags, results = []) {
 
   // セッションが armed か。死んだ見張り(対応するプロセスが居ない)は数えない。
   for (const s of sessions) {
-    s.liveTracks = (s.outstanding ?? []).filter((t) => t.alive !== false);
-    s.deadTracks = (s.outstanding ?? []).filter((t) => t.alive === false);
+    // 本体が死んでいれば、未解除の追跡は**置き土産**であって誰も起こさない。
+    const bodyDead = s.sessionAlive === false;
+    s.liveTracks = bodyDead ? [] : (s.outstanding ?? []).filter((t) => t.alive !== false);
+    s.deadTracks = bodyDead ? (s.outstanding ?? []) : (s.outstanding ?? []).filter((t) => t.alive === false);
     s.armed = s.liveTracks.length > 0;
     /**
      * **ターンの途中か。**
@@ -953,7 +1031,8 @@ export function judge(clusters, sessions, flags, results = []) {
      * 無ければ、それが本物の投げっぱなし(前任 2 名の死因)。
      */
     s.midTurn = s.stopReason === 'tool_use' && s.lastActAgeSec != null && s.lastActAgeSec < CFG.midTurnSec;
-    s.working = s.midTurn || (s.lastActAgeSec != null && s.lastActAgeSec < CFG.aiLiveSec);
+    s.working =
+      s.sessionAlive !== false && (s.midTurn || (s.lastActAgeSec != null && s.lastActAgeSec < CFG.aiLiveSec));
   }
   const armedSessions = sessions.filter((s) => s.armed);
   const workingSessions = sessions.filter((s) => s.working);
@@ -1122,11 +1201,9 @@ export function judge(clusters, sessions, flags, results = []) {
       headline = `計算中 ${jobs.length} 件 — ただし二重起動 ${dup.length} 件`;
     }
   }
-  const dead = sessions.filter((s) => (s.deadTracks ?? []).length);
-  for (const s of dead) {
-    reasons.push(
-      `${s.short}: 追跡 ${s.deadTracks.length} 件に対応するプロセスが居ない(見張りが死んでいる疑い)。`,
-    );
+  for (const s of sessions.filter((x) => (x.deadTracks ?? []).length)) {
+    const why = s.sessionAlive === false ? `セッション本体が終了(${s.sessionWhy})` : '見張りに対応するプロセスが居ない';
+    reasons.push(`${s.short}: 数えない追跡 ${s.deadTracks.length} 件 — ${why}。`);
     if (level === 'ok') level = 'warn';
   }
   if (level !== 'danger' && stalled.length) {
@@ -1161,7 +1238,8 @@ async function buildState() {
   const t0 = nowMs();
   const [procs, git] = await Promise.all([getProcs(), getGit()]);
   const clusters = clusterProcs(procs);
-  const sessions = collectSessions(procs);
+  const live = collectLiveSessions(procs);
+  const sessions = collectSessions(procs, live);
   const flags = collectFlags();
   attributeJobs(clusters, sessions);
   const runs = collectRuns();
@@ -1195,7 +1273,13 @@ async function buildState() {
           cmd: p.cmd.slice(0, 160),
         })),
     },
-    ai: { sessions, transcriptsDir: transcriptsDir().replace(/\\/g, '/'), tasksBase: tasksBase().replace(/\\/g, '/') },
+    ai: {
+      sessions,
+      liveKnown: live.known,
+      livePipes: live.pipeCount,
+      transcriptsDir: transcriptsDir().replace(/\\/g, '/'),
+      tasksBase: tasksBase().replace(/\\/g, '/'),
+    },
     runs,
     validate,
     params,

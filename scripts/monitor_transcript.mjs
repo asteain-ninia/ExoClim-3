@@ -65,6 +65,46 @@ const ARMINGS = [
   },
 ];
 
+/**
+ * **構造化された追跡 ID。** ハーネスは tool_result の行に `toolUseResult` を
+ * 付けており、そこに追跡 ID がそのまま入っている。文面(英語)に依存しない
+ * うえ、ハーネスしか書かないので引用と取り違えようがない。こちらが正本。
+ *
+ * 2026-08-24 に全会話ログを走査して確かめた形と、取りこぼしの実例:
+ *   backgroundTaskId … Bash / PowerShell の背景実行。**前景が時間切れで背景へ
+ *     降格した場合もここに来る**が、そのとき run_in_background は undefined。
+ *     文面 + 道具の入力で判定していた旧実装は、この 37 件を取りこぼしていた
+ *     (取りこぼす = armed でないと誤る = 偽の「投げっぱなし」)。
+ *   taskId + taskType='local_workflow' … Workflow
+ *   taskId + persistent               … Monitor(persistent なら発火しても解けない)
+ *   agentId / resumedAgentId          … Agent(下請け)
+ *   scheduledFor                      … ScheduleWakeup(時刻で起こされる)
+ *   id + recurring                    … Cron。**armed には数えない**(発火の裏が取れない)
+ *   task_id + task_type               … TaskStop = 解除
+ */
+function structuredArming(R) {
+  if (!R || typeof R !== 'object' || Array.isArray(R)) return null;
+  if (typeof R.backgroundTaskId === 'string')
+    return {
+      id: R.backgroundTaskId,
+      kind: 'background',
+      what: R.timedOutAfterMs ? '背景ジョブ(前景が時間切れで降格)' : '背景ジョブ',
+    };
+  if (typeof R.taskId === 'string') {
+    if (R.taskType === 'local_workflow') return { id: R.taskId, kind: 'workflow', what: '作業列' };
+    if (R.persistent === true) return { id: R.taskId, kind: 'monitor', what: '見張り(発火のたびに起こされる)' };
+    if (R.persistent === false) return { id: R.taskId, kind: 'monitor', what: '見張り(時間制限つき)' };
+    return { id: R.taskId, kind: 'monitor', what: '見張り' };
+  }
+  if (typeof R.agentId === 'string') return { id: R.agentId, kind: 'agent', what: '下請けの作業者' };
+  if (typeof R.resumedAgentId === 'string') return { id: R.resumedAgentId, kind: 'agent', what: '下請けの作業者(再開)' };
+  if (typeof R.scheduledFor === 'number')
+    return { id: 'wakeup@' + R.scheduledFor, kind: 'wakeup', what: '時刻で起こす', until: R.scheduledFor };
+  if (typeof R.id === 'string' && R.recurring !== undefined)
+    return { id: R.id, kind: 'cron', what: '定時実行(起こされる裏付けが無いので数えない)' };
+  return null;
+}
+
 const RE = {
   taskId: /<task-id>([A-Za-z0-9_-]+)<\/task-id>/,
   status: /<status>(\w+)<\/status>/,
@@ -92,6 +132,10 @@ function notificationText(o) {
   if (o.type === 'queue-operation') {
     const c = String(o.content ?? '');
     return c.includes('<task-notification>') ? c : null;
+  }
+  if (o.type === 'attachment' && o.attachment && typeof o.attachment.prompt === 'string') {
+    // 通知はここにも配送される。ここを見ないと解除を取りこぼす(2026-08-24 実測)。
+    return o.attachment.prompt.includes('<task-notification>') ? o.attachment.prompt : null;
   }
   if (o.type === 'user' && o.message) {
     const c = o.message.content;
@@ -246,7 +290,25 @@ class SessionReader {
       }
     }
 
-    // 2. 追跡の開始(tool_result の中だけ・行頭に錨・道具の種類も照合)
+    // 2-a. 追跡の開始 — **構造化フィールドが正本**。
+    const R = o.toolUseResult;
+    const st = structuredArming(R);
+    if (st) {
+      // 直前の tool_use から説明とコマンドを引く(この行に tool_use_id がある)
+      let tu = null;
+      if (o.type === 'user' && o.message && Array.isArray(o.message.content)) {
+        for (const b of o.message.content) if (b && b.type === 'tool_result') tu = this.toolUses.get(b.tool_use_id) ?? tu;
+      }
+      this.#arm(st.id, st.kind, ts, tu, st.what, st.until);
+      this.structuredArmings = (this.structuredArmings ?? 0) + 1;
+    }
+    // TaskStop は即時解除
+    if (R && typeof R === 'object' && typeof R.task_id === 'string' && R.task_type) {
+      this.done.set(R.task_id, { atMs: ts, status: 'stopped', summary: String(R.message ?? 'TaskStop で停止').slice(0, 200) });
+      this.armed.delete(R.task_id);
+    }
+
+    // 2-b. 文面での照合(構造化フィールドが無い版のハーネス向けの控え)
     for (const r of toolResultTexts(o)) {
       const head = String(r.text).trimStart();
       const tu = r.id ? this.toolUses.get(r.id) : null;
@@ -272,9 +334,8 @@ class SessionReader {
     // 3. 通知(終了 or 見張りの発火)
     const note = notificationText(o);
     if (note) {
-      const idm = RE.taskId.exec(note);
-      if (idm) {
-        const tid = idm[1];
+      const ids = [...note.matchAll(/<task-id>([A-Za-z0-9_-]+)<\/task-id>/g)].map((m) => m[1]);
+      for (const tid of ids) {
         const stm = RE.status.exec(note);
         const evm = RE.monitorEvent.exec(note);
         if (stm) {
@@ -312,16 +373,18 @@ class SessionReader {
     }
   }
 
-  #arm(taskId, kind, atMs, tu, what) {
+  #arm(taskId, kind, atMs, tu, what, until) {
     if (this.done.has(taskId)) return; // すでに終わったものを蘇らせない
+    const prev = this.armed.get(taskId);
     this.armed.set(taskId, {
       kind,
       what,
-      atMs,
-      label: tu ? tu.description : '',
-      command: tu ? tu.command : '',
-      eventCount: 0,
-      lastEventMs: null,
+      atMs: prev ? prev.atMs : atMs,
+      until: until ?? null,
+      label: (tu && tu.description) || (prev && prev.label) || '',
+      command: (tu && tu.command) || (prev && prev.command) || '',
+      eventCount: prev ? prev.eventCount : 0,
+      lastEventMs: prev ? prev.lastEventMs : null,
     });
   }
 

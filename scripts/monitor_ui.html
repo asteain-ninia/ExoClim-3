@@ -458,6 +458,8 @@
 
       /** セッションがいまどういう状態か。 */
       function sessionPill(s) {
+        if (s.sessionAlive === false)
+          return el('span', { class: 'pill dim', title: s.sessionWhy || '' }, '終了したセッション');
         if (s.stopReason === 'tool_use' && s.lastActAgeSec != null && s.lastActAgeSec < 900)
           return el('span', { class: 'pill ok', title: '道具の返事を待っている(ターンの途中)' }, '作業中');
         if (s.armedCount) return el('span', { class: 'pill info', title: '追跡が生きている' }, '待機(起こされる)');
@@ -660,7 +662,8 @@
                   el(
                     'div',
                     { class: 'dim', style: 'font-size:12px' },
-                    `生きている追跡 ${s.armedCount} 件 / 完了 ${s.doneCount} 件 / 札 ${s.taskCount} 枚` +
+                    (s.pid ? `pid ${s.pid}${s.sessionName ? '(' + s.sessionName + ')' : ''} / ` : '') +
+                      `追跡 ${s.armedCount} 件 / 完了 ${s.doneCount} 件 / 札 ${s.taskCount} 枚` +
                       ` / 会話 ${s.transcriptMB ?? '—'}MB${s.truncated ? '(末尾のみ)' : ''}` +
                       (s.lastUserAgeSec != null ? ` / 利用者発話 ${dur(s.lastUserAgeSec)}前` : '') +
                       (s.quotedArmings ? ` / 引用として除外 ${s.quotedArmings} 件` : ''),
@@ -682,7 +685,13 @@
                           ),
                         ),
                       )
-                    : el('div', { class: 'dim', style: 'font-size:11.5px;margin-top:4px' }, '生きている追跡は無い(いま何かが終わっても、このセッションは起きない)'),
+                    : el(
+                        'div',
+                        { class: 'dim', style: 'font-size:11.5px;margin-top:4px' },
+                        s.sessionAlive === false
+                          ? `終了したセッション(${s.sessionWhy})。残っている追跡は置き土産で、誰も起こさない`
+                          : '生きている追跡は無い(いま何かが終わっても、このセッションは起きない)',
+                      ),
                   s.lastText ? el('div', { class: 'quote', style: 'margin-top:6px' }, s.lastText) : null,
                 ),
               ),

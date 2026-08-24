@@ -33,6 +33,8 @@ export interface Proc {
   elapsedSec: number | null;
   cpuSec: number;
   memMB: number;
+  /** Windows の FILETIME(pid の再利用を弾く)。 */
+  filetime?: string | null;
 }
 
 /** ラッパの多段を 1 件に畳んだ「ジョブ」。 */
@@ -84,7 +86,7 @@ export interface Cluster {
  */
 export interface Track {
   id: string;
-  kind: 'background' | 'monitor' | 'workflow' | 'agent';
+  kind: 'background' | 'monitor' | 'workflow' | 'agent' | 'wakeup' | 'cron';
   what: string;
   atMs: number | null;
   ageSec: number | null;
@@ -126,6 +128,14 @@ export interface Session {
   taskCount?: number;
   taskNewestMs?: number | null;
   taskNewestAgeSec?: number | null;
+  /**
+   * **セッション本体が生きているか。** 死んでいれば、会話ログに残る
+   * 未解除の追跡は置き土産であって誰も起こさない。null = 台帳を読めない。
+   */
+  sessionAlive?: boolean | null;
+  sessionWhy?: string;
+  sessionName?: string | null;
+  pid?: number | null;
   /** 会話ログを末尾しか読めていない。 */
   truncated?: boolean;
   /** 会話ログを何時間ぶん読めているか。 */
