@@ -351,11 +351,16 @@
                       ),
                       c.args ? el('div', { class: 'mono dim', style: 'word-break:break-all' }, c.args) : null,
                       el('div', { class: 'dim', style: 'font-size:12px' }, c.watchWhy || ''),
+                      !c.owner && c.ownerHow
+                        ? el('div', { class: 'dim', style: 'font-size:11.5px' }, `起動元: ${c.ownerHow}`)
+                        : null,
                       c.owner
                         ? el(
                             'div',
                             { class: 'dim', style: 'font-size:11.5px' },
-                            `起動: ${c.owner} が ${c.ownerTool}` + (c.ownerLaunchMs ? ` で ${jst(new Date(c.ownerLaunchMs).toISOString())}` : ''),
+                            `起動: ${c.owner} が ${c.ownerTool}` +
+                              (c.ownerLaunchMs ? ` で ${jst(new Date(c.ownerLaunchMs).toISOString())}` : '') +
+                              (c.ownerHow ? `(根拠: ${c.ownerHow})` : ''),
                           )
                         : null,
                       el('div', { class: 'dim' }, `経過 ${dur(c.elapsedSec)} / CPU ${num(c.cpuSec, 0)}秒 / ${num(c.memMB, 0)}MB / pid ${c.pids.join(',')}`),
@@ -379,6 +384,7 @@
               tile('計算プロセス', S.compute.procCount, work.length ? 'ジョブ ' + work.length + ' 件' : '', work.length > 0 ? 'ok' : ''),
               tile('二重起動', work.filter((c) => c.duplicate).length, '同じ出力を取り合う', work.some((c) => c.duplicate) ? 'bad' : 'ok'),
               tile('投げっぱなし', work.filter((c) => c.watch === 'orphan').length, '完了で呼び戻されない', work.some((c) => c.watch === 'orphan') ? 'bad' : 'ok'),
+              tile('前景の計算', work.filter((c) => c.watch === 'foreground').length, 'AI が結果を待っている'),
               tile(
                 '生きている追跡',
                 S.ai.sessions.reduce((a, x) => a + (x.outstanding || []).filter((t) => t.alive !== false).length, 0),
@@ -450,8 +456,19 @@
         $('#tab-概要').replaceChildren(...cards);
       }
 
+      /** セッションがいまどういう状態か。 */
+      function sessionPill(s) {
+        if (s.stopReason === 'tool_use' && s.lastActAgeSec != null && s.lastActAgeSec < 900)
+          return el('span', { class: 'pill ok', title: '道具の返事を待っている(ターンの途中)' }, '作業中');
+        if (s.armedCount) return el('span', { class: 'pill info', title: '追跡が生きている' }, '待機(起こされる)');
+        if (s.stopReason === 'end_turn') return el('span', { class: 'pill dim' }, '停止(end_turn)');
+        return el('span', { class: 'pill dim' }, s.stopReason || s.lastType || '—');
+      }
+
       /** ジョブが見守られているかの札。 */
       function watchPill(c) {
+        if (c.watch === 'foreground')
+          return el('span', { class: 'pill ok', title: c.watchWhy || '' }, '前景 ' + (c.watchBy || '') + ' が待っている');
         if (c.watch === 'ok') return el('span', { class: 'pill ok', title: c.watchWhy || '' }, '見守り ' + (c.watchBy || ''));
         if (c.watch === 'orphan') return el('span', { class: 'pill bad', title: c.watchWhy || '' }, '投げっぱなし — 終わっても誰も気づかない');
         if (c.watch === 'unknown') return el('span', { class: 'pill warn', title: c.watchWhy || '' }, '判定不能(起動元が不明)');
@@ -636,8 +653,8 @@
                     { class: 'row' },
                     el('b', { class: 'mono' }, s.short),
                     s.slug ? el('span', { class: 'pill dim' }, s.slug) : null,
-                    el('span', { class: 'pill ' + (s.lastAgeSec < 180 ? 'ok' : 'dim') }, dur(s.lastAgeSec) + '前'),
-                    el('span', { class: 'pill' }, s.stopReason || s.lastType || '—'),
+                    el('span', { class: 'pill ' + (s.lastActAgeSec != null && s.lastActAgeSec < 180 ? 'ok' : 'dim') }, dur(s.lastActAgeSec) + '前'),
+                    sessionPill(s),
                     s.flag ? el('span', { class: 'pill bad' }, s.flag) : null,
                   ),
                   el(

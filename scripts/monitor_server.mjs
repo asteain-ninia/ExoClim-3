@@ -68,6 +68,7 @@ const CFG = {
    */
   procKinds: [
     { re: /^monitor_server\.mjs$/i, kind: 'self' },
+    { re: /\.test\.[tj]s$/i, kind: 'テスト' },
     { re: /^optimize/i, kind: '較正' },
     { re: /^sweep_/i, kind: '掃引' },
     { re: /^diag_/i, kind: '診断' },
@@ -79,16 +80,21 @@ const CFG = {
   ],
   /** スクリプト名が取れないときに、コマンド行から拾う種別。 */
   procKindsByCmd: [
-    { re: /[\\/]vitest[\\/]|vitest\.mjs/i, kind: 'テスト' },
-    { re: /[\\/]vite[\\/]bin[\\/]|vite\.js/i, kind: '開発サーバ' },
-    { re: /playwright/i, kind: 'E2E' },
-    { re: /tsc\.js|typescript[\\/]bin/i, kind: '型検査' },
+    { re: /[\\/]vitest[\\/]|vitest\.mjs/i, kind: 'テスト', keyword: 'vitest' },
+    { re: /[\\/]vite[\\/]bin[\\/]|vite\.js/i, kind: '開発サーバ', keyword: 'vite' },
+    { re: /playwright/i, kind: 'E2E', keyword: 'playwright' },
+    { re: /tsc\.js|typescript[\\/]bin/i, kind: '型検査', keyword: 'tsc' },
   ],
 
   /** 追跡タスクが「そのジョブのもの」とみなす時間の余裕(秒)。 */
   trackSlackSec: 180,
   /** AI が黙っていても「作業中」とみなす秒数。 */
   aiLiveSec: 180,
+  /**
+   * 道具の返事を待っている(stop_reason = tool_use)まま、どこまで
+   * 「ターンの途中」とみなすか。前景の道具呼び出しは長いもので 10 分走る。
+   */
+  midTurnSec: 900,
   /** 直近セッションとして拾う範囲(時間)。 */
   sessionWindowH: 48,
 };
@@ -269,6 +275,8 @@ export function classifyProc(p, now = Date.now(), ownedBy = scriptIsOurs) {
   const ours = marked || (last ? ownedBy(last[1], script) : false);
 
   let kind = null;
+  /** スクリプト名が無いときに、持ち主の照合へ使う語(vitest など)。 */
+  let kindKeyword = null;
   if (script) {
     for (const k of CFG.procKinds)
       if (k.re.test(script)) {
@@ -280,6 +288,7 @@ export function classifyProc(p, now = Date.now(), ownedBy = scriptIsOurs) {
     for (const k of CFG.procKindsByCmd)
       if (k.re.test(cmd)) {
         kind = k.kind;
+        kindKeyword = k.keyword ?? null;
         break;
       }
   }
@@ -300,6 +309,7 @@ export function classifyProc(p, now = Date.now(), ownedBy = scriptIsOurs) {
     /** 計算ジョブとして数えるか。ラッパや素性不明は数えない。 */
     isJob: ours && CFG.procNames.includes(name.toLowerCase()) && kind != null && kind !== 'self',
     isSelf: kind === 'self',
+    kindKeyword,
     /** このリポジトリのものと判断できたか。false = 他プロジェクトの同名スクリプト等。 */
     ours,
     script,
@@ -331,6 +341,7 @@ export function clusterProcs(procs) {
         id: `c${clusters.length}`,
         key,
         kind: p.kind,
+        kindKeyword: p.kindKeyword ?? null,
         script: p.script,
         args: p.args,
         startedMs: p.startedMs,
@@ -477,6 +488,8 @@ function collectSessions(procs) {
       slug: r.slug ?? null,
       transcriptMB: r.sizeMB ?? null,
       truncated: !!r.truncated,
+      /** 会話ログを何時間ぶん読めているか。短いと古い追跡を取りこぼす。 */
+      coverageH: r.firstTs && r.lastTs ? Math.round(((r.lastTs - r.firstTs) / 3600e3) * 10) / 10 : null,
       quotedArmings: r.quotedArmings ?? 0,
       lastAt: r.lastTs,
       lastAgeSec: ageSec(r.lastTs),
@@ -857,23 +870,47 @@ export function attributeJobs(clusters, sessions) {
     c.owner = null;
     c.ownerLaunchMs = null;
     c.ownerTool = null;
+    c.ownerHow = null;
     if (c.parent) continue;
+    // スクリプト名が取れるならそれで照合する(いちばん強い証拠)。
     const needle = norm(`${c.script ?? ''} ${c.args ?? ''}`);
-    if (!needle) continue;
+    /**
+     * スクリプト名を持たない道具(vitest・playwright・tsc)は、
+     * **道具の名前 + 起動時刻の近さ**の 2 条件で照合する。
+     * 時刻だけで結びつけてはいけない — それが 2026-08-24 の誤報の元。
+     */
+    const fallback = needle ? '' : norm(c.kindKeyword ?? '');
+    if (!needle && !fallback) continue;
     let best = null;
+    const sessionsHit = new Set();
     for (const s of sessions) {
       for (const l of s.launches ?? []) {
-        if (!norm(l.command).includes(needle)) continue;
+        const cmd = norm(l.command);
+        if (!cmd.includes(needle || fallback)) continue;
         // 起動はプロセスの誕生より前(わずかな前後は許す)
         if (c.startedMs && l.atMs && l.atMs > c.startedMs + CFG.trackSlackSec * 1000) continue;
+        // 道具名だけの照合は、起動が近いことも要る
+        if (!needle && c.startedMs && l.atMs && c.startedMs - l.atMs > CFG.trackSlackSec * 1000) continue;
+        sessionsHit.add(s.short);
         if (!best || (l.atMs ?? 0) > (best.l.atMs ?? 0)) best = { s, l };
       }
+    }
+    /**
+     * 弱い証拠(道具の名前だけ)で候補が複数セッションにまたがるなら、
+     * **帰属を諦める**。2 つのセッションが同じ `npx vitest` を打っていたら
+     * どちらのプロセスかは時刻では決まらない。誤って持ち主を決めると、
+     * その持ち主の状態で「投げっぱなし」まで断じてしまう。
+     */
+    if (best && !needle && sessionsHit.size > 1) {
+      c.ownerHow = `候補が ${sessionsHit.size} セッションにまたがるので特定しない`;
+      continue;
     }
     if (best) {
       c.owner = best.s.short;
       c.ownerId = best.s.id;
       c.ownerLaunchMs = best.l.atMs;
       c.ownerTool = best.l.tool;
+      c.ownerHow = needle ? 'コマンドの原文が一致' : '道具の名前と起動時刻が一致';
     }
   }
 }
@@ -905,8 +942,21 @@ export function judge(clusters, sessions, flags, results = []) {
     s.liveTracks = (s.outstanding ?? []).filter((t) => t.alive !== false);
     s.deadTracks = (s.outstanding ?? []).filter((t) => t.alive === false);
     s.armed = s.liveTracks.length > 0;
+    /**
+     * **ターンの途中か。**
+     * stop_reason が tool_use = 道具の返事を待って止まっている。
+     * このとき走っている計算は**前景実行**であり、AI は結果を直接受け取る。
+     * 追跡タスクが無くても投げっぱなしではない — むしろ真逆で、
+     * AI はその計算に釘付けになっている(2026-08-24 に誤判定した)。
+     *
+     * end_turn ならターンは終わっている。そこで計算が走っていて追跡が
+     * 無ければ、それが本物の投げっぱなし(前任 2 名の死因)。
+     */
+    s.midTurn = s.stopReason === 'tool_use' && s.lastActAgeSec != null && s.lastActAgeSec < CFG.midTurnSec;
+    s.working = s.midTurn || (s.lastActAgeSec != null && s.lastActAgeSec < CFG.aiLiveSec);
   }
   const armedSessions = sessions.filter((s) => s.armed);
+  const workingSessions = sessions.filter((s) => s.working);
 
   for (const c of jobs) {
     const owner = c.owner ? sessions.find((s) => s.short === c.owner) : null;
@@ -916,16 +966,23 @@ export function judge(clusters, sessions, flags, results = []) {
       c.watchBy = owner.short;
       c.watchWhy = `${owner.short} が${t.what ?? '追跡'}「${t.label || t.id}」で待っている`;
       c.watchTask = t.id;
+    } else if (owner && owner.midTurn) {
+      // 前景実行。AI は道具の返事を待って釘付けになっている。
+      c.watch = 'foreground';
+      c.watchBy = owner.short;
+      c.watchWhy = `${owner.short} が前景で回している(結果を直接受け取る)`;
+      c.watchTask = null;
     } else if (owner && !owner.armed) {
       c.watch = 'orphan';
       c.watchBy = owner.short;
-      c.watchWhy = `起動した ${owner.short} に生きている追跡が 1 つも無い`;
+      c.watchWhy = `起動した ${owner.short} はターンを終えていて、生きている追跡も無い`;
       c.watchTask = null;
-    } else if (armedSessions.length) {
-      // 誰が起動したか分からないが、armed なセッションは居る。狼少年にしない。
+    } else if (armedSessions.length || workingSessions.length) {
+      // 誰が起動したか分からないが、動いているセッションは居る。狼少年にしない。
+      const who = [...new Set([...armedSessions, ...workingSessions].map((s) => s.short))];
       c.watch = 'unknown';
       c.watchBy = null;
-      c.watchWhy = `起動元を特定できない(armed なセッションは ${armedSessions.map((s) => s.short).join(', ')})`;
+      c.watchWhy = `起動元を特定できない(動いているセッション: ${who.join(', ')})`;
       c.watchTask = null;
     } else {
       c.watch = 'orphan';
@@ -950,6 +1007,8 @@ export function judge(clusters, sessions, flags, results = []) {
   for (const s of sessions) s.flag = null;
   const stalled = sessions.filter(
     (s) =>
+      // ターンの途中(道具の返事待ち)なら、反応する順番がまだ来ていない
+      !s.midTurn &&
       s.lastActAgeSec != null &&
       s.lastActAgeSec < 12 * 3600 &&
       s.lastActAgeSec > CFG.aiLiveSec &&
@@ -968,6 +1027,7 @@ export function judge(clusters, sessions, flags, results = []) {
   if (newestResult && !jobs.length) {
     for (const s of sessions) {
       if (!s.armed) continue;
+      if (s.working) continue; // いま動いているなら、じきに拾う
       if (s.lastActAt && newestResult.atMs > s.lastActAt + 60_000) {
         const next = Math.min(
           ...s.liveTracks.map((t) => (t.nextCheckSec == null ? Infinity : t.nextCheckSec)),
@@ -997,15 +1057,28 @@ export function judge(clusters, sessions, flags, results = []) {
     headline = `計算中 ${jobs.length} 件 — うち ${orphans.length} 件が投げっぱなし`;
     for (const c of orphans) reasons.push(`投げっぱなし: ${c.script ?? c.kind}(${c.watchWhy})`);
   } else if (jobs.length && unknowns.length === jobs.length) {
-    level = 'warn';
-    headline = `計算中 ${jobs.length} 件 — 起動元を特定できない`;
-    reasons.push('コマンドの原文が会話ログの読み取り範囲に無い。利用者が端末で直に起動した可能性もある。');
-    reasons.push(`armed なセッション: ${armedSessions.map((s) => s.short).join(', ') || 'なし'}`);
+    // 起動元は特定できないが、動いているセッションが居るなら異常ではない。
+    const alive = [...new Set([...workingSessions, ...armedSessions].map((s) => s.short))];
+    level = alive.length ? 'ok' : 'warn';
+    headline = alive.length
+      ? `AI が作業中 — 計算 ${jobs.length} 件(起動元までは特定できず)`
+      : `計算中 ${jobs.length} 件 — 起動元を特定できない`;
+    for (const c of unknowns) reasons.push(`${c.script ?? c.kind}: ${c.ownerHow ?? '起動コマンドが読み取り範囲に無い'}`);
+    reasons.push(alive.length ? `動いているセッション: ${alive.join(', ')}` : '動いているセッションが無い。利用者が端末で直に起動した可能性もある。');
   } else if (jobs.length) {
     level = 'ok';
-    const ok = jobs.filter((c) => c.watch === 'ok');
-    headline = `計算中 ${jobs.length} 件 — 見守られている(完了・進捗で AI が起こされる)`;
-    for (const c of ok) reasons.push(`${c.script ?? c.kind}: ${c.watchWhy}`);
+    const fg = jobs.filter((c) => c.watch === 'foreground');
+    const watched = jobs.filter((c) => c.watch === 'ok');
+    if (fg.length && !watched.length) {
+      // 前景だけ = AI がその計算に釘付けになっている。いちばん健全な状態。
+      const s = fg[0].watchBy;
+      headline = `AI が作業中 — 前景の計算 ${fg.length} 件(${fg.map((c) => c.script ?? c.kind).join(', ')})`;
+      reasons.push(`${s} は道具の返事を待っている。結果は直接そのターンへ返る。`);
+    } else {
+      headline = `計算中 ${jobs.length} 件 — 見守られている(完了・進捗で AI が起こされる)`;
+      for (const c of watched) reasons.push(`${c.script ?? c.kind}: ${c.watchWhy}`);
+      for (const c of fg) reasons.push(`${c.script ?? c.kind}: ${c.watchWhy}`);
+    }
     if (unknowns.length) reasons.push(`ただし ${unknowns.length} 件は起動元を特定できていない。`);
   } else if (unseen.length) {
     const u = unseen[0];
@@ -1061,9 +1134,14 @@ export function judge(clusters, sessions, flags, results = []) {
     reasons.push(`完了通知に未反応のセッション ${stalled.length} 本(${stalled.map((s) => s.short).join(', ')})。`);
   }
   if (flags.guardCount > 0) reasons.push(`Stop フックの差し戻し ${flags.guardCount} 回(利用者の発話で 0 に戻る)。`);
-  const truncated = sessions.filter((s) => s.truncated && s.armedCount === 0 && s.lastAgeSec < 3600);
-  if (truncated.length) {
-    reasons.push(`会話ログを末尾だけしか読めていないセッションが ${truncated.length} 本(古い追跡を取りこぼす可能性)。`);
+  if (orphans.length || unknowns.length) {
+    // 読めている範囲が短いときだけ言う。90 時間ぶん読めているなら黙る。
+    const shallow = sessions.filter((s) => s.truncated && s.coverageH != null && s.coverageH < 24);
+    if (shallow.length) {
+      reasons.push(
+        `会話ログを ${shallow.map((s) => `${s.short}:${s.coverageH}時間`).join(', ')} ぶんしか読めていない(それより古い起動は見えない)。`,
+      );
+    }
   }
 
   return { level, headline, reasons };

@@ -258,8 +258,49 @@ describe('judge — AI が起こされるかの判定', () => {
     attributeJobs(cs, ss);
     const v = judge(cs, ss, flagsNone);
     expect(cs[0]!.watch).toBe('unknown');
-    expect(v.level).toBe('warn');
+    expect(v.level).not.toBe('danger');
     expect(v.headline).not.toContain('投げっぱなし');
+  });
+
+  it('回帰: 前景実行を投げっぱなしと呼ばない(ターンの途中)', () => {
+    // 2026-08-24 の 2 度目の誤報。AI が道具の返事を待っている最中の計算を
+    // 「投げっぱなし」と呼んだ。前景実行は AI が結果を直接受け取る。
+    const cs = clusterProcs(jobProcs('holdout.test.ts', 'tests/unit', 5, [1]));
+    const ss = [
+      session('6051ffad', 8, [], [
+        { atMs: agoMs(9), tool: 'Bash', command: 'npx vitest run scripts/holdout.test.ts tests/unit' },
+      ]),
+    ];
+    ss[0]!.stopReason = 'tool_use'; // ターンの途中
+    attributeJobs(cs, ss);
+    const v = judge(cs, ss, flagsNone);
+    expect(cs[0]!.watch).toBe('foreground');
+    expect(v.level).toBe('ok');
+    expect(v.headline).toContain('作業中');
+  });
+
+  it('ターンを終えている持ち主の計算は投げっぱなし(end_turn)', () => {
+    const cs = clusterProcs(jobProcs('sweep_lever.ts', '--x', 600, [1]));
+    const ss = [
+      session('aaa', 30, [], [{ atMs: agoMs(605), tool: 'Bash', command: 'npx tsx scripts/sweep_lever.ts --x' }]),
+    ];
+    ss[0]!.stopReason = 'end_turn'; // 直近でもターンは終わっている
+    attributeJobs(cs, ss);
+    const v = judge(cs, ss, flagsNone);
+    expect(cs[0]!.watch).toBe('orphan');
+    expect(v.level).toBe('danger');
+  });
+
+  it('ターンの途中なら「完了通知に未反応」と言わない', () => {
+    const ss = [
+      session('aaa', 400, [], [], [
+        { atMs: agoMs(300), ageSec: 300, status: 'completed', summary: 'Background command "検証" completed' },
+      ]),
+    ];
+    ss[0]!.stopReason = 'tool_use';
+    const v = judge([], ss, flagsNone);
+    expect(ss[0]!.flag).toBeNull();
+    expect(v.level).not.toBe('danger');
   });
 
   it('持ち主が特定できて、その持ち主に追跡が無ければ投げっぱなし', () => {

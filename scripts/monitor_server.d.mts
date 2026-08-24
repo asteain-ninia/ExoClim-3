@@ -20,6 +20,7 @@ export interface Proc {
   ppid: number;
   name: string;
   kind: string;
+  kindKeyword: string | null;
   /** 計算ジョブとして数えるか(ラッパ・シェル・モニタ自身は false)。 */
   isJob: boolean;
   isSelf: boolean;
@@ -41,6 +42,8 @@ export interface Cluster {
   /** 同じコマンドかの照合用。二重起動では重複する。 */
   key: string;
   kind: string;
+  /** スクリプト名が無いときに帰属の照合へ使う語(vitest など)。 */
+  kindKeyword?: string | null;
   script: string | null;
   args: string;
   startedMs: number | null;
@@ -59,13 +62,15 @@ export interface Cluster {
   ownerId?: string | null;
   ownerLaunchMs?: number | null;
   ownerTool?: string | null;
+  /** 帰属の根拠(原文一致 / 道具名と時刻 / 特定できなかった理由)。 */
+  ownerHow?: string | null;
   /**
    * 見守られているか。
    *   ok      = 持ち主に生きている追跡がある(完了・進捗で AI が起こされる)
    *   orphan  = 誰も起こされない(投げっぱなし)
    *   unknown = 持ち主を特定できない。armed なセッションは居るので断じない
    */
-  watch?: 'ok' | 'orphan' | 'unknown' | null;
+  watch?: 'ok' | 'foreground' | 'orphan' | 'unknown' | null;
   watchBy?: string | null;
   watchTask?: string | null;
   watchWhy?: string | null;
@@ -123,12 +128,18 @@ export interface Session {
   taskNewestAgeSec?: number | null;
   /** 会話ログを末尾しか読めていない。 */
   truncated?: boolean;
+  /** 会話ログを何時間ぶん読めているか。 */
+  coverageH?: number | null;
   /** 判定後に入る。「完了通知に未反応」など。 */
   flag?: string | null;
   /** 判定後に入る。生きている追跡・死んだ追跡・armed か。 */
   liveTracks?: Track[];
   deadTracks?: Track[];
   armed?: boolean;
+  /** ターンの途中(道具の返事待ち)。このとき走る計算は前景実行。 */
+  midTurn?: boolean;
+  /** ターンの途中か、直近まで書いていた。 */
+  working?: boolean;
 }
 
 /** .claude/ に置かれた札の状態。 */

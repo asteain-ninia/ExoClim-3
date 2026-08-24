@@ -140,7 +140,9 @@ class SessionReader {
     this.lastType = null;
     this.lastUserTs = null;
     this.slug = null;
-    this.truncated = false; // 末尾しか読めていない = 取りこぼしの可能性
+    this.truncated = false; // 末尾しか読めていない
+    /** 読めた範囲のいちばん古い時刻。どこまで遡れているかを言うため。 */
+    this.firstTs = null;
     this.bytesRead = 0;
   }
 
@@ -197,6 +199,7 @@ class SessionReader {
 
   #ingest(o) {
     const ts = o.timestamp ? Date.parse(o.timestamp) : null;
+    if (ts && (!this.firstTs || ts < this.firstTs)) this.firstTs = ts;
     if (ts && (!this.lastTs || ts > this.lastTs)) {
       this.lastTs = ts;
       this.lastType = o.type;

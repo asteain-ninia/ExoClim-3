@@ -36,6 +36,8 @@ export interface SessionRead {
   mtimeMs?: number;
   /** 末尾しか読めていない = それより古い追跡は取りこぼしうる。 */
   truncated: boolean;
+  /** 読めた範囲のいちばん古い時刻。 */
+  firstTs: number | null;
   /** 文字列は現れたが、その道具の結果ではなかったので捨てた件数(ログの引用)。 */
   quotedArmings?: number;
   lastTs: number | null;
