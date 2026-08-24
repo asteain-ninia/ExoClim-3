@@ -24,6 +24,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { createTranscriptWatcher } from './monitor_transcript.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -383,88 +384,29 @@ function tasksBase() {
   return path.join(base, want);
 }
 
-/** 会話ログの末尾だけ読む(62MB の実績があるので全読みしない)。 */
-function readTranscriptTail(file, bytes = 512 * 1024) {
-  const st = statOr(file);
-  if (!st) return null;
-  const start = Math.max(0, st.size - bytes);
-  let text;
-  try {
-    const fd = fs.openSync(file, 'r');
-    const buf = Buffer.alloc(st.size - start);
-    fs.readSync(fd, buf, 0, buf.length, start);
-    fs.closeSync(fd);
-    text = buf.toString('utf8');
-  } catch {
-    return null;
-  }
-  if (start > 0) text = text.slice(text.indexOf('\n') + 1);
-  const lines = text.split('\n').filter((l) => l.trim().startsWith('{'));
+/**
+ * 会話ログの追跡状態を増分で読む。**同じ番人を使い回す**(位置を覚えている)。
+ * 初回だけ末尾 4MB を読む(実測: 忙しいセッションで約 90 時間ぶんまで遡れる)。
+ */
+const transcripts = createTranscriptWatcher({
+  dir: transcriptsDir(),
+  windowH: CFG.sessionWindowH,
+  initialTailBytes: 4 * 1024 * 1024,
+});
 
-  const info = {
-    mtimeMs: st.mtimeMs,
-    sizeMB: Math.round((st.size / 1048576) * 10) / 10,
-    lastAt: null,
-    lastType: null,
-    stopReason: null,
-    lastText: null,
-    lastToolNames: [],
-    lastUserAt: null,
-    lastAssistantAt: null,
-    slug: null,
-  };
-  for (let i = lines.length - 1; i >= 0; i--) {
-    let o;
-    try {
-      o = JSON.parse(lines[i]);
-    } catch {
-      continue;
-    }
-    const ts = o.timestamp ? Date.parse(o.timestamp) : null;
-    if (!info.lastAt && ts) {
-      info.lastAt = ts;
-      info.lastType = o.type;
-    }
-    if (!info.slug && o.slug) info.slug = o.slug;
-    if (o.type === 'user' && !info.lastUserAt && ts && o.userType !== 'external') info.lastUserAt = ts;
-    if (o.type === 'assistant' && o.message) {
-      if (!info.lastAssistantAt && ts) {
-        info.lastAssistantAt = ts;
-        info.stopReason = o.message.stop_reason ?? null;
-      }
-      if (info.lastText == null && Array.isArray(o.message.content)) {
-        const texts = o.message.content.filter((b) => b && b.type === 'text').map((b) => b.text);
-        const tools = o.message.content.filter((b) => b && b.type === 'tool_use').map((b) => b.name);
-        if (tools.length && !info.lastToolNames.length) info.lastToolNames = tools;
-        if (texts.length) info.lastText = texts.join('\n').trim().slice(0, 600);
-      }
-    }
-    if (info.lastText != null && info.lastUserAt != null) break;
-  }
-  return info;
-}
-
-function collectSessions() {
-  const tdir = transcriptsDir();
+/**
+ * セッションごとに「いま追跡が生きているか」と「札の一覧」をまとめる。
+ *
+ * 追跡の有無は**会話ログの記録**から取る(札の時刻から推測しない)。
+ * 札(.output)は表示のためだけに読む — 札は最初の出力が出た時刻に
+ * 生まれるので、起動時刻の証拠にはならない(2026-08-24 の誤検知の原因)。
+ */
+function collectSessions(procs) {
   const tbase = tasksBase();
-  let files = [];
-  try {
-    files = fs
-      .readdirSync(tdir)
-      .filter((f) => f.endsWith('.jsonl'))
-      .map((f) => ({ f, p: path.join(tdir, f), st: statOr(path.join(tdir, f)) }))
-      .filter((x) => x.st)
-      .sort((a, b) => b.st.mtimeMs - a.st.mtimeMs);
-  } catch {
-    files = [];
-  }
-  const cutoff = nowMs() - CFG.sessionWindowH * 3600_000;
+  const { sessions } = transcripts.read();
   const out = [];
-  for (const x of files) {
-    if (x.st.mtimeMs < cutoff) continue;
-    const id = x.f.replace(/\.jsonl$/, '');
-    const info = readTranscriptTail(x.p) ?? { mtimeMs: x.st.mtimeMs };
-    const tdirS = path.join(tbase, id, 'tasks');
+  for (const r of sessions) {
+    const tdirS = path.join(tbase, r.id, 'tasks');
     let taskFiles = [];
     try {
       taskFiles = fs
@@ -475,36 +417,65 @@ function collectSessions() {
     } catch {
       taskFiles = [];
     }
-    // 直近の追跡タスクは「生まれた時刻」と「最後に書かれた時刻」の両方を持つ。
-    // 出力を out/*.log へ逃がしたジョブは .output が空のまま古びるので、
-    // 更新時刻だけでは追跡の有無を判定できない(2026-08-14 に実害)。
-    const recentTasks = taskFiles.slice(0, 60).map((y) => ({
-      id: y.f.replace(/\.output$/, ''),
-      birthMs: y.st.birthtimeMs || y.st.ctimeMs || y.st.mtimeMs,
-      mtimeMs: y.st.mtimeMs,
-      size: y.st.size,
-    }));
-    out.push({
-      id,
-      short: id.slice(0, 8),
-      slug: info.slug ?? null,
-      isSelf: id === process.env.CLAUDE_SESSION_ID,
-      transcriptMB: info.sizeMB ?? null,
-      lastAt: info.lastAt ?? x.st.mtimeMs,
-      lastAgeSec: ageSec(info.lastAt ?? x.st.mtimeMs),
-      lastType: info.lastType ?? null,
-      stopReason: info.stopReason ?? null,
-      lastText: info.lastText ?? null,
-      lastToolNames: info.lastToolNames ?? [],
-      lastUserAt: info.lastUserAt ?? null,
-      lastUserAgeSec: ageSec(info.lastUserAt),
+    const outstanding = r.outstanding().map((t) => {
+      // 見張り・背景ジョブは OS プロセスとして見えるはず。
+      // 追跡の開始時刻とプロセスの誕生時刻はほぼ一致する(実測 0.1 秒差)。
+      // 対応するプロセスが居なければ、その見張りは死んでいる可能性がある。
+      let alive = null;
+      if (t.kind === 'background' || t.kind === 'monitor') {
+        alive = procs.some((p) => p.startedMs && t.atMs && Math.abs(p.startedMs - t.atMs) <= 15_000);
+      }
+      const mark = taskFiles.find((y) => y.f === t.id + '.output');
+      // 見張りの点検間隔。`sleep N` が読めれば「次に気づくのはいつか」が言える。
+      const sl = /(?:^|[;&\s])sleep\s+(\d+)/.exec(t.command || '');
+      const pollSec = sl ? Number(sl[1]) : null;
+      return {
+        id: t.id,
+        kind: t.kind,
+        what: t.what,
+        atMs: t.atMs,
+        ageSec: ageSec(t.atMs),
+        label: t.label || '',
+        command: (t.command || '').replace(/\s+/g, ' ').slice(0, 240),
+        eventCount: t.eventCount ?? 0,
+        lastEventAgeSec: t.lastEventMs ? ageSec(t.lastEventMs) : null,
+        alive,
+        markSize: mark ? mark.st.size : null,
+        markAgeSec: mark ? ageSec(mark.st.mtimeMs) : null,
+        pollSec,
+        nextCheckSec:
+          pollSec && t.lastEventMs ? Math.max(0, Math.round((t.lastEventMs + pollSec * 1000 - nowMs()) / 1000)) : null,
+      };
+    });
+    const row = {
+      id: r.id,
+      short: r.short,
+      slug: r.slug ?? null,
+      transcriptMB: r.sizeMB ?? null,
+      truncated: !!r.truncated,
+      quotedArmings: r.quotedArmings ?? 0,
+      lastAt: r.lastTs,
+      lastAgeSec: ageSec(r.lastTs),
+      lastType: r.lastType ?? null,
+      stopReason: r.lastStopReason ?? null,
+      lastText: r.lastAssistantText ?? null,
+      lastUserAt: r.lastUserTs ?? null,
+      lastUserAgeSec: ageSec(r.lastUserTs),
+      outstanding,
+      armedCount: outstanding.length,
+      doneCount: r.done.size,
       taskCount: taskFiles.length,
       taskNewestMs: taskFiles.length ? taskFiles[0].st.mtimeMs : null,
       taskNewestAgeSec: taskFiles.length ? ageSec(taskFiles[0].st.mtimeMs) : null,
-      recentTasks,
-    });
+      launchCount: r.launches.length,
+      flag: null,
+    };
+    // 起動コマンドの原文は帰属の照合にだけ使う。応答には載せない
+    // (重いうえに画面では使わない)。列挙不可にして JSON から外す。
+    Object.defineProperty(row, 'launches', { value: r.launches, enumerable: false });
+    out.push(row);
   }
-  out.sort((a, b) => b.lastAt - a.lastAt);
+  out.sort((a, b) => (b.lastAt ?? 0) - (a.lastAt ?? 0));
   return out;
 }
 
@@ -842,69 +813,108 @@ function collectFlags() {
 // ───────────────────────── 7. 自走の判定 ─────────────────────────
 
 /**
- * 「AI が現状を監視しているか」= 計算が終わったときに AI が呼び戻されるか。
+ * 走っている計算を、それを起動したセッションへ結びつける。
  *
- * 機械的な根拠は 1 つだけ: ハーネスが追跡している背景ジョブ(tasks/*.output)。
- * run_in_background で投げたジョブは .output が**起動時に作られる**ので、
- * 出力を out/*.log へ逃がしていても起動時刻の印は残る。よって
- *   「そのジョブの開始以降に作られた/更新された .output があるか」
- * で追跡の有無を判定する。文章で「待っています」と書いても、ここは動かない。
+ * 根拠は**起動時に AI が打ったコマンドの原文**。会話ログに残っている
+ * tool_use の入力に、いま走っているプロセスのコマンド行の一部が
+ * そのまま含まれている。時刻の近さではなく文字列で照合するので、
+ * 切り離し起動(PowerShell の Start-Process 等)でも帰属できる。
  */
-export function judge(clusters, sessions, flags) {
-  const work = clusters.filter((c) => c.kind !== '開発サーバ' && !c.parent);
-  const slack = CFG.trackSlackSec * 1000;
-
-  // ジョブ ↔ 追跡タスクの対応づけ。**1 対 1 で取り合う**。
-  // 同じコマンドを二重起動したとき、札 1 枚を両方の証拠にしてはいけない。
-  const pairs = [];
+export function attributeJobs(clusters, sessions) {
+  const norm = (x) => String(x || '').toLowerCase().replace(/\\/g, '/').replace(/\s+/g, ' ').trim();
   for (const c of clusters) {
+    c.owner = null;
+    c.ownerLaunchMs = null;
+    c.ownerTool = null;
     if (c.parent) continue;
-    const t0 = c.startedMs ?? nowMs();
+    const needle = norm(`${c.script ?? ''} ${c.args ?? ''}`);
+    if (!needle) continue;
+    let best = null;
     for (const s of sessions) {
-      for (const t of s.recentTasks ?? []) {
-        // (a) 札の誕生がジョブ起動と一致する = そのジョブのために作られた
-        const near = Math.abs(t.birthMs - t0) <= slack;
-        // (b) ジョブ起動より前に生まれた札が、いまも書かれている = その出力を受けている
-        const appending = t.birthMs <= t0 + slack && t.mtimeMs >= t0;
-        if (!near && !appending) continue;
-        pairs.push({
-          c,
-          s,
-          t,
-          near,
-          score: near ? Math.abs(t.birthMs - t0) : slack + Math.abs(t.mtimeMs - t0),
-        });
+      for (const l of s.launches ?? []) {
+        if (!norm(l.command).includes(needle)) continue;
+        // 起動はプロセスの誕生より前(わずかな前後は許す)
+        if (c.startedMs && l.atMs && l.atMs > c.startedMs + CFG.trackSlackSec * 1000) continue;
+        if (!best || (l.atMs ?? 0) > (best.l.atMs ?? 0)) best = { s, l };
       }
     }
-    c.tracked = false;
-    c.trackedBy = null;
-    c.trackedTask = null;
-    c.trackedHow = null;
+    if (best) {
+      c.owner = best.s.short;
+      c.ownerId = best.s.id;
+      c.ownerLaunchMs = best.l.atMs;
+      c.ownerTool = best.l.tool;
+    }
   }
-  pairs.sort((a, b) => a.score - b.score);
-  const usedTask = new Set();
-  for (const p of pairs) {
-    const tk = p.s.id + '/' + p.t.id;
-    if (p.c.tracked || usedTask.has(tk)) continue;
-    usedTask.add(tk);
-    p.c.tracked = true;
-    p.c.trackedBy = p.s.short;
-    p.c.trackedTask = p.t.id;
-    p.c.trackedHow = p.near ? '起動が一致' : '出力が更新中';
+}
+
+/**
+ * 「AI は起こされるか」の判定。
+ *
+ * **問いの立て方を 2026-08-24 に改めた。** 以前は「計算プロセス 1 件ごとに
+ * 札(.output)が対応するか」を時刻で見ていたが、これは二重に間違っていた:
+ *   ・札は「最初の出力が出た時刻」に作られる。30 分黙る見張りでは 30 分ずれる。
+ *   ・そもそも見張りは、計算とは**別に、あとから**装着してよい。
+ *     切り離し起動(Start-Process)+ Monitor という正しい運用を
+ *     「投げっぱなし」と誤報した。
+ *
+ * 正しい問いは **「その計算を抱えているセッションが armed か」**。
+ * armed = 会話ログ上、開始が記録されていて終了通知が来ていない追跡タスクを
+ * 1 つ以上持っている。ハーネスはそれが動くかぎり AI を呼び戻す。
+ * これは Stop フックの逃げ道 3 と同じ考えであり、矛盾しない。
+ *
+ * 誤りの向きは非対称に扱う。「本当は起きないのに追跡ありと言う」= 寝落ちの
+ * 見逃し = 最悪。「本当は起きるのに投げっぱなしと言う」= 狼少年。
+ * どちらも避けられないときは **「判定不能」と正直に出す**。
+ */
+export function judge(clusters, sessions, flags, results = []) {
+  const jobs = clusters.filter((c) => !c.parent && c.kind !== '開発サーバ');
+
+  // セッションが armed か。死んだ見張り(対応するプロセスが居ない)は数えない。
+  for (const s of sessions) {
+    s.liveTracks = (s.outstanding ?? []).filter((t) => t.alive !== false);
+    s.deadTracks = (s.outstanding ?? []).filter((t) => t.alive === false);
+    s.armed = s.liveTracks.length > 0;
+  }
+  const armedSessions = sessions.filter((s) => s.armed);
+
+  for (const c of jobs) {
+    const owner = c.owner ? sessions.find((s) => s.short === c.owner) : null;
+    if (owner && owner.armed) {
+      const t = owner.liveTracks[0];
+      c.watch = 'ok';
+      c.watchBy = owner.short;
+      c.watchWhy = `${owner.short} が${t.what ?? '追跡'}「${t.label || t.id}」で待っている`;
+      c.watchTask = t.id;
+    } else if (owner && !owner.armed) {
+      c.watch = 'orphan';
+      c.watchBy = owner.short;
+      c.watchWhy = `起動した ${owner.short} に生きている追跡が 1 つも無い`;
+      c.watchTask = null;
+    } else if (armedSessions.length) {
+      // 誰が起動したか分からないが、armed なセッションは居る。狼少年にしない。
+      c.watch = 'unknown';
+      c.watchBy = null;
+      c.watchWhy = `起動元を特定できない(armed なセッションは ${armedSessions.map((s) => s.short).join(', ')})`;
+      c.watchTask = null;
+    } else {
+      c.watch = 'orphan';
+      c.watchBy = null;
+      c.watchWhy = 'どのセッションにも生きている追跡が無い';
+      c.watchTask = null;
+    }
   }
   for (const c of clusters) {
     if (!c.parent) continue;
     const p = clusters.find((x) => x.id === c.parent);
-    c.tracked = p ? p.tracked : null;
-    c.trackedBy = p ? p.trackedBy : null;
-    c.trackedHow = '親ジョブに従う';
+    c.watch = p ? p.watch : null;
+    c.watchBy = p ? p.watchBy : null;
+    c.watchWhy = '親ジョブに従う';
   }
 
   /**
-   * 「計算は終わったのに AI が反応していない」の検出。
-   * 追跡タスクが AI の最後の発話より後に書かれ、しかもいま走っている
-   * ジョブが無い = 完了の通知を受け取れる状態にないまま冷えている。
-   * これが利用者の言う「待つふりをして待っていない」の実体。
+   * 「計算は終わったのに AI が反応していない」。
+   * 追跡が最後に何かを書いたのが AI の最終発話より後で、しかも
+   * いま走っている計算が無い = 受け取るものが来たのに冷えている。
    */
   for (const s of sessions) s.flag = null;
   const stalled = sessions.filter(
@@ -918,15 +928,29 @@ export function judge(clusters, sessions, flags) {
   );
   for (const s of stalled) s.flag = '完了通知に未反応';
 
-  for (const c of clusters) {
-    if (!c.parent) continue;
-    const p = clusters.find((x) => x.id === c.parent);
-    c.tracked = p ? p.tracked : null;
-    c.trackedBy = p ? p.trackedBy : null;
-    c.trackedHow = '親ジョブに従う';
+  /**
+   * 「結果はもう出ているのに、AI がまだ知らない」。
+   * 成果物(較正の状態ファイル・検証レポート)が AI の最終発話より後に
+   * 書かれていて、いま走っている計算が無い状態。見張りが生きていても、
+   * 次の点検が 30 分後なら AI はそれまで気づかない — それを見せる。
+   */
+  const newestResult = results.filter((r) => r.atMs).sort((a, b) => b.atMs - a.atMs)[0] ?? null;
+  const unseen = [];
+  if (newestResult && !jobs.length) {
+    for (const s of sessions) {
+      if (!s.armed) continue;
+      if (s.lastAt && newestResult.atMs > s.lastAt + 60_000) {
+        const next = Math.min(
+          ...s.liveTracks.map((t) => (t.nextCheckSec == null ? Infinity : t.nextCheckSec)),
+        );
+        unseen.push({ session: s, nextCheckSec: Number.isFinite(next) ? next : null });
+      }
+    }
   }
+
+  const orphans = jobs.filter((c) => c.watch === 'orphan');
+  const unknowns = jobs.filter((c) => c.watch === 'unknown');
   const newest = sessions[0] ?? null;
-  const untracked = work.filter((c) => !c.tracked);
   const reasons = [];
   let level = 'idle';
   let headline = '静止中';
@@ -939,49 +963,76 @@ export function judge(clusters, sessions, flags) {
     level = 'ask';
     headline = '裁定待ち — 利用者の判断が要る';
     reasons.push('.claude/裁定待ち.md がある。AI はここで正当に止まっている。');
-  } else if (work.length > 0 && untracked.length === 0) {
+  } else if (orphans.length) {
+    level = 'danger';
+    headline = `計算中 ${jobs.length} 件 — うち ${orphans.length} 件が投げっぱなし`;
+    for (const c of orphans) reasons.push(`投げっぱなし: ${c.script ?? c.kind}(${c.watchWhy})`);
+  } else if (jobs.length && unknowns.length === jobs.length) {
+    level = 'warn';
+    headline = `計算中 ${jobs.length} 件 — 起動元を特定できない`;
+    reasons.push('コマンドの原文が会話ログの読み取り範囲に無い。利用者が端末で直に起動した可能性もある。');
+    reasons.push(`armed なセッション: ${armedSessions.map((s) => s.short).join(', ') || 'なし'}`);
+  } else if (jobs.length) {
     level = 'ok';
-    headline = `計算中 ${work.length} 件 — 追跡あり(完了で AI が呼び戻される)`;
-    reasons.push('走っているジョブすべてに、ハーネスの追跡タスクが 1 対 1 で対応している。');
-  } else if (work.length === 0 && stalled.length > 0) {
+    const ok = jobs.filter((c) => c.watch === 'ok');
+    headline = `計算中 ${jobs.length} 件 — 見守られている(完了・進捗で AI が起こされる)`;
+    for (const c of ok) reasons.push(`${c.script ?? c.kind}: ${c.watchWhy}`);
+    if (unknowns.length) reasons.push(`ただし ${unknowns.length} 件は起動元を特定できていない。`);
+  } else if (unseen.length) {
+    const u = unseen[0];
+    level = 'warn';
+    headline = `結果は出ているのに AI はまだ知らない(${newestResult.what} が ${fmtDur(ageSec(newestResult.atMs))}前に確定)`;
+    reasons.push(
+      `${u.session.short} は ${fmtDur(u.session.lastAgeSec)}前から黙っている。追跡は生きているので、いずれ起こされる。`,
+    );
+    if (u.nextCheckSec != null) {
+      reasons.push(`見張りの次の点検まで約 ${fmtDur(u.nextCheckSec)}(点検間隔から算出)。急ぐなら声をかける。`);
+    } else {
+      reasons.push('見張りの点検間隔は読み取れなかった。いつ気づくかは不明。');
+    }
+  } else if (stalled.length > 0) {
     level = 'danger';
     headline = `計算は終わっているのに AI が ${fmtDur(stalled[0].lastAgeSec)} 反応していない`;
-    reasons.push(
-      '追跡タスクが AI の最後の発話より後に書かれ、いま走っているジョブは無い。完了を受け取れないまま冷えている。',
-    );
-    for (const s of stalled) reasons.push(`未反応: ${s.short}(最終発話 ${fmtDur(s.lastAgeSec)}前 / 出力 ${fmtDur(s.taskNewestAgeSec)}前)`);
-  } else if (work.length > 0 && untracked.length > 0) {
-    level = 'danger';
-    headline = `計算中 ${work.length} 件 — うち ${untracked.length} 件が投げっぱなしの疑い`;
-    reasons.push(
-      '追跡タスク(tasks/*.output)がジョブ開始以降に一つも無い。完了しても AI は呼び戻されない可能性が高い。',
-    );
-    for (const c of untracked) reasons.push(`未追跡: ${c.script ?? c.kind} ${c.args} (${fmtDur(c.elapsedSec)} 経過)`);
+    reasons.push('追跡が AI の最終発話より後に書かれ、いま走っている計算は無い。');
+    for (const s of stalled) reasons.push(`未反応: ${s.short}(最終発話 ${fmtDur(s.lastAgeSec)}前)`);
   } else if (newest && newest.lastAgeSec != null && newest.lastAgeSec < CFG.aiLiveSec) {
     level = 'ok';
     headline = 'AI が作業中(計算プロセスは無し)';
     reasons.push(`最新セッション ${newest.short} が ${newest.lastAgeSec} 秒前まで書いている。`);
+  } else if (newest && armedSessions.length) {
+    level = 'ok';
+    headline = `AI は待機中 — 追跡 ${armedSessions.reduce((a, s) => a + s.liveTracks.length, 0)} 件が生きている`;
+    reasons.push(`${armedSessions.map((s) => s.short).join(', ')} が待っている。完了で呼び戻される。`);
   } else if (newest) {
     level = 'idle';
     headline = `静止中 — 計算なし・AI は ${fmtDur(newest.lastAgeSec)} 無音`;
     reasons.push(`最後の発話は ${newest.stopReason ?? newest.lastType ?? '不明'}。`);
   }
 
-  const dup = work.filter((c) => c.duplicate);
+  const dup = jobs.filter((c) => c.duplicate);
   if (dup.length) {
-    reasons.push(
-      `同一コマンドの二重起動が ${dup.length} 件ある(${dup[0].script ?? ''} — 同じ出力ファイルを取り合う恐れ)。`,
-    );
+    reasons.push(`同一コマンドの二重起動が ${dup.length} 件ある(${dup[0].script ?? ''} — 同じ出力を取り合う恐れ)。`);
     if (level === 'ok') {
       level = 'warn';
-      headline = `計算中 ${work.length} 件 — ただし二重起動 ${dup.length} 件`;
+      headline = `計算中 ${jobs.length} 件 — ただし二重起動 ${dup.length} 件`;
     }
+  }
+  const dead = sessions.filter((s) => (s.deadTracks ?? []).length);
+  for (const s of dead) {
+    reasons.push(
+      `${s.short}: 追跡 ${s.deadTracks.length} 件に対応するプロセスが居ない(見張りが死んでいる疑い)。`,
+    );
+    if (level === 'ok') level = 'warn';
   }
   if (level !== 'danger' && stalled.length) {
     if (level === 'ok') level = 'warn';
     reasons.push(`完了通知に未反応のセッション ${stalled.length} 本(${stalled.map((s) => s.short).join(', ')})。`);
   }
   if (flags.guardCount > 0) reasons.push(`Stop フックの差し戻し ${flags.guardCount} 回(利用者の発話で 0 に戻る)。`);
+  const truncated = sessions.filter((s) => s.truncated && s.armedCount === 0 && s.lastAgeSec < 3600);
+  if (truncated.length) {
+    reasons.push(`会話ログを末尾だけしか読めていないセッションが ${truncated.length} 本(古い追跡を取りこぼす可能性)。`);
+  }
 
   return { level, headline, reasons };
 }
@@ -1000,11 +1051,17 @@ async function buildState() {
   const t0 = nowMs();
   const [procs, git] = await Promise.all([getProcs(), getGit()]);
   const clusters = clusterProcs(procs);
-  const sessions = collectSessions();
+  const sessions = collectSessions(procs);
   const flags = collectFlags();
-  const verdict = judge(clusters, sessions, flags);
+  attributeJobs(clusters, sessions);
   const runs = collectRuns();
   const validate = collectValidate();
+  // 成果物が出た時刻(「結果は出ているのに AI が知らない」の判定に使う)
+  const results = [
+    ...runs.map((r) => ({ what: `較正 ${r.name}`, atMs: r.lastWriteMs })),
+    validate ? { what: '検証レポート', atMs: nowMs() - (validate.ageSec ?? 0) * 1000 } : null,
+  ].filter(Boolean);
+  const verdict = judge(clusters, sessions, flags, results);
   const newestRun = runs[0] ?? null;
   const params = analyzeParams(newestRun?.bestParams ?? null, newestRun?.sensitivity ?? null);
 

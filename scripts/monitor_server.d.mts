@@ -52,21 +52,47 @@ export interface Cluster {
   workerCount: number;
   /** 同じコマンドが別時刻にも走っているか。 */
   duplicate: boolean;
-  /** ハーネスの追跡タスクに対応づいたか(判定後に入る)。 */
-  tracked?: boolean | null;
-  trackedBy?: string | null;
-  trackedTask?: string | null;
-  trackedHow?: string | null;
+  /** どのセッションが起動したか(コマンドの原文で照合。判定後に入る)。 */
+  owner?: string | null;
+  ownerId?: string | null;
+  ownerLaunchMs?: number | null;
+  ownerTool?: string | null;
+  /**
+   * 見守られているか。
+   *   ok      = 持ち主に生きている追跡がある(完了・進捗で AI が起こされる)
+   *   orphan  = 誰も起こされない(投げっぱなし)
+   *   unknown = 持ち主を特定できない。armed なセッションは居るので断じない
+   */
+  watch?: 'ok' | 'orphan' | 'unknown' | null;
+  watchBy?: string | null;
+  watchTask?: string | null;
+  watchWhy?: string | null;
 }
 
-/** ハーネスの背景ジョブ台帳の札 1 枚。 */
-export interface TaskMark {
+/**
+ * 生きている追跡 1 件。
+ * **札(.output)の時刻ではなく、会話ログの記録から作る。**
+ * 札は「最初の出力が出た時刻」に生まれるので起動の証拠にならない
+ * (2026-08-24 の誤検知の原因)。
+ */
+export interface Track {
   id: string;
-  /** 札が生まれた時刻 = ジョブが投げられた時刻。 */
-  birthMs: number;
-  /** 最後に書かれた時刻 = 出力が届いた時刻。 */
-  mtimeMs: number;
-  size: number;
+  kind: 'background' | 'monitor' | 'workflow' | 'agent';
+  what: string;
+  atMs: number | null;
+  ageSec: number | null;
+  label: string;
+  command: string;
+  eventCount: number;
+  lastEventAgeSec: number | null;
+  /** 対応する OS プロセスが居るか。null = 判定できない種類。 */
+  alive: boolean | null;
+  /** 見張りの点検間隔(コマンドの sleep から読む)。 */
+  pollSec?: number | null;
+  /** 次に見張りが気づくまでの秒数。 */
+  nextCheckSec?: number | null;
+  markSize?: number | null;
+  markAgeSec?: number | null;
 }
 
 /** AI のセッション 1 本。 */
@@ -77,11 +103,21 @@ export interface Session {
   lastAgeSec: number | null;
   lastType?: string | null;
   stopReason?: string | null;
-  recentTasks?: TaskMark[];
+  /** 終了通知の来ていない追跡。これがある間、セッションは呼び戻される。 */
+  outstanding: Track[];
+  armedCount?: number;
+  doneCount?: number;
+  taskCount?: number;
   taskNewestMs?: number | null;
   taskNewestAgeSec?: number | null;
+  /** 会話ログを末尾しか読めていない。 */
+  truncated?: boolean;
   /** 判定後に入る。「完了通知に未反応」など。 */
   flag?: string | null;
+  /** 判定後に入る。生きている追跡・死んだ追跡・armed か。 */
+  liveTracks?: Track[];
+  deadTracks?: Track[];
+  armed?: boolean;
 }
 
 /** .claude/ に置かれた札の状態。 */
@@ -99,8 +135,21 @@ export interface Verdict {
 
 export function classifyProc(p: RawProc, now?: number): Proc;
 export function clusterProcs(procs: Proc[]): Cluster[];
-/** 副作用あり: clusters と sessions に判定結果(tracked / flag)を書き込む。 */
-export function judge(clusters: Cluster[], sessions: Session[], flags: Flags): Verdict;
+/**
+ * 走っている計算を、起動コマンドの原文で持ち主のセッションへ結びつける。
+ * 副作用あり: clusters に owner* を書き込む。
+ */
+export function attributeJobs(clusters: Cluster[], sessions: Session[]): void;
+/**
+ * 副作用あり: clusters に watch*、sessions に flag / liveTracks / armed を書き込む。
+ * results = 成果物が出た時刻(「結果は出ているのに AI が知らない」の判定に使う)。
+ */
+export function judge(
+  clusters: Cluster[],
+  sessions: Session[],
+  flags: Flags,
+  results?: { what: string; atMs: number | null }[],
+): Verdict;
 export function parseSpace(): {
   /** いま掃引されている定数の範囲。 */
   space: Record<string, { lo: number; hi: number }>;

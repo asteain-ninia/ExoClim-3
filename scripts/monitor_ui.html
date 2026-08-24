@@ -231,7 +231,7 @@
 
       function renderTabs() {
         const bad = {
-          計算とAI: S ? S.compute.clusters.filter((c) => c.tracked === false).length : 0,
+          計算とAI: S ? S.compute.clusters.filter((c) => c.watch === 'orphan').length : 0,
           評価値: S && S.validate && S.validate.gates ? S.validate.gates.total - S.validate.gates.pass : 0,
           パラメータ: S && S.params ? S.params.atBound.length : 0,
         };
@@ -346,12 +346,18 @@
                         el('span', { class: 'pill info' }, c.kind),
                         el('b', { class: 'mono' }, c.script || '(不明)'),
                         c.duplicate ? el('span', { class: 'pill bad' }, '二重起動') : null,
-                        c.tracked === false
-                          ? el('span', { class: 'pill bad' }, '未追跡 — 終わっても誰も気づかない')
-                          : el('span', { class: 'pill ok', title: c.trackedHow || '' }, '追跡 ' + (c.trackedBy || '')),
+                        watchPill(c),
                         c.workerCount ? el('span', { class: 'pill dim' }, 'ワーカー ' + c.workerCount) : null,
                       ),
                       c.args ? el('div', { class: 'mono dim', style: 'word-break:break-all' }, c.args) : null,
+                      el('div', { class: 'dim', style: 'font-size:12px' }, c.watchWhy || ''),
+                      c.owner
+                        ? el(
+                            'div',
+                            { class: 'dim', style: 'font-size:11.5px' },
+                            `起動: ${c.owner} が ${c.ownerTool}` + (c.ownerLaunchMs ? ` で ${jst(new Date(c.ownerLaunchMs).toISOString())}` : ''),
+                          )
+                        : null,
                       el('div', { class: 'dim' }, `経過 ${dur(c.elapsedSec)} / CPU ${num(c.cpuSec, 0)}秒 / ${num(c.memMB, 0)}MB / pid ${c.pids.join(',')}`),
                     ),
                   ),
@@ -372,7 +378,12 @@
               { class: 'tiles' },
               tile('計算プロセス', S.compute.procCount, work.length ? 'ジョブ ' + work.length + ' 件' : '', work.length > 0 ? 'ok' : ''),
               tile('二重起動', work.filter((c) => c.duplicate).length, '同じ出力を取り合う', work.some((c) => c.duplicate) ? 'bad' : 'ok'),
-              tile('未追跡ジョブ', work.filter((c) => c.tracked === false).length, '完了で呼び戻されない', work.some((c) => c.tracked === false) ? 'bad' : 'ok'),
+              tile('投げっぱなし', work.filter((c) => c.watch === 'orphan').length, '完了で呼び戻されない', work.some((c) => c.watch === 'orphan') ? 'bad' : 'ok'),
+              tile(
+                '生きている追跡',
+                S.ai.sessions.reduce((a, x) => a + (x.outstanding || []).filter((t) => t.alive !== false).length, 0),
+                'これがある間は起こされる',
+              ),
               tile('直近セッション', s0 ? s0.short : '—', s0 ? dur(s0.lastAgeSec) + '前に更新' : ''),
               tile('完了に未反応', S.ai.sessions.filter((s) => s.flag).length, 'AI が冷えたまま', S.ai.sessions.some((s) => s.flag) ? 'bad' : 'ok'),
               tile('差し戻し回数', S.flags.guardCount, 'Stop フック'),
@@ -437,6 +448,14 @@
         );
 
         $('#tab-概要').replaceChildren(...cards);
+      }
+
+      /** ジョブが見守られているかの札。 */
+      function watchPill(c) {
+        if (c.watch === 'ok') return el('span', { class: 'pill ok', title: c.watchWhy || '' }, '見守り ' + (c.watchBy || ''));
+        if (c.watch === 'orphan') return el('span', { class: 'pill bad', title: c.watchWhy || '' }, '投げっぱなし — 終わっても誰も気づかない');
+        if (c.watch === 'unknown') return el('span', { class: 'pill warn', title: c.watchWhy || '' }, '判定不能(起動元が不明)');
+        return el('span', { class: 'pill dim' }, '—');
       }
 
       function tile(k, v, r, cls) {
@@ -525,10 +544,33 @@
             el('h2', {}, '判定の根拠'),
             el('ul', { style: 'margin:0;padding-left:20px' }, S.verdict.reasons.map((r) => el('li', {}, r))),
             el(
-              'p',
-              { class: 'dim', style: 'font-size:12px;margin-bottom:0' },
-              '「追跡」= ハーネスの背景ジョブ台帳(tasks/*.output)に、そのジョブの開始以降に作られた/更新された記録があること。' +
-                'run_in_background で投げたジョブは完了時に AI が必ず呼び戻される。未追跡のジョブは、終わっても誰も気づかない。',
+              'div',
+              { class: 'dim', style: 'font-size:12px' },
+              el(
+                'p',
+                { style: 'margin:6px 0' },
+                '判定の根拠は会話ログに残るハーネス自身の記録。「背景ジョブを開始した」「見張りを付けた」という道具の返答と、' +
+                  'その完了通知を突き合わせ、終了通知の来ていない追跡(= 生きている追跡)を数える。' +
+                  '生きている追跡が 1 つでもあるセッションは、それが動くかぎり必ず呼び戻される。',
+              ),
+              el(
+                'p',
+                { style: 'margin:6px 0' },
+                '走っている計算は、起動時に AI が打ったコマンドの原文で持ち主のセッションへ結びつける。' +
+                  '文字列で照合するので、切り離し起動(PowerShell の Start-Process 等)でも辿れる。',
+              ),
+              el(
+                'p',
+                { style: 'margin:6px 0' },
+                '札(tasks/*.output)の時刻は根拠に使わない。札は「最初の出力が出た時刻」に作られるので、' +
+                  '30 分黙る見張りでは 30 分ずれる。これで正しく運用しているセッションを「投げっぱなし」と誤報した(2026-08-24)。',
+              ),
+              el(
+                'p',
+                { style: 'margin:6px 0 0' },
+                '持ち主を特定できないときは「投げっぱなし」と言わず判定不能と出す。' +
+                  'ただし、どのセッションにも生きている追跡が無いなら、誰も起こされないので投げっぱなしと断じる。',
+              ),
             ),
           ),
         );
@@ -559,13 +601,7 @@
                       el('td', { class: 'num' }, num(c.cpuSec, 0)),
                       el('td', { class: 'num' }, num(c.memMB, 0)),
                       el('td', { class: 'num dim' }, c.pids.join(' ')),
-                      el(
-                        'td',
-                        {},
-                        c.tracked === false
-                          ? el('span', { class: 'pill bad' }, '未追跡')
-                          : el('span', { class: 'pill ok', title: (c.trackedHow || '') + ' ' + (c.trackedTask || '') }, (c.trackedBy || 'あり') + (c.trackedHow ? '(' + c.trackedHow + ')' : '')),
-                      ),
+                      el('td', {}, watchPill(c), el('div', { class: 'dim', style: 'font-size:11px' }, c.watchWhy || '')),
                     ),
                   ),
                 ),
@@ -606,12 +642,29 @@
                   el(
                     'div',
                     { class: 'dim', style: 'font-size:12px' },
-                    `追跡タスク ${s.taskCount} 件` +
-                      (s.taskNewestAgeSec != null ? ` / 最新 ${dur(s.taskNewestAgeSec)}前` : '') +
-                      ` / 会話 ${s.transcriptMB ?? '—'}MB` +
-                      (s.lastUserAgeSec != null ? ` / 利用者発話 ${dur(s.lastUserAgeSec)}前` : ''),
+                    `生きている追跡 ${s.armedCount} 件 / 完了 ${s.doneCount} 件 / 札 ${s.taskCount} 枚` +
+                      ` / 会話 ${s.transcriptMB ?? '—'}MB${s.truncated ? '(末尾のみ)' : ''}` +
+                      (s.lastUserAgeSec != null ? ` / 利用者発話 ${dur(s.lastUserAgeSec)}前` : '') +
+                      (s.quotedArmings ? ` / 引用として除外 ${s.quotedArmings} 件` : ''),
                   ),
-                  s.lastToolNames.length ? el('div', { class: 'dim mono', style: 'font-size:11.5px' }, '最後の道具: ' + s.lastToolNames.join(', ')) : null,
+                  (s.outstanding || []).length
+                    ? el(
+                        'div',
+                        { style: 'margin-top:6px' },
+                        (s.outstanding || []).map((t) =>
+                          el(
+                            'div',
+                            { class: 'row', style: 'gap:6px;font-size:11.5px' },
+                            el('span', { class: 'pill ' + (t.alive === false ? 'bad' : 'ok') }, t.alive === false ? '死' : '生'),
+                            el('span', { class: 'pill info' }, t.what || t.kind),
+                            el('span', { class: 'mono dim' }, t.id),
+                            el('span', {}, (t.label || '').slice(0, 44)),
+                            t.eventCount ? el('span', { class: 'dim' }, `発火 ${t.eventCount} 回 / 最終 ${dur(t.lastEventAgeSec)}前`) : null,
+                            t.nextCheckSec != null ? el('span', { class: 'pill dim' }, `次の点検 ${dur(t.nextCheckSec)}後`) : null,
+                          ),
+                        ),
+                      )
+                    : el('div', { class: 'dim', style: 'font-size:11.5px;margin-top:4px' }, '生きている追跡は無い(いま何かが終わっても、このセッションは起きない)'),
                   s.lastText ? el('div', { class: 'quote', style: 'margin-top:6px' }, s.lastText) : null,
                 ),
               ),
