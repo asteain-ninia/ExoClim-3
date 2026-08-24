@@ -480,6 +480,13 @@ function collectSessions(procs) {
       quotedArmings: r.quotedArmings ?? 0,
       lastAt: r.lastTs,
       lastAgeSec: ageSec(r.lastTs),
+      // AI が自分で書いた最後の時刻(通知の到着は含めない)
+      lastActAt: r.lastAssistantAt ?? null,
+      lastActAgeSec: ageSec(r.lastAssistantAt),
+      // 完了通知を受け取ったのに、そのあと AI が何も書いていないか
+      unansweredDone: [...r.done.values()]
+        .filter((d) => d.atMs && (!r.lastAssistantAt || d.atMs > r.lastAssistantAt + 60_000))
+        .map((d) => ({ atMs: d.atMs, ageSec: ageSec(d.atMs), status: d.status, summary: d.summary })),
       lastType: r.lastType ?? null,
       stopReason: r.lastStopReason ?? null,
       lastText: r.lastAssistantText ?? null,
@@ -943,12 +950,10 @@ export function judge(clusters, sessions, flags, results = []) {
   for (const s of sessions) s.flag = null;
   const stalled = sessions.filter(
     (s) =>
-      s.lastAgeSec != null &&
-      s.lastAgeSec < 12 * 3600 &&
-      s.lastAgeSec > CFG.aiLiveSec &&
-      s.taskNewestMs &&
-      s.lastAt &&
-      s.taskNewestMs > s.lastAt + 60_000,
+      s.lastActAgeSec != null &&
+      s.lastActAgeSec < 12 * 3600 &&
+      s.lastActAgeSec > CFG.aiLiveSec &&
+      (s.unansweredDone ?? []).length > 0,
   );
   for (const s of stalled) s.flag = '完了通知に未反応';
 
@@ -963,7 +968,7 @@ export function judge(clusters, sessions, flags, results = []) {
   if (newestResult && !jobs.length) {
     for (const s of sessions) {
       if (!s.armed) continue;
-      if (s.lastAt && newestResult.atMs > s.lastAt + 60_000) {
+      if (s.lastActAt && newestResult.atMs > s.lastActAt + 60_000) {
         const next = Math.min(
           ...s.liveTracks.map((t) => (t.nextCheckSec == null ? Infinity : t.nextCheckSec)),
         );
@@ -1007,7 +1012,7 @@ export function judge(clusters, sessions, flags, results = []) {
     level = 'warn';
     headline = `結果は出ているのに AI はまだ知らない(${newestResult.what} が ${fmtDur(ageSec(newestResult.atMs))}前に確定)`;
     reasons.push(
-      `${u.session.short} は ${fmtDur(u.session.lastAgeSec)}前から黙っている。追跡は生きているので、いずれ起こされる。`,
+      `${u.session.short} は ${fmtDur(u.session.lastActAgeSec)}前から何も書いていない。追跡は生きているので、いずれ起こされる。`,
     );
     if (u.nextCheckSec != null) {
       reasons.push(`見張りの次の点検まで約 ${fmtDur(u.nextCheckSec)}(点検間隔から算出)。急ぐなら声をかける。`);
@@ -1016,9 +1021,12 @@ export function judge(clusters, sessions, flags, results = []) {
     }
   } else if (stalled.length > 0) {
     level = 'danger';
-    headline = `計算は終わっているのに AI が ${fmtDur(stalled[0].lastAgeSec)} 反応していない`;
-    reasons.push('追跡が AI の最終発話より後に書かれ、いま走っている計算は無い。');
-    for (const s of stalled) reasons.push(`未反応: ${s.short}(最終発話 ${fmtDur(s.lastAgeSec)}前)`);
+    headline = `完了通知が来ているのに AI が ${fmtDur(stalled[0].lastActAgeSec)} 反応していない`;
+    reasons.push('ハーネスは完了を通知した。それ以降 AI は一行も書いていない。');
+    for (const s of stalled) {
+      const d = s.unansweredDone[0];
+      reasons.push(`未反応: ${s.short}(通知 ${fmtDur(d.ageSec)}前「${(d.summary || '').slice(0, 50)}」)`);
+    }
   } else if (newest && newest.lastAgeSec != null && newest.lastAgeSec < CFG.aiLiveSec) {
     level = 'ok';
     headline = 'AI が作業中(計算プロセスは無し)';

@@ -39,6 +39,8 @@ export interface SessionRead {
   /** 文字列は現れたが、その道具の結果ではなかったので捨てた件数(ログの引用)。 */
   quotedArmings?: number;
   lastTs: number | null;
+  /** AI が自分で書いた最後の時刻(通知の到着は含めない)。 */
+  lastAssistantAt: number | null;
   lastType: string | null;
   lastStopReason: string | null;
   lastAssistantText: string | null;

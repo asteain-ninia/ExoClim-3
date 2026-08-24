@@ -43,12 +43,18 @@ const session = (
   lastAgeSec: number,
   outstanding: ReturnType<typeof track>[],
   launches: { atMs: number; tool: string; command: string }[] = [],
+  /** 受け取ったのに返事をしていない完了通知。 */
+  unansweredDone: { atMs: number; ageSec: number; status: string; summary: string }[] = [],
 ) => {
   const row = {
     id: short + '-full-id',
     short,
     lastAt: agoMs(lastAgeSec),
     lastAgeSec,
+    // AI が自分で書いた最後の時刻(通知の到着は含めない)
+    lastActAt: agoMs(lastAgeSec),
+    lastActAgeSec: lastAgeSec,
+    unansweredDone,
     lastType: 'assistant',
     stopReason: 'end_turn',
     outstanding,
@@ -304,6 +310,19 @@ describe('judge — AI が起こされるかの判定', () => {
     const ss = [session('aaa', 10, [track('bmon', 'monitor', 30000)])];
     const v = judge([], ss, flagsNone, [{ what: '較正 v33', atMs: agoMs(300) }]);
     expect(v.level).toBe('ok');
+  });
+
+  it('完了通知が来たのに AI が返事をしていなければ danger', () => {
+    // 根拠は札の時刻ではなく、会話ログに残る完了通知そのもの。
+    const ss = [
+      session('aaa', 1800, [], [], [
+        { atMs: agoMs(1500), ageSec: 1500, status: 'completed', summary: 'Background command "掃引" completed' },
+      ]),
+    ];
+    const v = judge([], ss, flagsNone);
+    expect(ss[0]!.flag).toBe('完了通知に未反応');
+    expect(v.level).toBe('danger');
+    expect(v.headline).toContain('反応していない');
   });
 
   it('裁定待ちの札があれば、それが最優先', () => {

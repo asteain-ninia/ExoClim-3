@@ -129,6 +129,12 @@ class SessionReader {
     this.launches = []; // { atMs, tool, command }  切り離し起動の帰属に使う
     this.toolUses = new Map(); // tool_use_id -> { atMs, name, command, description }
     this.lastTs = null;
+    /**
+     * **AI が最後に何かを書いた時刻。** lastTs とは違う —
+     * lastTs には完了通知(queue-operation)も含まれるので、
+     * 「通知は来たが AI は動いていない」を見分けるにはこちらが要る。
+     */
+    this.lastAssistantAt = null;
     this.lastAssistantText = null;
     this.lastStopReason = null;
     this.lastType = null;

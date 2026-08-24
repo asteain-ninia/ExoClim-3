@@ -105,6 +105,15 @@ export interface Session {
   lastAgeSec: number | null;
   lastType?: string | null;
   stopReason?: string | null;
+  /**
+   * **AI が自分で書いた最後の時刻。** lastAt とは違う — lastAt には
+   * 完了通知の到着も含まれるので、「通知は来たが AI は動いていない」を
+   * 見分けるにはこちらを使う。
+   */
+  lastActAt?: number | null;
+  lastActAgeSec?: number | null;
+  /** 受け取ったのに返事をしていない完了通知。 */
+  unansweredDone?: { atMs: number | null; ageSec: number | null; status: string; summary: string }[];
   /** 終了通知の来ていない追跡。これがある間、セッションは呼び戻される。 */
   outstanding: Track[];
   armedCount?: number;
