@@ -109,6 +109,18 @@ async function main(): Promise<void> {
         `fold ${HOLDOUT_FOLD} の区画成績が真の保留評価`,
     );
   }
+  // --best <json>: 採用前の候補ベクトルで検証を回す(2026-08-25 追加。
+  // 候補の PNG 目視確認を constants.ts を触らずに行うため)。
+  // {vector: {...}} 形式(best_<run>.json)と素の {定数: 値} の両方を受ける
+  const bestIdx = process.argv.indexOf('--best');
+  if (bestIdx >= 0) {
+    const p = process.argv[bestIdx + 1];
+    if (!p) throw new Error('--best にパスが無い');
+    const raw = JSON.parse(fs.readFileSync(p, 'utf8')) as Record<string, unknown>;
+    const vec = (raw as { vector?: Record<string, number> }).vector ?? (raw as Record<string, number>);
+    Object.assign(MODEL_CONSTANTS, vec);
+    console.log(`候補評価モード: ${p} の定数を適用(constants.ts は不変)`);
+  }
   const accel = await openAccel();
   const t0 = Date.now();
   console.log('パイプライン実行中(実在地球 1°)…');
