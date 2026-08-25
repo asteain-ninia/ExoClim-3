@@ -976,6 +976,8 @@ interface ObsGrid2 {
 let obsIntermediateCache: {
   sstAnn: ObsGrid2;
   windSpeedAnn: Float64Array; // 12 か月の |V| 平均(2° 格子、行 0 = 北端)
+  /** [month] 可降水量 mm(NCEP R1、v8 の教師。2026-08-26) */
+  prwtrMonthly: ObsGrid2[];
 } | null = null;
 
 function getObsIntermediate(): NonNullable<typeof obsIntermediateCache> {
@@ -1000,8 +1002,69 @@ function getObsIntermediate(): NonNullable<typeof obsIntermediateCache> {
       windSpeedAnn[i] = (windSpeedAnn[i] ?? 0) + Math.hypot(uu, vv) / 12;
     }
   }
-  obsIntermediateCache = { sstAnn, windSpeedAnn };
+  const prwtrMonthly: ObsGrid2[] = [];
+  for (let m = 1; m <= 12; m++) prwtrMonthly.push(load(`prwtr_m${String(m).padStart(2, '0')}.json`));
+  obsIntermediateCache = { sstAnn, windSpeedAnn, prwtrMonthly };
   return obsIntermediateCache;
+}
+
+// ---- W(可降水量)の係留(目的関数 v8、2026-08-26)----
+// v7 は SST・風を係留したが W を採点せず、「W=4mm の非物理解でも分布を
+// 均せば報酬」の穴が残った(外部監査の指摘 + τ 機構が捨てられた実測)。
+// 事前登録: docs/事前登録_目的関数v8_Wの係留_2026-08-26.md
+export interface PrecipitableWaterScore {
+  waterRmseMm: number;
+  obsSdWaterMm: number;
+}
+
+export function precipitableWaterScore(result: PipelineResult): PrecipitableWaterScore {
+  const wMonthly = result.precipitation?.monthlyWaterMm;
+  // 非保存経路・最小モックでは W が無い — 項を 0(SD 1)にして影響させない
+  if (!wMonthly || wMonthly.length !== 12) return { waterRmseMm: 0, obsSdWaterMm: 1 };
+  const obs = getObsIntermediate();
+  const grid = result.context.grid;
+  const f = Math.round(2 / grid.resolutionDeg);
+  const OW = obs.sstAnn.width;
+  const OH = obs.sstAnn.height;
+  let se = 0;
+  let wsum = 0;
+  let oSum = 0;
+  let oSq = 0;
+  for (let m = 0; m < 12; m++) {
+    const og = obs.prwtrMonthly[m];
+    const mw = wMonthly[m];
+    if (!og || !mw) continue;
+    for (let cr = 0; cr < OH; cr++) {
+      const lat = 89 - cr * 2;
+      const aw = Math.cos((lat * Math.PI) / 180);
+      for (let cc = 0; cc < OW; cc++) {
+        const raw = og.values[cr * OW + cc] ?? -9999;
+        if (raw <= -9000) continue;
+        const o = Math.max(0, raw); // 極域のごく小さな負値は 0 へ(README 参照)
+        let s = 0;
+        let n = 0;
+        for (let dr = 0; dr < f; dr++) {
+          for (let dc = 0; dc < f; dc++) {
+            const gr = cr * f + dr;
+            const gc = cc * f + dc;
+            if (gr >= grid.heightCells || gc >= grid.widthCells) continue;
+            s += mw[gr * grid.widthCells + gc] ?? 0;
+            n++;
+          }
+        }
+        if (n === 0) continue;
+        const d = s / n - o;
+        se += aw * d * d;
+        wsum += aw;
+        oSum += aw * o;
+        oSq += aw * o * o;
+      }
+    }
+  }
+  if (wsum <= 0) return { waterRmseMm: 0, obsSdWaterMm: 1 };
+  const mean = oSum / wsum;
+  const sd = Math.sqrt(Math.max(1e-9, oSq / wsum - mean * mean));
+  return { waterRmseMm: Math.sqrt(se / wsum), obsSdWaterMm: sd };
 }
 
 export interface IntermediateFieldScore {

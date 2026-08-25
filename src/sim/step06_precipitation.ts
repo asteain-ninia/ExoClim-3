@@ -2166,6 +2166,11 @@ export async function computePrecipitation(
   return {
     monthlyPrecipMm,
     annualPrecipMm,
+    // 可降水量の最終反復解(v8 の採点対象)。非保存経路では月が null のまま
+    // なので出さない
+    ...(warmStart.every((w) => w !== null)
+      ? { monthlyWaterMm: warmStart as Float32Array[] }
+      : {}),
     coupling,
     ...(land ? { land } : {}),
     ...(soil

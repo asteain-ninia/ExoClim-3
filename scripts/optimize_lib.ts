@@ -5,7 +5,7 @@
 import { MODEL_CONSTANTS } from '../src/sim/constants';
 import type { PipelineResult } from '../src/sim/types';
 import { fieldScore, itczLineRmse, koppenScore, scoreRegionGates,
-  intermediateFieldScore, REGION_GATES,
+  intermediateFieldScore, precipitableWaterScore, REGION_GATES,
 } from './scoring';
 import { gateFoldAssignments, keepExcludingFold } from './holdout';
 import { EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
@@ -228,6 +228,11 @@ export interface Scores {
   fitnessV5: number;
   /** v6 の値(帯別位相版。v7 移行後は併記のみ) */
   fitnessV6: number;
+  /** v7b(SST・風の係留まで。v8 併記用) */
+  fitnessV7: number;
+  /** W(可降水量)の月別 RMSE mm と観測 SD(v8) */
+  waterRmseMm: number;
+  obsSdWaterMm: number;
   /** v7: SST 偏差 RMSE(°C)と陸上風速 RMSE(m/s)。無次元化前の生値 */
   sstAnomRmseC: number;
   sstSignErrC: number;
@@ -376,6 +381,18 @@ export const OBJECTIVE_V7 = {
   wLandWind: 4,
 } as const;
 
+/**
+ * 目的関数 v8(2026-08-26)= v7b + W(可降水量)の係留 1 項。
+ * v7 は SST・風を係留したが W を採点せず、「W=4mm の非物理解でも分布を
+ * 均せば報酬」の穴が残った(監査指摘 + v35 で τ 機構が捨てられた実測)。
+ * 重みは wTempMean と同値の対称性で決め、現状値を見た調整はしない。
+ * 事前登録: docs/事前登録_目的関数v8_Wの係留_2026-08-26.md
+ */
+export const OBJECTIVE_V8 = {
+  ...OBJECTIVE_V7,
+  wPrecipWater: 4,
+} as const;
+
 // 目的関数 v3(2026-08-02 に事前登録 — 利用者の許可を得て v2 から改訂)。
 // v2 も併記のため計算し続ける。v2 の定義は下記のとおり:
 //   fitnessV2 = 大分類% + 1.1×地域ゲート数 + 0.25×詳細%
@@ -438,7 +455,7 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
 
   // ---- v3(2026-08-02〜2026-08-16 に探索が最大化していた量。以後は併記のみ)----
   // 各誤差を**観測自身の空間ばらつき**で割ってから重みを掛ける。
-  const W = OBJECTIVE_V7;
+  const W = OBJECTIVE_V8;
   /** ゲート項を除いた連続部分。v3 と v4 で共通なので一度だけ組む */
   const continuousV3 =
     k.majorPct +
@@ -471,11 +488,20 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
   // v6 + 中間場の係留(SST 偏差・陸上風速、観測 SD で無次元化)。
   // v7b(2026-08-22 追記 3): SST 項に符号矛盾 RMSE を同じ重みで加える。
   // 全球 RMSE では縁海の偽寒流の罰が 0.05 点に希釈された(旧物理が +0.40 勝つ)
-  const fitness =
+  const fitnessV7 =
     fitnessV6 -
     W.wSstAnom * (im.sstAnomRmseC / Math.max(1e-9, im.obsSdSstAnomC)) -
     W.wSstAnom * (im.sstSignErrC / Math.max(1e-9, im.obsSdSstAnomC)) -
     W.wLandWind * (im.landWindRmseMs / Math.max(1e-9, im.obsSdLandWindMs));
+  // ---- v8(2026-08-26 の事前登録)= v7b + W の係留 ----
+  // **酸性試験 3 本 ✗ のため有効化は保留**(判定: W 項は系統バイアスで飽和
+  // しており、固定 λ の即時降雨が W の動的応答を殺している。凝結閉包
+  // (台帳 22)が物理側の前提)。閉包実装後に酸性試験を再走してから有効化。
+  const pw = precipitableWaterScore(result);
+  const fitnessV8 =
+    fitnessV7 - W.wPrecipWater * (pw.waterRmseMm / Math.max(1e-9, pw.obsSdWaterMm));
+  const fitness = fitnessV7;
+  void fitnessV8;
 
   // ---- 数値的健全性(2026-08-14)----
   // `npm run validate` と**同じ凍結済みの関門**を使う。判定の二重定義を作らない。
@@ -504,6 +530,9 @@ export function evaluateResult(result: PipelineResult, holdoutFold?: number): Sc
     fitnessV4,
     fitnessV5,
     fitnessV6,
+    fitnessV7,
+    waterRmseMm: pw.waterRmseMm,
+    obsSdWaterMm: pw.obsSdWaterMm,
     sstAnomRmseC: im.sstAnomRmseC,
     sstSignErrC: im.sstSignErrC,
     landWindRmseMs: im.landWindRmseMs,

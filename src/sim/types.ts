@@ -137,6 +137,11 @@ export interface LandSurfaceState {
 export interface PrecipitationResult {
   /** [month][cell] 降水量 mm/月 */
   monthlyPrecipMm: Float32Array[];
+  /**
+   * [month][cell] 可降水量 W mm(保存型ソルバの最終反復解。2026-08-26、
+   * 目的関数 v8「W の係留」の採点対象。非保存経路では undefined)
+   */
+  monthlyWaterMm?: Float32Array[];
   /** [cell] 年降水量 mm */
   annualPrecipMm: Float32Array;
   /** 結合反復(土壌水分 ⇄ 再循環)の収束診断 */

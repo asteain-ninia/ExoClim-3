@@ -9,6 +9,7 @@
 | uwnd.10m / vwnd.10m .mon.ltm.nc、uwnd10_mNN / vwnd10_mNN .json | 10m 風の月別(12 か月) | NCEP/NCAR Reanalysis 1 |
 | slp.mon.ltm.nc、slp_jan/jul.json | 海面気圧 | NCEP/NCAR Reanalysis 1 |
 | icec.ltm.nc、icec_jan/jul.json | 海氷密接度 | NOAA OI SST V2 |
+| pr_wtr.eatm.mon.ltm.nc、prwtr_mNN.json | 可降水量の月別(12 か月、mm) | NCEP/NCAR Reanalysis 1(変換は convert_prwtr.py。極域にごく小さな負値があり得る — 採点側で 0 に切り上げる) |
 | precip.mon.ltm.nc、precip_ocean_mNN.json | 海上降水 | (別途収蔵: 変換は convert_precip.py) |
 
 共通格子: 2°(90×180)、行 0 = 北端(中心 89°N)、列 0 = 西端(中心 −179°)。
