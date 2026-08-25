@@ -86,7 +86,8 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['winterFloorFracOfWettest', 0.2, 0.5],
   ['winterFloorMaxMm', 12, 34],
   ['equatorialItczResidual', 0.3, 0.8],
-  ['frontalLiftBoost', 0.4, 1.2],
+  // v35(2026-08-25): 上限 1.2→1.6(D 類範囲拡張 3 件、docs/事前登録_D類範囲拡張3件)
+  ['frontalLiftBoost', 0.4, 1.6],
   ['precipMonthBlend', 0.04, 0.2],
   ['warmHumidConvectiveBoost', 0, 0.4],
   // **外した(2026-08-17、親が 0)**: `warmHumidConvectiveBoost` を較正が 0 まで
@@ -146,7 +147,8 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // v27: 下限を 7→4 へ拡張。高所加熱の分母修正の補償で v26 が下端 7 に張り付いた
   // (docs/実験記録_v26判定_2026-08-18.md 発見 3)
   ['itczMonsoonPullDeg', 4, 13],
-  ['itczPlateauPullDeg', 6, 14],
+  // v35(2026-08-25): 上限 14→20(実在のトラフ北上 15〜20°。同上)
+  ['itczPlateauPullDeg', 6, 20],
   ['itczSmoothLocalBlend', 0.25, 0.55],
   ['itczDeclinationFollowRatio', 0.28, 0.42],
   ['subtropicalCellEastBoost', 0.3, 0.9],
@@ -163,7 +165,8 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // v30(2026-08-21): conveyorLatPolewardDeg を復帰。v27〜v28 では基準点
   // strength=0 で死ぬため外していたが、v29 種で conveyor=15 が生き残り
   // 基準点が変わった。ゴビ B→D(45b-2 の分解)を較正が自分で裁ける
-  ['conveyorLatPolewardDeg', 0, 8],
+  // v35(2026-08-25): 上限 8→12(大気の川の到達緯度。同上)
+  ['conveyorLatPolewardDeg', 0, 12],
   // ---- v31 追加(2026-08-21、利用者 FB 由来。docs/事前登録_v31物理バッチ)----
   // ソマリ型湧昇: 単独掃引は全球中立(気温微改善)。価値は局所実在性
   ['somaliUpwellingC', 0, 4],
