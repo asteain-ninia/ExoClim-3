@@ -93,6 +93,14 @@ export interface AirflowResult {
   monthlyWindU: Float32Array[];
   /** [month][cell] 南北成分 m/s(北向き正) */
   monthlyWindV: Float32Array[];
+  /**
+   * [month][cell] 気柱輸送風(陸面摩擦を掛ける前。山岳減衰・上限は適用済み)。
+   * 水蒸気の大半が乗る自由大気は陸面粗度で 10m 風ほど減速しない
+   * (2026-08-25、外部監査 #1。docs/事前登録_気柱輸送風の分離_2026-08-25.md)。
+   * moistureWindSurfaceBlend = 1(既定)では作られない(undefined)。
+   */
+  monthlyColumnWindU?: Float32Array[];
+  monthlyColumnWindV?: Float32Array[];
 }
 
 export interface TemperatureResult {

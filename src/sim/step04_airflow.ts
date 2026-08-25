@@ -21,6 +21,11 @@ export function computeAirflow(
 
   const monthlyWindU: Float32Array[] = [];
   const monthlyWindV: Float32Array[] = [];
+  // 気柱輸送風(陸面摩擦前。2026-08-25 監査 #1、事前登録_気柱輸送風の分離)。
+  // **blend = 1(既定)では作らない = 従来とビット一致・費用ゼロ。**
+  const wantColumn = (K.moistureWindSurfaceBlend as number) !== 1;
+  const monthlyColumnWindU: Float32Array[] | undefined = wantColumn ? [] : undefined;
+  const monthlyColumnWindV: Float32Array[] | undefined = wantColumn ? [] : undefined;
 
   // 段 42: モンスーン反転の経度ゲート(経度列の熱帯陸割合)。
   // step02 の troughLandFrac と同じ定義。**係数 0 のときは計算ごと飛ばす**
@@ -43,6 +48,8 @@ export function computeAirflow(
   for (let m = 0; m < MONTHS_PER_YEAR; m++) {
     const u = new Float32Array(grid.cellCount);
     const v = new Float32Array(grid.cellCount);
+    const cu = wantColumn ? new Float32Array(grid.cellCount) : null;
+    const cv = wantColumn ? new Float32Array(grid.cellCount) : null;
     const p = windBelt.monthlyPressureAnomalyHpa[m];
     const centers = itcz.monthlyCenterLatDegByCol[m];
     const ridgeBaseN = windBelt.monthlyRidgeLatNDeg[m] ?? 31;
@@ -208,6 +215,19 @@ export function computeAirflow(
           bu *= damp;
           bv *= damp;
         }
+        // 気柱輸送風: 陸面摩擦を掛ける**前**の流れを別持ち(監査 #1)。
+        // 上限は地表と同じ基準で別途掛ける
+        if (cu && cv) {
+          let ku = bu;
+          let kv = bv;
+          const kMag = Math.hypot(ku, kv);
+          if (kMag > 13) {
+            ku *= 13 / kMag;
+            kv *= 13 / kMag;
+          }
+          cu[i] = ku;
+          cv[i] = kv;
+        }
         // --- 陸面摩擦(v31 件 3、2026-08-21。事前登録_v31物理バッチ)---
         // 陸の粗度による地表風の減速。観測の陸上月平均 10m 風は 2〜4 m/s だが
         // モデルは帯状卓越風 6.7〜9 がほぼ素通しで、陸の水蒸気移流が
@@ -230,6 +250,13 @@ export function computeAirflow(
     }
     monthlyWindU.push(u);
     monthlyWindV.push(v);
+    if (cu && cv && monthlyColumnWindU && monthlyColumnWindV) {
+      monthlyColumnWindU.push(cu);
+      monthlyColumnWindV.push(cv);
+    }
+  }
+  if (monthlyColumnWindU && monthlyColumnWindV) {
+    return { monthlyWindU, monthlyWindV, monthlyColumnWindU, monthlyColumnWindV };
   }
   return { monthlyWindU, monthlyWindV };
 }

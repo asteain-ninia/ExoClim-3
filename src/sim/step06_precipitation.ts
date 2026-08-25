@@ -1538,11 +1538,27 @@ export async function computePrecipitation(
       }
     }
     const diffOpt: number | Float32Array = diffField ?? K.moistureEddyDiffusivityM2PerS;
+    // 気柱輸送風(2026-08-25、監査 #1。事前登録_気柱輸送風の分離):
+    // **輸送ソルバだけ** V_q = blend·V_10m + (1−blend)·V_free を読む。
+    // 蒸発・G 判定・風の採点は地表風のまま。blend=1 は従来とビット一致
+    let uq = u;
+    let vq = v;
+    const wBlend = K.moistureWindSurfaceBlend as number;
+    const colU = airflow.monthlyColumnWindU?.[m];
+    const colV = airflow.monthlyColumnWindV?.[m];
+    if (wBlend !== 1 && colU && colV) {
+      uq = new Float32Array(N);
+      vq = new Float32Array(N);
+      for (let i = 0; i < N; i++) {
+        uq[i] = wBlend * (u[i] ?? 0) + (1 - wBlend) * (colU[i] ?? 0);
+        vq[i] = wBlend * (v[i] ?? 0) + (1 - wBlend) * (colV[i] ?? 0);
+      }
+    }
     const r = solveMoistureTransport(
       grid,
       ctx.params.body.radiusKm,
-      u,
-      v,
+      uq,
+      vq,
       src,
       rate,
       {
