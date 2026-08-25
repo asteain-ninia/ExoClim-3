@@ -89,6 +89,78 @@ export interface EvaporationResult {
  * 海セルの表面温度は EBM の解(混合層温度)をそのまま使う。
  * 風速は Step 4 の地表風。どちらも既にある場で、新しい入力は要らない。
  */
+/**
+ * 診断的境界層温 T_bl(°C)。定常移流・緩和
+ *   V·∇T_bl = (T_s − T_bl)/τ
+ * を風上差分の Gauss–Seidel で解く(2026-08-25、海気分離 段 B 改。
+ * docs/事前登録_境界層温による蒸発_2026-08-25.md)。
+ * 全セルで解く — 冬の大陸冷気は陸で生まれて海へ流出するため、陸を
+ * 飛ばすと肝心の移流源が消える。海の蒸発だけがこの場を読む。
+ */
+export function solveBoundaryLayerTemp(
+  grid: { widthCells: number; heightCells: number; cellCount: number; resolutionDeg: number },
+  radiusKm: number,
+  tS: Float32Array,
+  u: Float32Array,
+  v: Float32Array,
+  tauDays: number,
+): Float32Array {
+  const W = grid.widthCells;
+  const H = grid.heightCells;
+  const tauS = tauDays * 86400;
+  const out = new Float32Array(grid.cellCount);
+  out.set(tS.subarray(0, grid.cellCount));
+  const dyM = ((Math.PI * radiusKm * 1000) / 180) * grid.resolutionDeg;
+  const invTau = 1 / tauS;
+  // 収束: 移流・緩和は対角優位で単調。80 掃引 + 早期終了(最大変化 1e-3°C)
+  for (let sweep = 0; sweep < 80; sweep++) {
+    let maxD = 0;
+    // 奇数掃引は走査順を反転して上流方向の伝播を速める
+    const rev = sweep % 2 === 1;
+    for (let rr = 0; rr < H; rr++) {
+      const row = rev ? H - 1 - rr : rr;
+      const lat = 90 - (row + 0.5) * grid.resolutionDeg;
+      const dxM = Math.max(20000, dyM * Math.cos((lat * Math.PI) / 180));
+      for (let cc = 0; cc < W; cc++) {
+        const col = rev ? W - 1 - cc : cc;
+        const i = row * W + col;
+        const uu = u[i] ?? 0;
+        const vv = v[i] ?? 0;
+        let num = (tS[i] ?? 0) * invTau;
+        let den = invTau;
+        // 東西(周期境界): u>0 は西から流入
+        if (uu > 0) {
+          const j = row * W + ((col - 1 + W) % W);
+          const a = uu / dxM;
+          num += a * (out[j] ?? 0);
+          den += a;
+        } else if (uu < 0) {
+          const j = row * W + ((col + 1) % W);
+          const a = -uu / dxM;
+          num += a * (out[j] ?? 0);
+          den += a;
+        }
+        // 南北(極で打ち切り): v>0(北向き)は南 = row+1 から流入
+        if (vv > 0 && row < H - 1) {
+          const a = vv / dyM;
+          num += a * (out[(row + 1) * W + col] ?? 0);
+          den += a;
+        } else if (vv < 0 && row > 0) {
+          const a = -vv / dyM;
+          num += a * (out[(row - 1) * W + col] ?? 0);
+          den += a;
+        }
+        const next = num / den;
+        const d = Math.abs(next - (out[i] ?? 0));
+        if (d > maxD) maxD = d;
+        out[i] = next;
+      }
+    }
+    if (maxD < 1e-3) break;
+  }
+  return out;
+}
+
 export function computeOceanEvaporation(
   ctx: SimContext,
   temperature: TemperatureResult,
@@ -108,6 +180,18 @@ export function computeOceanEvaporation(
     const t = temperature.monthlyTemperatureC[m];
     const u = airflow.monthlyWindU[m];
     const v = airflow.monthlyWindV[m];
+    // 境界層温(τ=0 では解かない = 従来とビット一致)
+    const tbl =
+      (K.airSurfaceThermalRelaxationDays as number) > 0 && t && u && v
+        ? solveBoundaryLayerTemp(
+            grid,
+            params.body.radiusKm,
+            t,
+            u,
+            v,
+            K.airSurfaceThermalRelaxationDays,
+          )
+        : null;
     for (let row = 0; row < grid.heightCells; row++) {
       const lat = 90 - (row + 0.5) * grid.resolutionDeg;
       const w = Math.cos((lat * Math.PI) / 180);
@@ -125,6 +209,14 @@ export function computeOceanEvaporation(
         // 3 版(2026-08-24): 大気側湿度を風上の気温で取る。冬の大陸風下の海では
         // 風上が冷たく q_a が下がり蒸発が増える(実物の冬の蒸発極大)。既定 0 = 従来
         let deficit = qs * (1 - K.evapOceanRelHumidity);
+        // 段 B 改: 大気側湿度だけ境界層温で取る(飽和側は T_s のまま)。
+        // 冬の暖流上に冷気が流入すると qs(T_s) − RH·qs(T_bl) が開く
+        if (tbl) {
+          deficit = Math.max(
+            0,
+            qs - K.evapOceanRelHumidity * saturationSpecificHumidity(tbl[i] ?? tc, pressureHpa),
+          );
+        }
         if (K.evapUpwindHumidity > 0) {
           const uu = u?.[i] ?? 0;
           const vv = v?.[i] ?? 0;

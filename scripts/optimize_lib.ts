@@ -55,8 +55,16 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // v34(2026-08-24): 沈降の海盆非対称(descW の源泉側)。単独掃引で単調改善・
   // 守り無傷(a 0→0.6: 東岸 descW 0.97→0.74、continuousV3 +0.33、大分類 +0.25、
   // argentina share 0.079→0.159)。docs/事前登録_沈降の海盆非対称_2026-08-24.md
-  ['subsidenceBasinAsymmetry', 0, 0.8],
+  // v35(2026-08-25): 上限 0.8→0.95。物理根拠 = 海盆西翼に沈降は実在しない
+  // (docs/事前登録_海盆非対称の上限拡張_2026-08-25.md)。v34b は 0.8 上限に張り付いた
+  ['subsidenceBasinAsymmetry', 0, 0.95],
   ['subsidenceBasinAsymDecayKm', 800, 3000],
+  // v35(2026-08-25): 気柱輸送風(監査 #1)。東岸仮説は棄却されたが乾端形成・
+  // 内陸輸送のレバーとして登録(docs/事前登録_気柱輸送風の分離 予測 86〜89)
+  ['moistureWindSurfaceBlend', 0.4, 1],
+  // v35(2026-08-25): 境界層温の緩和時間(海気分離 段 B 改)。位相 −8.3 日
+  // (docs/事前登録_境界層温による蒸発 判定)。上限 10 = 境界層の物理スケール
+  ['airSurfaceThermalRelaxationDays', 0, 10],
   // **外した(2026-08-17)**: 範囲 [0.4, 1.2] は供給の分布の下に沈んで
   // ゲートが 96% 常時飽和(死んだ範囲)。掃引で生かすと東岸緩和が絞られて
   // **本丸の C→B 地域(米南東・東アジア)が乾く**逆効果と確認。
