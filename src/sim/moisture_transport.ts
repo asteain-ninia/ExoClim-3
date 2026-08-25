@@ -82,6 +82,14 @@ export interface MoistureTransportOptions {
    */
   holdingCapacityMm?: ArrayLike<number>;
   /**
+   * [cell] 背景凝結率 1/月(**二成分閉包**、2026-08-26 監査 #3。
+   * docs/事前登録_凝結閉包の二成分化_2026-08-26.md)。
+   * 渡すと C = lin·W + rate·max(0, W − capacity) になる — 層状の背景凝結
+   * (W に比例、ゆっくり)と湿潤対流(閾値超過分だけ、速い)の和。
+   * 渡さない・全 0 は従来と厳密に一致。
+   */
+  linearRatePerMonth?: ArrayLike<number>;
+  /**
    * [cell] 鉛直輸出率 1/月(**沈降域で柱から抜ける水蒸気**)。
    *
    * なぜ要るか(2026-08-04 実測、docs/実験記録_保存型水蒸気輸送_2026-08-04.md):
@@ -214,6 +222,18 @@ export function solveMoistureTransport(
     }
   }
   const capacity = capacityIsZero ? null : capacityGiven;
+  const linGiven = options.linearRatePerMonth ?? null;
+  let linIsZero = linGiven !== null;
+  if (linGiven) {
+    for (let i = 0; i < N; i++) {
+      if ((linGiven[i] ?? 0) > 0) {
+        linIsZero = false;
+        break;
+      }
+    }
+  }
+  /** 背景凝結率(全 0 なら null = 従来と厳密一致) */
+  const linRate = linIsZero ? null : linGiven;
   const vExport = options.verticalExportRatePerMonth ?? null;
 
   const aM = radiusKm * 1000;
@@ -254,7 +274,8 @@ export function solveMoistureTransport(
     if (warm) {
       cur[i] = Math.max(0, warm[i] ?? 0);
     } else {
-      const rate = Math.max(1e-6, condensationRatePerMonth[i] ?? 0);
+      const rate =
+        Math.max(1e-6, condensationRatePerMonth[i] ?? 0) + (linRate ? Math.max(0, linRate[i] ?? 0) : 0);
       cur[i] = Math.max(0, (sourceMmPerMonth[i] ?? 0) / rate);
     }
   }
@@ -275,6 +296,7 @@ export function solveMoistureTransport(
   const cSArr = new Float64Array(N);
   const diagArr = new Float64Array(N);
   const rateArr = new Float64Array(N);
+  const linArr = new Float64Array(N);
   const exArr = new Float64Array(N);
   for (let row = 0; row < H; row++) {
     const area = areaM2[row] ?? 1;
@@ -321,11 +343,14 @@ export function solveMoistureTransport(
       cNArr[i] = iN >= 0 ? (lenN * (Math.max(0, -unN) + dN / dyCenterM)) / area : 0;
       cSArr[i] = iS >= 0 ? (lenS * (Math.max(0, unS) + dS / dyCenterM)) / area : 0;
       const rateI = Math.max(1e-6, condensationRatePerMonth[i] ?? 0);
+      const linI = linRate ? Math.max(0, linRate[i] ?? 0) : 0;
       const exI = vExport ? Math.max(0, vExport[i] ?? 0) : 0;
       rateArr[i] = rateI;
+      linArr[i] = linI;
       exArr[i] = exI;
-      // 凝結する枝の対角。閾値ありのときは掃引ごとに枝を選び直す
-      diagArr[i] = rateI + exI + outRate;
+      // 凝結する枝の対角。閾値ありのときは掃引ごとに枝を選び直す。
+      // 背景凝結 lin は枝に依らず常に効く(だから両方の枝の対角に入る)
+      diagArr[i] = rateI + linI + exI + outRate;
     }
   }
 
@@ -725,15 +750,16 @@ export function solveMoistureTransport(
           //   凝結する枝: diag = rate + ex + outRate、rhs に + rate·cap
           //   通過する枝: diag = ex + outRate（凝結しない = 水は下流へ)
           let diagI = diagArr[i] ?? 1;
-          let condNow = (rateArr[i] ?? 0) * wi;
+          let condNow = ((rateArr[i] ?? 0) + (linArr[i] ?? 0)) * wi;
           if (capacity) {
             const cap = Math.max(0, capacity[i] ?? 0);
             if (wi > cap) {
               rhs += (rateArr[i] ?? 0) * cap;
-              condNow = (rateArr[i] ?? 0) * (wi - cap);
+              condNow = (rateArr[i] ?? 0) * (wi - cap) + (linArr[i] ?? 0) * wi;
             } else {
-              diagI = Math.max(1e-9, (exArr[i] ?? 0) + (outRateArr[i] ?? 0));
-              condNow = 0;
+              // 通過する枝でも背景凝結 lin は残る(二成分閉包)
+              diagI = Math.max(1e-9, (linArr[i] ?? 0) + (exArr[i] ?? 0) + (outRateArr[i] ?? 0));
+              condNow = (linArr[i] ?? 0) * wi;
             }
           }
           rowRhs[col] = rhs;
@@ -821,7 +847,9 @@ export function solveMoistureTransport(
     // 凝結で除いた水は必ず同じセルの降水に計上する(漏れを作らない)。
     // 閾値ありのときは「持てる量を超えたぶん」だけが降る
     const excess = capacity ? Math.max(0, wi - Math.max(0, capacity[i] ?? 0)) : wi;
-    condensationMm[i] = Math.max(1e-6, condensationRatePerMonth[i] ?? 0) * excess;
+    condensationMm[i] =
+      Math.max(1e-6, condensationRatePerMonth[i] ?? 0) * excess +
+      (linRate ? Math.max(0, linRate[i] ?? 0) * wi : 0);
     exportedMm[i] = vExport ? Math.max(0, vExport[i] ?? 0) * wi : 0;
   }
   return { waterMm, condensationMm, exportedMm, iterations, residual, converged };

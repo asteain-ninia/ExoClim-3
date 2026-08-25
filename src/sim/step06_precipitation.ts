@@ -1525,6 +1525,30 @@ export async function computePrecipitation(
       // 0 のセルは水蒸気が溜まり続けるので下限を置く(輸送側でも安全側に効く)
       rate[i] = Math.max(0.05, (travelKmPerMonth / Math.max(1, lKm)) * (G[i] ?? 0));
     }
+    // ---- 凝結閉包の二成分化(2026-08-26、監査 #3。既定 c=0 ビット一致)----
+    // C = lin·W + convRate·max(0, W − cap)。
+    //   lin = (1−c)·rate_old + c·(背景凝結)  /  convRate = c·(対流調整)
+    //   cap = RHcrit·W_sat(T)/max(0.05, G)   — 持ち上げは閾値を下げ、
+    //   沈降(G 小)は閾値を上げて対流を止める(水は降らず下流へ輸出)
+    // docs/事前登録_凝結閉包の二成分化_2026-08-26.md
+    const MONTH_DAYS = 30.44; // SECONDS_PER_MONTH と同じ月の定義
+    const cClosure = K.condensationClosureBlend as number;
+    let linRate: Float32Array | null = null;
+    let capField: Float32Array | null = null;
+    if (cClosure > 0) {
+      const pHpa = ctx.params.atmosphere.surfacePressureBar * 1013.25;
+      const bgRate = MONTH_DAYS / Math.max(0.1, K.backgroundCondensationTimeDays);
+      const convRate = MONTH_DAYS / Math.max(0.05, K.convectiveAdjustmentDays);
+      linRate = new Float32Array(N);
+      capField = new Float32Array(N);
+      for (let i = 0; i < N; i++) {
+        linRate[i] = (1 - cClosure) * (rate[i] ?? 0) + cClosure * bgRate;
+        const wSat = saturatedColumnMm(tField[i] ?? 0, pHpa);
+        capField[i] =
+          (K.criticalColumnRelativeHumidity * wSat) / Math.max(0.05, G[i] ?? 0);
+        rate[i] = cClosure * convRate;
+      }
+    }
     // **ストーム混合を拡散の場として組む(段 36)。**
     // D(i) = D₀ × (1 + boost × supplyW × exp(−coastKm/decayKm))
     // **拡散は保存的なので水は湧かない**(源泉に足すのとは違う)。
@@ -1562,6 +1586,8 @@ export async function computePrecipitation(
       src,
       rate,
       {
+        ...(linRate ? { linearRatePerMonth: linRate } : {}),
+        ...(capField ? { holdingCapacityMm: capField } : {}),
         diffusivityM2PerS: diffOpt,
         // **上限が答えを決めないところまで上げる。** 既定 4000 では 84 か月分が
         // 未収束のまま残った(2026-08-09)。EBM で 3 回踏んだ隠しパラメータと

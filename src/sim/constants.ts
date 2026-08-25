@@ -692,6 +692,22 @@ export const MODEL_CONSTANTS = {
    * **0 = 解かない・従来とビット一致。**
    */
   airSurfaceThermalRelaxationDays: 0,
+  /**
+   * 凝結閉包の二成分化(2026-08-26、監査 #3。
+   * docs/事前登録_凝結閉包の二成分化_2026-08-26.md)。
+   * 現行の C = (U_ref/L)·G·W は持ち上げの強さがそのまま水の寿命になり、
+   * 全球 W 4mm(実物 25)・滞留 1.1 日(実物 ~9)の即時降雨を作る。
+   * 混合率 c で背景凝結(W/τ_bg)+ 対流調整(臨界柱湿度の超過分/τ_conv)へ
+   * 置き換える。G は「寿命の係数」から「対流閾値の変調」へ役割が移る。
+   * **0 = 旧式と厳密にビット一致。**
+   */
+  condensationClosureBlend: 0,
+  /** 背景(層状)凝結の時定数 日(実物の滞留 ~9 日は対流込み — 背景は長い) */
+  backgroundCondensationTimeDays: 15,
+  /** 湿潤対流の発火する臨界柱相対湿度(cap = これ × W_sat / G) */
+  criticalColumnRelativeHumidity: 0.7,
+  /** 対流調整の時定数 日 */
+  convectiveAdjustmentDays: 1,
 
   // ---- Step 6 降水 (docs/spec/06_降水.md) ----
   /**
