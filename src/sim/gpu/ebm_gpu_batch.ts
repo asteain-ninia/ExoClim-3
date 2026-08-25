@@ -36,7 +36,7 @@ import type { AccelControl, EbmAccelResult, EbmConstants, EbmStaticFields } from
 import { throwIfCancelled, yieldToEventLoop } from '../run_control';
 
 /** セル別静的場の本数(単発版と同じ。WGSL 側の添字と一致させる) */
-const CELL_FIELDS = 10;
+const CELL_FIELDS = 11;
 /** 月別セル別の場の数: 0 cloud, 1 windU, 2 windV, 3 evap, 4 evapFbK, 5 evapRefT */
 const MONTHLY_FIELDS = 6;
 /** 作業領域の本数 */
@@ -97,7 +97,7 @@ struct LevelParams {
 @group(0) @binding(0) var<uniform> P : Params;
 // セル別静的場(各 field のストライドは L×N): 0 heatCap, 1 aEff,
 // 2 surfAlbedoBase, 3 iceOnset, 4 qFlux, 5 elevM, 6 landFrac,
-// 7 diffFactor, 8 interior01, 9 permanentIce
+// 7 diffFactor, 8 interior01, 9 permanentIce, 10 insCapFrac(海氷断熱の掛け先 = 熱容量の海成分率)
 @group(0) @binding(1) var<storage, read> cells : array<f32>;
 // 行別(各 field のストライドは L×H): 0 cosCenter, 1 metricZonal,
 // 2 rowIsChannel, 3 insolAnnual, 4.. 12 か月の日射
@@ -181,7 +181,7 @@ fn prepA(@builtin(global_invocation_id) gid : vec3<u32>) {
   let albedo = cloud + (1.0 - cloud) * aSurf;
 
   // 断熱は海の側だけの現象なので seaW で掛ける
-  let capEff = cellF(0u, i) * (1.0 - L.seaIceInsul * seaW * oceanFrac) * P.capScale;
+  let capEff = cellF(0u, i) * (1.0 - L.seaIceInsul * seaW * cellF(10u, i)) * P.capScale;
   // 氷を通じた海からの伝導 F = k(T_freeze − T)/h。T の関数なので陰的に扱う
   var iceCond = 0.0;
   if (L.slabIce == 1u && ice[i] > 0.0) {
@@ -644,6 +644,7 @@ export function createEbmGpuBatchAccel(
           f.diffFactor,
           f.interior01,
           f.permanentIce,
+          f.insCapFrac,
         ];
         for (let fd = 0; fd < CELL_FIELDS; fd++) {
           scratchCells.set(cellSrc[fd]!, fd * LN + lvl * N);

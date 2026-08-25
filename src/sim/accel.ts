@@ -145,6 +145,12 @@ export interface EbmStaticFields {
   elevM: Float32Array;
   /** [cell] 陸率 0〜1 */
   landFrac: Float32Array;
+  /**
+   * [cell] 熱容量に占める海成分の割合 0〜1(海氷断熱の掛け先。
+   * 2026-08-25 混合セル修正 — 断熱は海成分だけを切り離す。
+   * 純海 = 1・純陸 = 0 で旧式と厳密に一致)
+   */
+  insCapFrac: Float32Array;
   /** [cell] 海の拡散増強込みの拡散係数倍率 */
   diffFactor: Float32Array;
   /** [cell] 内陸度 0〜1 */

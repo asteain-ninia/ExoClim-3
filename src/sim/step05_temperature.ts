@@ -415,6 +415,7 @@ export async function computeTemperature(
     K.olrAWm2 - K.greenhouseDeltaAWm2 * Math.log2(Math.max(0.05, atm.greenhouseStrength));
   const gamma = K.lapseRateCPerKm / 1000;
   const heatCap = new Float64Array(N);
+  const insCapFrac = new Float64Array(N);
   const aEff = new Float64Array(N);
   const surfAlbedoBase = new Float64Array(N);
   const iceOnset = new Float64Array(N);
@@ -443,6 +444,11 @@ export async function computeTemperature(
     let oceanDepth = atm.oceanMixedLayerDepthM + 2.4 * atm.surfacePressureBar;
     oceanDepth *= 1 + (K.channelMixedLayerBoost - 1) * (rowIsChannel[row] ?? 0);
     heatCap[i] = RHO_C_WATER * (c.landFrac * landDepth + (1 - c.landFrac) * oceanDepth);
+    // 熱容量に占める海成分の割合(2026-08-25、海氷断熱の混合セル修正。
+    // 純海 = 1(x/x)・純陸 = 0 が厳密に出る。
+    // docs/事前登録_海氷断熱の混合セル修正_2026-08-25.md)
+    insCapFrac[i] =
+      heatCap[i]! > 0 ? (RHO_C_WATER * (1 - c.landFrac) * oceanDepth) / heatCap[i]! : 0;
     const h = c.landFrac * Math.max(0, c.meanLandElevM);
     elevM[i] = h;
     aEff[i] = aBase - K.olrBWm2PerC * gamma * h;
@@ -773,9 +779,17 @@ export async function computeTemperature(
           const albedo = cloud + (1 - cloud) * aSurf;
           // 海氷断熱: 氷結海面は混合層を切り離し実効熱容量が陸並みに落ちる
           // (極域の季節振幅の再現に必須 — constants.seaIceInsulationFactor 参照)。
-          // **断熱は海の側だけ**の現象なので seaW で掛ける
+          // **断熱は海の側だけ**の現象。旧式は seaW × oceanFrac(面積率)を
+          // 混合後の全熱容量に掛けていたため、混合セルでは陸成分まで鈍らせ
+          // 氷結時の実効熱容量が約 10 倍過大だった(2026-08-25 監査指摘・
+          // 実測 振幅誤差 −6.6°C 対 純陸 −2.9)。掛け先を **容量に占める
+          // 海成分の割合 insCapFrac = C_ocean成分 / C_全体** に直す。
+          // 純海(=1)・純陸(=0)は旧式と厳密に同値。GPU カーネルも同式。
+          // docs/事前登録_海氷断熱の混合セル修正_2026-08-25.md
           capEff[i] =
-            (heatCap[i] ?? 1) * (1 - K.seaIceInsulationFactor * seaW * oceanFrac) * capScale;
+            (heatCap[i] ?? 1) *
+            (1 - K.seaIceInsulationFactor * seaW * (insCapFrac[i] ?? oceanFrac)) *
+            capScale;
           // 氷を通じた海からの伝導 F = k(T_freeze − T)/h。**T の関数なので陰的に**
           // 扱う(対角へ k/h、右辺へ k/h × T_freeze)。h の下限は数値のための
           // ものであって較正つまみではない
@@ -1133,6 +1147,7 @@ export async function computeTemperature(
       qFlux: f32(qFlux),
       elevM: f32(elevM),
       landFrac: landFracArr,
+      insCapFrac: f32(insCapFrac),
       diffFactor: f32(diffFactor),
       interior01: f32(interior01),
       permanentIce: permanentIce ? f32(permanentIce) : new Float32Array(N),
