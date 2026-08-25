@@ -101,6 +101,10 @@ async function main(): Promise<void> {
   const CONDITIONAL_COMPANIONS: Record<string, Record<string, number>> = {
     // docs/事前登録_沈降の海盆非対称_2026-08-24.md: a=0 で機構ごと不発が設計
     subsidenceBasinAsymDecayKm: { subsidenceBasinAsymmetry: 0.6 },
+    // docs/事前登録_凝結閉包の二成分化_2026-08-26.md: c=0 で機構ごと不発が設計
+    backgroundCondensationTimeDays: { condensationClosureBlend: 0.5 },
+    criticalColumnRelativeHumidity: { condensationClosureBlend: 0.5 },
+    convectiveAdjustmentDays: { condensationClosureBlend: 0.5 },
   };
 
   const dead: string[] = [];

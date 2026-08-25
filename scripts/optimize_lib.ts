@@ -65,6 +65,14 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // v35(2026-08-25): 境界層温の緩和時間(海気分離 段 B 改)。位相 −8.3 日
   // (docs/事前登録_境界層温による蒸発 判定)。上限 10 = 境界層の物理スケール
   ['airSurfaceThermalRelaxationDays', 0, 10],
+  // v36(2026-08-26): 凝結閉包の二成分化(監査 #3)。c=0.5/τ_bg=60 で
+  // 「W 6.8mm かつ分布誤差 基準同等・continuousV3 基準超え」の両立を実証
+  // (docs/事前登録_凝結閉包の二成分化 判定 2・予測 114〜115)。
+  // τ_bg 上限 90 = 背景凝結が実質オフの側。τ_conv 下限 0.2 = 数時間スケール
+  ['condensationClosureBlend', 0, 1],
+  ['backgroundCondensationTimeDays', 8, 90],
+  ['criticalColumnRelativeHumidity', 0.4, 0.95],
+  ['convectiveAdjustmentDays', 0.2, 3],
   // **外した(2026-08-17)**: 範囲 [0.4, 1.2] は供給の分布の下に沈んで
   // ゲートが 96% 常時飽和(死んだ範囲)。掃引で生かすと東岸緩和が絞られて
   // **本丸の C→B 地域(米南東・東アジア)が乾く**逆効果と確認。
