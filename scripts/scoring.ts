@@ -261,6 +261,26 @@ export const REGION_GATES: RegionGate[] = [
     mode: 'major',
     expect: 'B',
   },
+  // 観測: B 100%(BWk 91, BSk 9)。コンベア極側窓の代償を写す守り(利用者指摘)
+  {
+    id: 'gobi_arid',
+    latMin: 40,
+    latMax: 46,
+    lonMin: 95,
+    lonMax: 112,
+    mode: 'major',
+    expect: 'B',
+  },
+  // 観測: B 91%(BWk 62, BSk 29)
+  {
+    id: 'central_asia_arid',
+    latMin: 40,
+    latMax: 48,
+    lonMin: 52,
+    lonMax: 75,
+    mode: 'major',
+    expect: 'B',
+  },
 ];
 
 export interface RegionGateResult {

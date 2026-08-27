@@ -141,9 +141,9 @@ describe('採点の一元化(P0-3)', () => {
     expect(itczLineRmse(result)).toBeGreaterThan(0);
   });
 
-  it('地域ゲートの定義が単一(REGION_GATES は 22 地域 = ゲート集合 v3)', () => {
-    expect(REGION_GATES.length).toBe(22);
+  it('地域ゲートの定義が単一(REGION_GATES は 24 地域 = ゲート集合 v3)', () => {
+    expect(REGION_GATES.length).toBe(24);
     const ids = new Set(REGION_GATES.map((g) => g.id));
-    expect(ids.size).toBe(22);
+    expect(ids.size).toBe(24);
   });
 });

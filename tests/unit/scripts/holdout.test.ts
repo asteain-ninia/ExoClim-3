@@ -76,7 +76,7 @@ describe('空間ホールドアウト分割(P1-1)', () => {
     }
   });
 
-  it('地域ゲートは全 22 件(ゲート集合 v3)が事前登録され、区画は決定的', () => {
+  it('地域ゲートは全 24 件(ゲート集合 v3)が事前登録され、区画は決定的', () => {
     const folds = gateFoldAssignments();
     expect(Object.keys(folds).length).toBe(REGION_GATES.length);
     for (const g of REGION_GATES) {
