@@ -250,6 +250,17 @@ export const REGION_GATES: RegionGate[] = [
     mode: 'major',
     expect: 'C',
   },
+  // ---- ゲート集合 v3(2026-08-27。docs/事前登録_地域ゲート追加_アフリカの角)----
+  // 観測: B 100%(BWh 72, BSh 28)。赤道至近の乾燥 = ソマリ湧昇物理の検定台
+  {
+    id: 'horn_of_africa_arid',
+    latMin: 2,
+    latMax: 12,
+    lonMin: 42,
+    lonMax: 51,
+    mode: 'major',
+    expect: 'B',
+  },
 ];
 
 export interface RegionGateResult {
