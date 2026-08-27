@@ -865,6 +865,53 @@ export async function computeTemperature(
         const hadleyW = Math.max(0, 1 - (lat / ridgeAbs) * (lat / ridgeAbs));
         dMeridOfRow[row] = dBase * (1 + K.hadleyDiffusionBoost * hadleyW);
       }
+      // ---- 段 C-0: 保存的移流の前計算(2026-08-28、既定 0 では作らない)----
+      // 旧式はセル固有係数 × (T_up − T_i) で面が相殺しない(偽熱源 0.675°C)。
+      // 保存形 = 風で変調した面伝導度の**対交換**: 面係数は両側セルの
+      // 「その面へ向かう外向き係数」の和で一意、南北は拡散項と同じ計量
+      // (cos 面/cos 中心)で受けるので一様 T で厳密に相殺する。
+      // docs/事前登録_熱移流の保存化_2026-08-28.md
+      let advOutE: Float64Array | null = null;
+      let advOutW: Float64Array | null = null;
+      let advOutN: Float64Array | null = null;
+      let advOutS: Float64Array | null = null;
+      if ((K.advectionConservative as number) !== 0) {
+        advOutE = new Float64Array(N);
+        advOutW = new Float64Array(N);
+        advOutN = new Float64Array(N);
+        advOutS = new Float64Array(N);
+        for (let row = 0; row < CH; row++) {
+          const lat = latDegOfRow(cg, row);
+          const ridgeAbs = lat >= 0 ? ridgeAbsN : ridgeAbsS;
+          const seasonFactor = (lat >= 0 ? summerN : summerS) ? K.summerAdvectionFactor : 1;
+          const vBandW = Math.min(1, Math.max(0, (Math.abs(lat) - ridgeAbs) / 10));
+          const isWinterRow =
+            (insolation.monthlyByRow[m0]?.[row] ?? 0) < (insolation.annualMeanByRow[row] ?? 0);
+          for (let col = 0; col < CW; col++) {
+            const i = row * CW + col;
+            const uMs = uField?.[i] ?? 0;
+            const vMs = vField?.[i] ?? 0;
+            const inv = isWinterRow
+              ? 1 - (1 - K.winterInversionAdvectionFactor) * (interior01[i] ?? 0)
+              : 1;
+            const advScale = seasonFactor * inv * K.zonalAdvectionCouplingWm2PerK;
+            const cu = advScale * (Math.min(9, Math.abs(uMs)) / 4);
+            if (uMs > 0) advOutE[i] = cu;
+            else if (uMs < 0) advOutW[i] = cu;
+            const targetRow = vMs > 0 ? row - 1 : row + 1;
+            if (vMs !== 0 && targetRow >= 0 && targetRow < CH) {
+              const chanV =
+                1 -
+                (1 - K.circumpolarChannelFactor) *
+                  Math.max(rowIsChannel[row] ?? 0, rowIsChannel[targetRow] ?? 0);
+              const landGrip = 0.25 + 0.75 * (coarse[i]?.landFrac ?? 0);
+              const cv = advScale * vBandW * chanV * landGrip * (Math.min(5, Math.abs(vMs)) / 4);
+              if (vMs > 0) advOutN[i] = cv;
+              else advOutS[i] = cv;
+            }
+          }
+        }
+      }
       let sweepsUsed = 0;
       let converged = false;
       for (let sweep = 0; sweep < sweepLimit * passesPerSweep; sweep++) {
@@ -953,24 +1000,60 @@ export async function computeTemperature(
             const gzW = gz * 0.5 * ((dfEff[i] ?? 1) + (dfEff[west] ?? 1));
             const gNEff = gN * 0.5 * ((dfEff[i] ?? 1) + (dfEff[north] ?? 1));
             const gSEff = gS * 0.5 * ((dfEff[i] ?? 1) + (dfEff[south] ?? 1));
-            const diag =
-              cOverDt +
-              K.olrBWm2PerC +
-              (iceCond[i] ?? 0) +
-              (evapK[i] ?? 0) +
-              gzE +
-              gzW +
-              gNEff +
-              gSEff +
-              advCu +
-              advCv;
-            const off =
-              gzE * (t[east] ?? 0) +
-              gzW * (t[west] ?? 0) +
-              gNEff * (t[north] ?? 0) +
-              gSEff * (t[south] ?? 0) +
-              advCu * (t[upwindU] ?? 0) +
-              advCv * (t[upwindV] ?? 0);
+            // 段 C-0: 保存形は面係数(両側の外向き係数の和)で対交換。
+            // 南北は拡散項と同じ計量(cos 面 / cos 中心)。
+            // **旧経路は原式そのまま**(加算順序を変えるとビット一致が壊れる)
+            let diag: number;
+            let off: number;
+            if (!advOutE) {
+              diag =
+                cOverDt +
+                K.olrBWm2PerC +
+                (iceCond[i] ?? 0) +
+                (evapK[i] ?? 0) +
+                gzE +
+                gzW +
+                gNEff +
+                gSEff +
+                advCu +
+                advCv;
+              off =
+                gzE * (t[east] ?? 0) +
+                gzW * (t[west] ?? 0) +
+                gNEff * (t[north] ?? 0) +
+                gSEff * (t[south] ?? 0) +
+                advCu * (t[upwindU] ?? 0) +
+                advCv * (t[upwindV] ?? 0);
+            } else {
+              const cEf = (advOutE[i] ?? 0) + (advOutW![east] ?? 0);
+              const cWf = (advOutW![i] ?? 0) + (advOutE[west] ?? 0);
+              const cNf =
+                row > 0 ? ((advOutN![i] ?? 0) + (advOutS![north] ?? 0)) * Math.cos(phiEdgeN) : 0;
+              const cSf =
+                row < CH - 1
+                  ? ((advOutS![i] ?? 0) + (advOutN![south] ?? 0)) * Math.cos(phiEdgeS)
+                  : 0;
+              diag =
+                cOverDt +
+                K.olrBWm2PerC +
+                (iceCond[i] ?? 0) +
+                (evapK[i] ?? 0) +
+                gzE +
+                gzW +
+                gNEff +
+                gSEff +
+                cEf +
+                cWf +
+                (cNf + cSf) / cosC;
+              off =
+                gzE * (t[east] ?? 0) +
+                gzW * (t[west] ?? 0) +
+                gNEff * (t[north] ?? 0) +
+                gSEff * (t[south] ?? 0) +
+                cEf * (t[east] ?? 0) +
+                cWf * (t[west] ?? 0) +
+                (cNf * (t[north] ?? 0) + cSf * (t[south] ?? 0)) / cosC;
+            }
             const next = ((rhs[i] ?? 0) + off) / diag;
             const d = Math.abs(next - (t[i] ?? 0));
             if (d > maxDelta) maxDelta = d;
@@ -1108,7 +1191,12 @@ export async function computeTemperature(
   // 加速器は「渡されたら使う」だけで、無ければ上の CPU 実装に落ちる。
   // 赤黒順序で反復するが、収束させれば線形系の解は一意なので行優先と同じ答えになる
   // (docs/実験記録_EBM赤黒順序_2026-08-01.md)
-  const ebmAccel = opts?.accel?.ebm(N) ?? null;
+  // 段 C-0(2026-08-28): 保存的移流は当面 CPU 実装のみ。GPU カーネル
+  // (単発・バッチ)は旧式のままなので、スイッチ有効時は GPU を使わない
+  // (CPU/GPU の答えが黙って割れるのが最悪 — 突合してから外す)。
+  // docs/事前登録_熱移流の保存化_2026-08-28.md
+  const ebmAccel =
+    (K.advectionConservative as number) !== 0 ? null : (opts?.accel?.ebm(N) ?? null);
   const f32 = (a: ArrayLike<number>, n = a.length): Float32Array => {
     const out = new Float32Array(n);
     for (let i = 0; i < n; i++) out[i] = a[i] ?? 0;
