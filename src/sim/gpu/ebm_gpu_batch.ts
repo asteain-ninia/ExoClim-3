@@ -91,7 +91,7 @@ struct LevelParams {
   summerN : u32, summerS : u32, hasEvap : u32, hasEvapFb : u32,
   slabIce : u32, seaFreeze : f32, iceK : f32, iceLatent : f32,
   iceMinH : f32, iceCoverScale : f32,
-  _q0 : u32, _q1 : u32, _q2 : u32, _q3 : u32, _q4 : u32, _q5 : u32,
+  advConservative : u32, _q1 : u32, _q2 : u32, _q3 : u32, _q4 : u32, _q5 : u32,
 };
 
 @group(0) @binding(0) var<uniform> P : Params;
@@ -150,6 +150,50 @@ fn dMeridOfRow(r : u32) -> f32 {
   if (lat >= 0.0) { ridgeAbs = L.ridgeAbsN; }
   let hadleyW = max(0.0, 1.0 - (lat / ridgeAbs) * (lat / ridgeAbs));
   return L.dBase * (1.0 + L.hadleyBoost * hadleyW);
+}
+
+// ---- 段 C-0: 保存的移流の外向き係数(L.advConservative == 1u のときだけ使う)----
+// 単発版 ebm_gpu.ts の同名関数と同形(CPU 前計算 advOutE/W/N/S と同じ式)。
+// j はグローバル添字。行因子は行が属す水準の定数・行場から引き、
+// 南北の行き先の範囲検査は**局所行**で行う(水準境界 = 極行と同じ扱い)。
+// dir: 0 = 東、1 = 西、2 = 北、3 = 南
+fn advOutTo(j : u32, dir : u32) -> f32 {
+  let rj = j / P.cw;             // グローバル行
+  let L = PL[rj / P.ch];
+  let lat = latOfRow(rj);
+  var isSummer = L.summerS == 1u;
+  if (lat >= 0.0) { isSummer = L.summerN == 1u; }
+  var seasonFactor = 1.0;
+  if (isSummer) { seasonFactor = L.summerAdv; }
+  var inv = 1.0;
+  if (insolOf(P.m0, rj) < rowF(3u, rj)) {
+    inv = 1.0 - (1.0 - L.winterInvAdv) * cellF(8u, j);
+  }
+  let advScale = seasonFactor * inv * L.advCoupling;
+  if (dir <= 1u) {
+    // 東西: u > 0 は東向き、u < 0 は西向き(u == 0 はどちらにも出ない)
+    let uMs = monthlyF(1u, P.m0, j);
+    if ((dir == 0u && uMs > 0.0) || (dir == 1u && uMs < 0.0)) {
+      return advScale * (min(9.0, abs(uMs)) / 4.0);
+    }
+    return 0.0;
+  }
+  // 南北: v > 0 は北向き、v < 0 は南向き(v == 0 はどちらにも出ない)。
+  // 行き先の範囲検査は局所行(CPU の targetRow 範囲検査と同じ)
+  let vMs = monthlyF(2u, P.m0, j);
+  if (dir == 2u && vMs <= 0.0) { return 0.0; }
+  if (dir == 3u && vMs >= 0.0) { return 0.0; }
+  let rl = rj % P.ch;            // 局所行
+  if (vMs > 0.0 && rl == 0u) { return 0.0; }
+  if (vMs < 0.0 && rl >= P.ch - 1u) { return 0.0; }
+  var targetRow = rj + 1u;       // 局所範囲内なので ±1 は水準を出ない
+  if (vMs > 0.0) { targetRow = rj - 1u; }
+  var ridgeAbs = L.ridgeAbsS;
+  if (lat >= 0.0) { ridgeAbs = L.ridgeAbsN; }
+  let vBandW = clamp((abs(lat) - ridgeAbs) / 10.0, 0.0, 1.0);
+  let chanV = 1.0 - (1.0 - L.chanFactor) * max(rowF(2u, rj), rowF(2u, targetRow));
+  let landGrip = 0.25 + 0.75 * cellF(6u, j);
+  return advScale * vBandW * chanV * landGrip * (min(5.0, abs(vMs)) / 4.0);
 }
 
 // ---- 第 1 段: 実効熱容量・実効拡散係数・右辺(t に依存する) ----
@@ -291,16 +335,39 @@ fn prepB(@builtin(global_invocation_id) gid : vec3<u32>) {
   let gzW = gz * 0.5 * (dfI + workF(10u, west));
   let gNEff = gN * 0.5 * (dfI + workF(10u, north));
   let gSEff = gS * 0.5 * (dfI + workF(10u, south));
-  setWork(1u, i, workF(11u, i) + L.olrB + workF(12u, i) + workF(13u, i)
-    + gzE + gzW + gNEff + gSEff + advCu + advCv);
-  setWork(2u, i, gzE);
-  setWork(3u, i, gzW);
-  setWork(4u, i, gNEff);
-  setWork(5u, i, gSEff);
-  setWork(6u, i, advCu);
-  setWork(7u, i, advCv);
-  setWork(8u, i, f32(upwindU));
-  setWork(9u, i, f32(upwindV));
+  if (L.advConservative == 0u) {
+    // 旧式(風上 1 点参照)。**この分岐は原式そのまま — 1 文字も変えない**
+    setWork(1u, i, workF(11u, i) + L.olrB + workF(12u, i) + workF(13u, i)
+      + gzE + gzW + gNEff + gSEff + advCu + advCv);
+    setWork(2u, i, gzE);
+    setWork(3u, i, gzW);
+    setWork(4u, i, gNEff);
+    setWork(5u, i, gSEff);
+    setWork(6u, i, advCu);
+    setWork(7u, i, advCv);
+    setWork(8u, i, f32(upwindU));
+    setWork(9u, i, f32(upwindV));
+  } else {
+    // 段 C-0: 保存形(単発版 prepB の同名分岐と同形)。面係数 = 両側セルの
+    // 外向き係数の和、南北は cos(面)/cos(中心) の計量。東西を gzE/gzW、
+    // 南北/cosC を gN/gS の作業場へ畳み込み、風上 1 点参照の項は 0 にする
+    let cEf = advOutTo(i, 0u) + advOutTo(east, 1u);
+    let cWf = advOutTo(i, 1u) + advOutTo(west, 0u);
+    var cNf = 0.0;
+    if (rl > 0u) { cNf = (advOutTo(i, 2u) + advOutTo(north, 3u)) * cos(phiEdgeN); }
+    var cSf = 0.0;
+    if (rl < P.ch - 1u) { cSf = (advOutTo(i, 3u) + advOutTo(south, 2u)) * cos(phiEdgeS); }
+    setWork(1u, i, workF(11u, i) + L.olrB + workF(12u, i) + workF(13u, i)
+      + gzE + gzW + gNEff + gSEff + cEf + cWf + (cNf + cSf) / cosC);
+    setWork(2u, i, gzE + cEf);
+    setWork(3u, i, gzW + cWf);
+    setWork(4u, i, gNEff + cNf / cosC);
+    setWork(5u, i, gSEff + cSf / cosC);
+    setWork(6u, i, 0.0);
+    setWork(7u, i, 0.0);
+    setWork(8u, i, f32(i));
+    setWork(9u, i, f32(i));
+  }
 }
 
 fn sweepCell(i : u32, color : u32) {
@@ -798,6 +865,8 @@ export function createEbmGpuBatchAccel(
           lf[o + 23] = k.seaIceLatentJPerMm;
           lf[o + 24] = k.seaIceMinThicknessMm;
           lf[o + 25] = k.seaIceCoverScaleMm;
+          // 段 C-0: 保存的移流(末尾のパディング枠 _q0 を使う — 既存の並びは不変)
+          lu[o + 26] = k.advectionConservative !== 0 ? 1 : 0;
         }
         device.queue.writeBuffer(bufLevelParams, 0, levelBuf);
 

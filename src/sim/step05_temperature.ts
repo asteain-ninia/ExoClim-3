@@ -1191,12 +1191,17 @@ export async function computeTemperature(
   // 加速器は「渡されたら使う」だけで、無ければ上の CPU 実装に落ちる。
   // 赤黒順序で反復するが、収束させれば線形系の解は一意なので行優先と同じ答えになる
   // (docs/実験記録_EBM赤黒順序_2026-08-01.md)
-  // 段 C-0(2026-08-28): 保存的移流は当面 CPU 実装のみ。GPU カーネル
-  // (単発・バッチ)は旧式のままなので、スイッチ有効時は GPU を使わない
+  // 段 C-0(2026-08-28): 保存的移流は GPU 2 カーネルにも移植済みだが、
+  // CPU との突合が確定するまで、スイッチ有効時の既定は GPU を使わない
   // (CPU/GPU の答えが黙って割れるのが最悪 — 突合してから外す)。
-  // docs/事前登録_熱移流の保存化_2026-08-28.md
+  // 突合の検査だけが環境変数 EXOCLIM_ADV_GPU=1 で守りを外して GPU 経路を試す
+  // (out/check_adv_gpu_equiv.ts)。docs/事前登録_熱移流の保存化_2026-08-28.md
+  const advGpuUnlocked =
+    typeof process !== 'undefined' && process.env?.['EXOCLIM_ADV_GPU'] === '1';
   const ebmAccel =
-    (K.advectionConservative as number) !== 0 ? null : (opts?.accel?.ebm(N) ?? null);
+    (K.advectionConservative as number) !== 0 && !advGpuUnlocked
+      ? null
+      : (opts?.accel?.ebm(N) ?? null);
   const f32 = (a: ArrayLike<number>, n = a.length): Float32Array => {
     const out = new Float32Array(n);
     for (let i = 0; i < n; i++) out[i] = a[i] ?? 0;
@@ -1280,6 +1285,7 @@ export async function computeTemperature(
     seaIceLatentJPerMm: K.seaIceLatentJPerMm,
     seaIceMinThicknessMm: K.seaIceMinThicknessMm,
     seaIceCoverScaleMm: K.seaIceCoverScaleMm,
+    advectionConservative: K.advectionConservative as number,
   };
   const integrateAny = async (
     permanentIce: Uint8Array | null,

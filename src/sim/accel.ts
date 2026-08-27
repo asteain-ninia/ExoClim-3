@@ -222,6 +222,15 @@ export interface EbmConstants {
   seaIceLatentJPerMm: number;
   seaIceMinThicknessMm: number;
   seaIceCoverScaleMm: number;
+  /**
+   * 熱移流の保存化(段 C-0、2026-08-28)。0 = 旧式(風上 1 点参照。
+   * セル固有係数なので面で相殺せず偽熱源になる)、非 0 = 面フラックス形式
+   * (面係数 = 両側セルの外向き係数の和。一様 T で厳密に相殺)。
+   * **CPU 実装 step05_temperature.ts の段 C-0 ブロックと同じ式が GPU にも
+   * 入っていることが前提**(片方だけだと加速器の有無で物理が変わる)。
+   * docs/事前登録_熱移流の保存化_2026-08-28.md
+   */
+  advectionConservative: number;
 }
 
 export interface EbmAccelResult {
