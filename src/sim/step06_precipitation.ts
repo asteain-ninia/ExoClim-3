@@ -2639,7 +2639,16 @@ function convertToPrecip(
       const gI = Math.max(gIm, gIres);
       const marineW = Math.min(1, (supply[i] ?? 0) / K.itczLiftSupplyNorm);
       // R1 診断のため各倍率を named 化(乗算の順序・値は従来と同一 — ビット不変)
-      const liftItczF = 1 + K.itczLiftBoost * gI * marineW;
+      let liftItczF = 1 + K.itczLiftBoost * gI * marineW;
+      // 傘の発散ゲート(2026-08-28): 柱が正味発散している場所では傘を閉じる
+      // (ソマリジェット型。収束側は divF=0 で不変)。既定 0 ビット一致
+      if ((K.itczDivergenceSuppress as number) > 0 && convIndex) {
+        const divF = Math.min(
+          1,
+          Math.max(0, -(convIndex[i] ?? 0) / Math.max(1e-9, K.moistureConvergenceNorm)),
+        );
+        liftItczF = 1 + (liftItczF - 1) * (1 - K.itczDivergenceSuppress * divF);
+      }
       lift *= liftItczF;
 
       // R4: 湿潤収束 = 飽和した収束強度 × 湿潤ゲート(smoothstep)。
