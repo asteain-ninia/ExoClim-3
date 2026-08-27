@@ -73,6 +73,11 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['backgroundCondensationTimeDays', 8, 90],
   ['criticalColumnRelativeHumidity', 0.4, 0.95],
   ['convectiveAdjustmentDays', 0.2, 3],
+  // v38(2026-08-27): サブグリッド山岳。refSlope=800 は SPACE 外の殺し屋で
+  // 機構が 2 年飢えていた(80 でパタゴニア雨陰 PASS・大分類 −0.1 以内)。
+  // docs/事前登録_サブグリッド山岳の凝結_2026-08-27.md 判定 2
+  ['orographicRefSlope', 80, 800],
+  ['orographicCrestBlend', 0, 1],
   // **外した(2026-08-17)**: 範囲 [0.4, 1.2] は供給の分布の下に沈んで
   // ゲートが 96% 常時飽和(死んだ範囲)。掃引で生かすと東岸緩和が絞られて
   // **本丸の C→B 地域(米南東・東アジア)が乾く**逆効果と確認。
