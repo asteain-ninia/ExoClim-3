@@ -153,7 +153,10 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // 戻る分があるので実効コントラストはそれより小さい)
   ['evapCoolingWm2PerMmDay', 0, 12],
   ['sstAnomalyCouplingWm2PerK', 12, 26],
-  ['olrAWm2', 201, 206],
+  // v39(2026-08-28): 下限 201→197。段 C-0 で偽熱源(正味 +1.8°C ≈ B×1.8 ≈
+  // 4 W/m² 相当)が消えたため、その分を放射切片が引き受け直す算術的必要
+  // (結果を見た緩和ではなく、実測した偽熱の消滅分の付け替え)
+  ['olrAWm2', 197, 206],
   ['diffusionWm2PerK', 0.45, 0.65],
   ['itczHemisOffsetPerC', 0, 14],
   ['itczOceanFollowDamp', 0.35, 1.0],

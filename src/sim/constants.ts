@@ -721,9 +721,10 @@ export const MODEL_CONSTANTS = {
    * 旧式はセル固有係数 × (T_up − T_i) で、受け取る熱と風上が失う熱が
    * 面で相殺せず正味の熱源になる(結合 60↔30 で全球 0.675°C の実測)。
    * 1 = 面フラックス形式(係数は風上側で一意、一様 T で厳密相殺)。
-   * **0 = 旧式とビット一致。当面 CPU のみ(有効時は GPU EBM を使わない)。**
+   * **1 が既定(2026-08-28 夜、GPU 移植の検収後に切替 — v39 の再基準線)。**
+   * 0 = 旧式(偽熱源つき。過去版の再現用)。
    */
-  advectionConservative: 0,
+  advectionConservative: 1,
   itczDivergenceSuppress: 0,
   stormEddyWindMs: 0,
   /** 渦風の極向き成分の割合(残りは平均風に沿う) */

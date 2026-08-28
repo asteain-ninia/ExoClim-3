@@ -1192,16 +1192,11 @@ export async function computeTemperature(
   // 赤黒順序で反復するが、収束させれば線形系の解は一意なので行優先と同じ答えになる
   // (docs/実験記録_EBM赤黒順序_2026-08-01.md)
   // 段 C-0(2026-08-28): 保存的移流は GPU 2 カーネルにも移植済みだが、
-  // CPU との突合が確定するまで、スイッチ有効時の既定は GPU を使わない
-  // (CPU/GPU の答えが黙って割れるのが最悪 — 突合してから外す)。
-  // 突合の検査だけが環境変数 EXOCLIM_ADV_GPU=1 で守りを外して GPU 経路を試す
-  // (out/check_adv_gpu_equiv.ts)。docs/事前登録_熱移流の保存化_2026-08-28.md
-  const advGpuUnlocked =
-    typeof process !== 'undefined' && process.env?.['EXOCLIM_ADV_GPU'] === '1';
-  const ebmAccel =
-    (K.advectionConservative as number) !== 0 && !advGpuUnlocked
-      ? null
-      : (opts?.accel?.ebm(N) ?? null);
+  // 段 C-0 の GPU 移植は 2026-08-28 深夜に検収済み(酸性試験 ○・バッチ/単発
+  // ビット一致)。EXOCLIM_ADV_GPU=0 で CPU 参照実装へ強制できる(切り分け用)
+  const advGpuForced =
+    typeof process !== 'undefined' && process.env?.['EXOCLIM_ADV_GPU'] === '0';
+  const ebmAccel = advGpuForced ? null : (opts?.accel?.ebm(N) ?? null);
   const f32 = (a: ArrayLike<number>, n = a.length): Float32Array => {
     const out = new Float32Array(n);
     for (let i = 0; i < n; i++) out[i] = a[i] ?? 0;
