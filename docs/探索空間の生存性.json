@@ -1,8 +1,8 @@
 {
-  "measuredAt": "2026-08-27T15:07:01.862Z",
+  "measuredAt": "2026-08-28T01:20:21.355Z",
   "note": "探索空間の動的生存性。`npx tsx scripts/diag_dead_constants.ts --write` で更新する。SPACE を変えたら測り直すこと(tests/unit/scripts/space_liveness.test.ts が照合する)",
   "gridResolutionDeg": 2,
-  "spaceFingerprint": "34410bc230285be0",
+  "spaceFingerprint": "793653a39c9e35d9",
   "constantCount": 73,
   "dead": []
 }
