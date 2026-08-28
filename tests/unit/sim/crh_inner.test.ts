@@ -89,10 +89,19 @@ describe('CRH を輸送の内部で解く(段 25)', () => {
     expect(maxRelErr).toBeLessThan(1e-4);
   });
 
-  it('可降水量 W は凝結量と対のまま(含意される凝結率が λ·G を超えない)', () => {
+  it('可降水量 W は凝結量と対のまま(含意される凝結率が閉包の上限を超えない)', () => {
     const d = run.precipDiag;
     const land = run.result.context.terrain.landMask;
     const travelKmPerMonth = (MODEL_CONSTANTS.condensationRefWindMs * SECONDS_PER_MONTH) / 1000;
+    // 凝結閉包の二成分化(2026-08-26)後の上限(2026-08-28 更新):
+    //   C = lin·W + conv·max(0, W − cap) ≤ [lin + c·conv]·W
+    //   lin = (1−c)·rate_old + c·(30.44/τ_bg)
+    // 旧検査は rate_old だけを上限にしており、v37(c=0.24)採用の瞬間から
+    // 恒等的に破れていた(HEAD でも再現する既存不具合として 2026-08-28 に発見)。
+    // cap 項は 0 で抑えた保守的上限なので、原理性は保ったまま閉包に追随する。
+    const c = MODEL_CONSTANTS.condensationClosureBlend as number;
+    const bgRate = c > 0 ? 30.44 / Math.max(0.1, MODEL_CONSTANTS.backgroundCondensationTimeDays) : 0;
+    const convRate = c > 0 ? 30.44 / Math.max(0.05, MODEL_CONSTANTS.convectiveAdjustmentDays) : 0;
     let checked = 0;
     let worstRatio = 0;
     for (let m = 0; m < 12; m++) {
@@ -106,7 +115,8 @@ describe('CRH を輸送の内部で解く(段 25)', () => {
         const lKm = land[i]
           ? MODEL_CONSTANTS.moistureDecayLandKm
           : MODEL_CONSTANTS.moistureDecayOceanKm;
-        const rate = Math.max(0.05, (travelKmPerMonth / Math.max(1, lKm)) * (g[i] ?? 0));
+        const rateOld = Math.max(0.05, (travelKmPerMonth / Math.max(1, lKm)) * (g[i] ?? 0));
+        const rate = c > 0 ? (1 - c) * rateOld + c * bgRate + c * convRate : rateOld;
         worstRatio = Math.max(worstRatio, (pre[i] ?? 0) / water / Math.max(1e-9, rate));
         checked++;
       }
