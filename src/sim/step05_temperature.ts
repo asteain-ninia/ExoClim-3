@@ -1347,9 +1347,13 @@ export async function computeTemperature(
   // ビット一致)。EXOCLIM_ADV_GPU=0 で CPU 参照実装へ強制できる(切り分け用)
   const advGpuForced =
     typeof process !== 'undefined' && process.env?.['EXOCLIM_ADV_GPU'] === '0';
-  // 段 C-2(mode=1)は当面 CPU のみ(GPU 移植・検収まで。C-0 と同じ作法)
+  // 段 C-2(mode=1)は当面 CPU のみ(GPU 移植・検収まで。C-0 と同じ作法)。
+  // EXOCLIM_C2_GPU=1 は**検収用の抜け穴**(out/check_c2_gpu_acid.ts が使う)。
+  // 既定動作は不変 — 検収合格後にこの守りごと外す
+  const c2GpuForced =
+    typeof process !== 'undefined' && process.env?.['EXOCLIM_C2_GPU'] === '1';
   const ebmAccel =
-    advGpuForced || (K.twoTemperatureMode as number) !== 0
+    advGpuForced || ((K.twoTemperatureMode as number) !== 0 && !c2GpuForced)
       ? null
       : (opts?.accel?.ebm(N) ?? null);
   const f32 = (a: ArrayLike<number>, n = a.length): Float32Array => {
@@ -1438,6 +1442,9 @@ export async function computeTemperature(
     advectionConservative: K.advectionConservative as number,
     stormWinterHeatDiffBoost: K.stormWinterHeatDiffBoost as number,
     snowGripFactor: K.snowGripFactor as number,
+    twoTemperatureMode: K.twoTemperatureMode as number,
+    airSurfaceExchangeWm2PerK: K.airSurfaceExchangeWm2PerK as number,
+    atmosColumnHeatCapJm2K: K.atmosColumnHeatCapJm2K as number,
   };
   const integrateAny = async (
     permanentIce: Uint8Array | null,

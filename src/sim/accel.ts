@@ -238,6 +238,16 @@ export interface EbmConstants {
   stormWinterHeatDiffBoost: number;
   /** 段 C-1(2026-08-31)。雪氷面の移流遮断。CPU/GPU 3 実装に同式 */
   snowGripFactor: number;
+  /**
+   * 段 C-2(2026-08-31、docs/事前登録_段C2_二温度場)。完全 2 温度場:
+   * 0 = 旧経路そのまま(単一温度場)、1 = T_s/T_a の 2×2 消去 + T_a 輸送。
+   * CPU 実装 step05 の mode=1 分岐と GPU 2 カーネルに同式が入っている前提
+   */
+  twoTemperatureMode: number;
+  /** T_s↔T_a の交換係数 W/m²/K(雪 grip で変調 = 段 C-1 の転用) */
+  airSurfaceExchangeWm2PerK: number;
+  /** 大気柱の熱容量 J/m²/K(物理定数 — 掃引しない) */
+  atmosColumnHeatCapJm2K: number;
 }
 
 export interface EbmAccelResult {

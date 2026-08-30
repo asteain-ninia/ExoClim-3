@@ -39,8 +39,8 @@ import { throwIfCancelled, yieldToEventLoop } from '../run_control';
 const CELL_FIELDS = 11;
 /** 月別セル別の場の数: 0 cloud, 1 windU, 2 windV, 3 evap, 4 evapFbK, 5 evapRefT */
 const MONTHLY_FIELDS = 6;
-/** 作業領域の本数 */
-const WORK_FIELDS = 14;
+/** 作業領域の本数(14 = 段 C-2 の kx。mode=0 では書きも読みもしない) */
+const WORK_FIELDS = 15;
 /**
  * ユニフォーム(Params)の大きさ。**WGSL の struct と CPU 側の ArrayBuffer が
  * 必ずこれを共有すること。** CPU 側だけ小さいと、はみ出した書き込みが
@@ -74,6 +74,7 @@ struct Params {
   accumulate : u32, accumSlot : u32, hasEvapFb : u32, slabIce : u32,
   seaFreeze : f32, iceK : f32, iceLatent : f32, iceMinH : f32,
   iceCoverScale : f32, advConservative : u32, stormWinterHDB : f32, snowGrip : f32,
+  twoTemp : u32, airSurfExch : f32, atmosCap : f32,
 };
 
 @group(0) @binding(0) var<uniform> P : Params;
@@ -109,6 +110,13 @@ struct Params {
  * 0 層模型が無効(P.slabIce == 0)なら誰も読み書きしない
  */
 @group(0) @binding(10) var<storage, read_write> ice : array<f32>;
+/**
+ * 段 C-2: 大気温 T_a(mode=1 のときだけ意味を持つ。初期は T_s と同値)。
+ * CPU 実装の ta に対応。mode=0 では誰も読み書きしない
+ */
+@group(0) @binding(11) var<storage, read_write> tempA : array<f32>;
+/** 段 C-2: ステップ入口の T_a^n(CPU の taN。半陰的の基準点) */
+@group(0) @binding(12) var<storage, read_write> tempAPrev : array<f32>;
 
 const WG : u32 = ${GPU_WORKGROUP_SIZE}u;
 var<workgroup> partial : array<f32, ${GPU_WORKGROUP_SIZE}>;
@@ -367,6 +375,11 @@ fn prepB(@builtin(global_invocation_id) gid : vec3<u32>) {
     setWork(7u, i, 0.0);
     setWork(8u, i, f32(i));
     setWork(9u, i, f32(i));
+    // 段 C-2: 交換係数 kx = airSurfExch × grip(CPU の kx と同じく T^n の
+    // grip で半陰的に固定。temp は prepB 時点で T^n)
+    if (P.twoTemp == 1u) {
+      setWork(14u, i, P.airSurfExch * gI);
+    }
   }
 }
 
@@ -382,6 +395,31 @@ fn sweepCell(i : u32, color : u32) {
   if (r > 0u) { north = (r - 1u) * W + c; }
   var south = i;
   if (r < H - 1u) { south = (r + 1u) * W + c; }
+  if (P.twoTemp == 1u && P.advConservative == 1u) {
+    // ---- 段 C-2: 2 温度場のセル内 2×2 消去(mode=1)----
+    // CPU 実装 step05_temperature.ts の if (ta && taN && advOutE) 分岐と同形:
+    //   表面: Ds·T_s' = rhsS + kx·T_a'(rhsS = work0 — 既存のまま)
+    //   大気: Da·T_a' = Ca/dt·T_a^n + off_a(輸送は T_a 側)+ kx·T_s'
+    // kx は prepB が T^n の grip で評価済み(work14)。面係数は保存形の組
+    // (work2..5 = 拡散 + 移流面係数/計量。grip 込み)を T_a 近傍で評価する
+    let kx = workF(14u, i);
+    let Ds = workF(11u, i) + P.olrB + workF(13u, i) + workF(12u, i) + kx;
+    let rhsS = workF(0u, i);
+    let transDiag = workF(2u, i) + workF(3u, i) + workF(4u, i) + workF(5u, i);
+    let offA =
+      workF(2u, i) * tempA[east] +
+      workF(3u, i) * tempA[west] +
+      workF(4u, i) * tempA[north] +
+      workF(5u, i) * tempA[south];
+    let caOverDt = (P.atmosCap / P.dtSec) * P.capScale;
+    let Da = caOverDt + kx + transDiag;
+    let denom = Da - (kx * kx) / Ds;
+    let nextA = (caOverDt * tempAPrev[i] + offA + (kx * rhsS) / Ds) / denom;
+    let nextS = (rhsS + kx * nextA) / Ds;
+    temp[i] = nextS;
+    tempA[i] = nextA;
+    return;
+  }
   let off =
     workF(2u, i) * temp[east] +
     workF(3u, i) * temp[west] +
@@ -419,6 +457,16 @@ fn polar(@builtin(global_invocation_id) gid : vec3<u32>) {
   for (var c = 0u; c < W; c = c + 1u) {
     let i = r * W + c;
     temp[i] = temp[i] * 0.5 + mean * 0.5;
+  }
+  // 段 C-2: T_a も同じ作用素の一部として極行を平滑する(CPU 版と同順)
+  if (P.twoTemp == 1u) {
+    var sumA = 0.0;
+    for (var c = 0u; c < W; c = c + 1u) { sumA = sumA + tempA[r * W + c]; }
+    let meanA = sumA / f32(W);
+    for (var c = 0u; c < W; c = c + 1u) {
+      let i = r * W + c;
+      tempA[i] = tempA[i] * 0.5 + meanA * 0.5;
+    }
   }
 }
 
@@ -487,6 +535,13 @@ fn measureResidual(@builtin(local_invocation_id) lid : vec3<u32>) {
   for (var i = tid; i < P.n; i = i + WG) {
     m = max(m, abs(temp[i] - tPrev[i]));
   }
+  // 段 C-2: T_a の変化量も同じ残差に算入する(CPU の dA・polarDeltaA に対応)。
+  // 控えは tPrev の後半 [P.n, 2·P.n)(mode=1 のときだけホストが書き込む)
+  if (P.twoTemp == 1u) {
+    for (var i = tid; i < P.n; i = i + WG) {
+      m = max(m, abs(tempA[i] - tPrev[P.n + i]));
+    }
+  }
   partial[tid] = m;
   workgroupBarrier();
   if (tid == 0u) {
@@ -533,9 +588,13 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
   const bufWork = device.createBuffer({ size: WORK_FIELDS * N * 4, usage: ST });
   const bufAccum = device.createBuffer({ size: M * N * 4, usage: ST | CS | CD });
   const bufResidual = device.createBuffer({ size: MAX_STEPS * 4, usage: ST | CS | CD });
-  const bufPrev = device.createBuffer({ size: N * 4, usage: ST | CS | CD });
+  // 段 C-2: 後半 [N, 2N) は T_a の控え(mode=1 のときだけ書く — 残差用)
+  const bufPrev = device.createBuffer({ size: 2 * N * 4, usage: ST | CS | CD });
   const bufAccumPrev = device.createBuffer({ size: M * N * 4, usage: ST | CS | CD });
   const bufIce = device.createBuffer({ size: N * 4, usage: ST | CS | CD });
+  // 段 C-2: 大気温 T_a と、そのステップ入口の控え(CPU の ta / taN)
+  const bufTempA = device.createBuffer({ size: N * 4, usage: ST | CS | CD });
+  const bufTempAPrev = device.createBuffer({ size: N * 4, usage: ST | CS | CD });
   const bufParams = device.createBuffer({ size: PARAM_BYTES, usage: GPUBufferUsage.UNIFORM | CD });
   const stage = new ReadbackStage(device, 2 * M * N + N + MAX_STEPS + N);
 
@@ -557,6 +616,8 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
       { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
       { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
       { binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      { binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      { binding: 12, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
     ],
   });
   const pipeLayout = device.createPipelineLayout({ bindGroupLayouts: [bindLayout] });
@@ -583,6 +644,8 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
     { binding: 8, resource: { buffer: bufPrev } },
     { binding: 9, resource: { buffer: bufAccumPrev } },
     { binding: 10, resource: { buffer: bufIce } },
+    { binding: 11, resource: { buffer: bufTempA } },
+    { binding: 12, resource: { buffer: bufTempAPrev } },
   ];
   // レイアウトが共通なので束ねは 1 つで足りる
   const bind = device.createBindGroup({ layout: bindLayout, entries });
@@ -614,6 +677,8 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
         bufPrev,
         bufAccumPrev,
         bufIce,
+        bufTempA,
+        bufTempAPrev,
         bufParams,
       ]) {
         b.destroy();
@@ -690,6 +755,9 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
         }
       }
       device.queue.writeBuffer(bufTemp, 0, asBufferSource(scratchTemp));
+      // 段 C-2: T_a の初期値は T_s と同値(CPU の Float64Array.from(t) と同じ)。
+      // パス跨ぎの持ち回りは不要 — CPU も毎 integrate で T_s から初期化している
+      device.queue.writeBuffer(bufTempA, 0, asBufferSource(scratchTemp));
       // 氷厚は**パスをまたいで持ち越す状態**。渡されなければ 0 から始める
       if (fields.initialIce) {
         scratchIce.set(fields.initialIce);
@@ -703,6 +771,8 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
       scratchResidual.fill(0);
       device.queue.writeBuffer(bufResidual, 0, asBufferSource(scratchResidual));
 
+      // 段 C-2: 完全 2 温度場か(mode=0 ではコマンド列も従来と同一に保つ)
+      const twoTemp = k.twoTemperatureMode !== 0;
       const totalSteps = fields.years * fields.stepsPerYear;
       // ここに来る時点で呼び出し側が maxSteps を見て抑えているはず。
       // それでも超えたら実装の不整合なので、黙って切り詰めず明示的に落とす
@@ -822,6 +892,10 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
         pu[41] = k.advectionConservative !== 0 ? 1 : 0;
         pf[42] = k.stormWinterHeatDiffBoost;
         pf[43] = k.snowGripFactor;
+        // 段 C-2: 完全 2 温度場(192B 内の空き枠。既存の並びは不変)
+        pu[44] = twoTemp ? 1 : 0;
+        pf[45] = k.airSurfaceExchangeWm2PerK;
+        pf[46] = k.atmosColumnHeatCapJm2K;
         pu[32] = accumulate ? 1 : 0;
         pu[33] = accumSlot;
         device.queue.writeBuffer(bufParams, 0, paramBuf);
@@ -835,11 +909,18 @@ export function createEbmGpu(gpu: GpuContext, cellCount: number): EbmAccel {
           pass.dispatchWorkgroups(groups);
           pass.end();
         };
+        // 段 C-2: ステップ入口で T_a^n の控えを取る(CPU の taN.set(ta) と同順 —
+        // prepA より前。反復中の半陰的の基準点になる)
+        if (twoTemp) enc.copyBufferToBuffer(bufTempA, 0, bufTempAPrev, 0, N * 4);
         run(pipePrepA, cellGroups);
         run(pipePrepB, cellGroups);
         for (let it = 0; it < itersNow; it++) {
           // 最終反復の直前に控えを取り、合成作用素 1 回ぶんの変化量を残差にする
-          if (it === itersNow - 1) enc.copyBufferToBuffer(bufTemp, 0, bufPrev, 0, N * 4);
+          if (it === itersNow - 1) {
+            enc.copyBufferToBuffer(bufTemp, 0, bufPrev, 0, N * 4);
+            // 段 C-2: T_a の変化量も残差に入る(CPU の dA と同じ扱い)
+            if (twoTemp) enc.copyBufferToBuffer(bufTempA, 0, bufPrev, N * 4, N * 4);
+          }
           run(pipeRed, cellGroups);
           run(pipeBlack, cellGroups);
           run(pipePolar, polarGroups);
