@@ -452,6 +452,9 @@ async function runPipelineCore(
             ...(precipitation1.land ? { land: precipitation1.land } : {}),
             priorTemperatureC: temperature1.monthlyTemperatureC,
             priorPrecipMm: precipitation1.monthlyPrecipMm,
+            ...(precipitation1.monthlyWaterMm
+              ? { priorWaterMm: precipitation1.monthlyWaterMm }
+              : {}),
           },
           o,
         ),

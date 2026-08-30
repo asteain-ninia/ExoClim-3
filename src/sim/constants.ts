@@ -725,6 +725,18 @@ export const MODEL_CONSTANTS = {
    * 0 = 旧式(偽熱源つき。過去版の再現用)。
    */
   advectionConservative: 1,
+  /**
+   * OLR 切片の水蒸気構造(2026-08-30、docs/事前登録_OLRの水蒸気構造)。
+   * 晴天 OLR は柱水蒸気に対数的に減る(水蒸気温室 — 乾いた高緯度・砂漠は
+   * 大気の窓が開いて放熱過大、湿った熱帯は保温)。v39 で確定した
+   * 「偽熱源の緯度パッチの受け皿」を地理中立に与える:
+   *   aEff −= これ × ln(1 + W_ann/olrWaterRefMm)(面積平均は差し引いて中立化
+   *   — 全球平衡は olrA が持ち、この項は**構造だけ**を与える)。
+   * W は前パスの可降水量(2 パス目でのみ効く)。**0 = 従来とビット一致。**
+   */
+  olrWaterTrapWm2: 0,
+  /** ln の基準水蒸気量 mm(全球平均 W 程度。固定・掃引しない) */
+  olrWaterRefMm: 8,
   itczDivergenceSuppress: 0,
   stormEddyWindMs: 0,
   /** 渦風の極向き成分の割合(残りは平均風に沿う) */

@@ -327,6 +327,11 @@ export async function computeTemperature(
      * **飽和させて使う**ので降水の誤差が温度へ増幅されない
      */
     priorPrecipMm?: Float32Array[];
+    /**
+     * 前パスの月別可降水量 W(1° 格子、mm)。OLR の水蒸気構造
+     * (olrWaterTrapWm2)が読む。2026-08-30
+     */
+    priorWaterMm?: Float32Array[];
   },
   opts?: RunOptions,
 ): Promise<TemperatureResult> {
@@ -456,6 +461,42 @@ export async function computeTemperature(
     iceOnset[i] = K.iceOnsetC * c.landFrac + K.seaFreezeC * (1 - c.landFrac);
     qFlux[i] = K.sstAnomalyCouplingWm2PerK * c.sstAnomalyC * (1 - c.landFrac);
   }
+  // ---- OLR の水蒸気構造(2026-08-30、既定 0 ビット一致)----
+  // 前パスの W 年平均を EBM 格子へ集約し、aEff へ −trap·ln(1+W/ref) を加える。
+  // 面積平均は差し引く(構造だけを与え、全球平衡は olrA が持つ)
+  if ((K.olrWaterTrapWm2 as number) > 0 && priorSurface?.priorWaterMm?.length === 12) {
+    const fgrid = ctx.grid;
+    const f = Math.max(1, Math.round(cg.resolutionDeg / fgrid.resolutionDeg));
+    const wm = priorSurface.priorWaterMm;
+    const trapTerm = new Float64Array(N);
+    let tSum = 0;
+    let tW = 0;
+    for (let row = 0; row < CH; row++) {
+      const aw = Math.cos((latDegOfRow(cg, row) * Math.PI) / 180);
+      for (let col = 0; col < CW; col++) {
+        const i = row * CW + col;
+        let s = 0;
+        let n = 0;
+        for (let dr = 0; dr < f; dr++) {
+          for (let dc = 0; dc < f; dc++) {
+            const fr = row * f + dr;
+            const fc = col * f + dc;
+            if (fr >= fgrid.heightCells || fc >= fgrid.widthCells) continue;
+            const fi = fr * fgrid.widthCells + fc;
+            for (let m = 0; m < 12; m++) s += wm[m]?.[fi] ?? 0;
+            n += 12;
+          }
+        }
+        const wAnn = n > 0 ? s / n : 0;
+        trapTerm[i] = K.olrWaterTrapWm2 * Math.log(1 + wAnn / Math.max(0.1, K.olrWaterRefMm));
+        tSum += aw * (trapTerm[i] ?? 0);
+        tW += aw;
+      }
+    }
+    const tMean = tW > 0 ? tSum / tW : 0;
+    for (let i = 0; i < N; i++) aEff[i] = (aEff[i] ?? 0) - ((trapTerm[i] ?? 0) - tMean);
+  }
+
   // Q フラックスのエネルギー中立化。補償は**海セルのみ**に配賦する —
   // 全セル一律に引くと、qFlux が 0 の陸にまで恒常の寒冷税(全球 ~−4 W/m²
   // ≈ −1.9°C)がかかる(2026-07-30 レビュー指摘。SST 偏差は構造的に正味プラス)
