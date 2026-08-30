@@ -91,7 +91,7 @@ struct LevelParams {
   summerN : u32, summerS : u32, hasEvap : u32, hasEvapFb : u32,
   slabIce : u32, seaFreeze : f32, iceK : f32, iceLatent : f32,
   iceMinH : f32, iceCoverScale : f32,
-  advConservative : u32, _q1 : u32, _q2 : u32, _q3 : u32, _q4 : u32, _q5 : u32,
+  advConservative : u32, stormWinterHDB : f32, _q2 : u32, _q3 : u32, _q4 : u32, _q5 : u32,
 };
 
 @group(0) @binding(0) var<uniform> P : Params;
@@ -149,7 +149,15 @@ fn dMeridOfRow(r : u32) -> f32 {
   var ridgeAbs = L.ridgeAbsS;
   if (lat >= 0.0) { ridgeAbs = L.ridgeAbsN; }
   let hadleyW = max(0.0, 1.0 - (lat / ridgeAbs) * (lat / ridgeAbs));
-  return L.dBase * (1.0 + L.hadleyBoost * hadleyW);
+  var d = L.dBase * (1.0 + L.hadleyBoost * hadleyW);
+  // 冬の渦熱輸送(2026-08-31。CPU 版 step05 と同式・既定 0 不発)
+  if (L.stormWinterHDB > 0.0) {
+    let stormW = clamp((abs(lat) - ridgeAbs) / 10.0, 0.0, 1.0);
+    if (insolOf(P.m0, r) < rowF(3u, r)) {
+      d = d * (1.0 + L.stormWinterHDB * stormW);
+    }
+  }
+  return d;
 }
 
 // ---- 段 C-0: 保存的移流の外向き係数(L.advConservative == 1u のときだけ使う)----
@@ -867,6 +875,7 @@ export function createEbmGpuBatchAccel(
           lf[o + 25] = k.seaIceCoverScaleMm;
           // 段 C-0: 保存的移流(末尾のパディング枠 _q0 を使う — 既存の並びは不変)
           lu[o + 26] = k.advectionConservative !== 0 ? 1 : 0;
+          lf[o + 27] = k.stormWinterHeatDiffBoost;
         }
         device.queue.writeBuffer(bufLevelParams, 0, levelBuf);
 

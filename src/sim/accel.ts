@@ -231,6 +231,11 @@ export interface EbmConstants {
    * docs/事前登録_熱移流の保存化_2026-08-28.md
    */
   advectionConservative: number;
+  /**
+   * 冬の渦熱輸送(2026-08-31)。リッジ極側 × 冬の行の南北拡散増強。
+   * CPU(step05 の dMeridOfRow)と GPU 両カーネルに同式が入っている前提
+   */
+  stormWinterHeatDiffBoost: number;
 }
 
 export interface EbmAccelResult {

@@ -904,7 +904,18 @@ export async function computeTemperature(
         const lat = latDegOfRow(cg, row);
         const ridgeAbs = lat >= 0 ? ridgeAbsN : ridgeAbsS;
         const hadleyW = Math.max(0, 1 - (lat / ridgeAbs) * (lat / ridgeAbs));
-        dMeridOfRow[row] = dBase * (1 + K.hadleyDiffusionBoost * hadleyW);
+        let d = dBase * (1 + K.hadleyDiffusionBoost * hadleyW);
+        // 冬の渦熱輸送(2026-08-31、既定 0 ビット一致): リッジ極側 × 冬の行の
+        // 南北拡散を増強。行の量なので面平均(gN/gS)の作法にそのまま乗る
+        if ((K.stormWinterHeatDiffBoost as number) > 0) {
+          const stormW = Math.min(1, Math.max(0, (Math.abs(lat) - ridgeAbs) / 10));
+          const winterW =
+            (insolation.monthlyByRow[m0]?.[row] ?? 0) < (insolation.annualMeanByRow[row] ?? 0)
+              ? 1
+              : 0;
+          d *= 1 + K.stormWinterHeatDiffBoost * stormW * winterW;
+        }
+        dMeridOfRow[row] = d;
       }
       // ---- 段 C-0: 保存的移流の前計算(2026-08-28、既定 0 では作らない)----
       // 旧式はセル固有係数 × (T_up − T_i) で面が相殺しない(偽熱源 0.675°C)。
@@ -1322,6 +1333,7 @@ export async function computeTemperature(
     seaIceMinThicknessMm: K.seaIceMinThicknessMm,
     seaIceCoverScaleMm: K.seaIceCoverScaleMm,
     advectionConservative: K.advectionConservative as number,
+    stormWinterHeatDiffBoost: K.stormWinterHeatDiffBoost as number,
   };
   const integrateAny = async (
     permanentIce: Uint8Array | null,
