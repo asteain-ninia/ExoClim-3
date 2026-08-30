@@ -78,6 +78,11 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // docs/事前登録_サブグリッド山岳の凝結_2026-08-27.md 判定 2
   ['orographicRefSlope', 80, 800],
   ['orographicCrestBlend', 0, 1],
+  // v40(2026-08-31): 段 C-2(2 温度場)。kx = T_s↔T_a 交換(雪 grip で変調)。
+  // 酸性試験: kx=15/grip=0.3 でシベリア 1 月 −36.6°C(単一場 −2.5)
+  // docs/事前登録_段C2_二温度場_2026-08-31.md
+  ['airSurfaceExchangeWm2PerK', 5, 60],
+  ['snowGripFactor', 0.1, 1],
   // **外した(2026-08-17)**: 範囲 [0.4, 1.2] は供給の分布の下に沈んで
   // ゲートが 96% 常時飽和(死んだ範囲)。掃引で生かすと東岸緩和が絞られて
   // **本丸の C→B 地域(米南東・東アジア)が乾く**逆効果と確認。
