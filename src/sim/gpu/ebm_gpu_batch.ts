@@ -91,7 +91,7 @@ struct LevelParams {
   summerN : u32, summerS : u32, hasEvap : u32, hasEvapFb : u32,
   slabIce : u32, seaFreeze : f32, iceK : f32, iceLatent : f32,
   iceMinH : f32, iceCoverScale : f32,
-  advConservative : u32, stormWinterHDB : f32, _q2 : u32, _q3 : u32, _q4 : u32, _q5 : u32,
+  advConservative : u32, stormWinterHDB : f32, snowGrip : f32, _q3 : u32, _q4 : u32, _q5 : u32,
 };
 
 @group(0) @binding(0) var<uniform> P : Params;
@@ -165,6 +165,14 @@ fn dMeridOfRow(r : u32) -> f32 {
 // j はグローバル添字。行因子は行が属す水準の定数・行場から引き、
 // 南北の行き先の範囲検査は**局所行**で行う(水準境界 = 極行と同じ扱い)。
 // dir: 0 = 東、1 = 西、2 = 北、3 = 南
+// 段 C-1: セルの雪氷 grip(1 = 遮断なし)。面には両側の積を掛ける。
+// temp は prepB 時点で T^n(半陰的)
+fn advGripOf(j : u32) -> f32 {
+  if (L.snowGrip >= 1.0) { return 1.0; }
+  let snowWA = clamp((cellF(3u, j) - temp[j]) / L.iceRamp, 0.0, 1.0);
+  return 1.0 - (1.0 - L.snowGrip) * snowWA;
+}
+
 fn advOutTo(j : u32, dir : u32) -> f32 {
   let rj = j / P.cw;             // グローバル行
   let L = PL[rj / P.ch];
@@ -322,6 +330,11 @@ fn prepB(@builtin(global_invocation_id) gid : vec3<u32>) {
   if (insolOf(P.m0, r) < rowF(3u, r)) {
     inv = 1.0 - (1.0 - L.winterInvAdv) * cellF(8u, i);
   }
+  // 段 C-1: 雪氷面の移流遮断(既定 1 不発)
+  if (L.snowGrip < 1.0) {
+    let snowWA = clamp((cellF(3u, i) - temp[i]) / L.iceRamp, 0.0, 1.0);
+    inv = inv * (1.0 - (1.0 - L.snowGrip) * snowWA);
+  }
   let advScale = seasonFactor * inv * L.advCoupling;
   let advCu = advScale * (min(9.0, abs(uMs)) / 4.0);
   var upwindU = east;
@@ -359,12 +372,13 @@ fn prepB(@builtin(global_invocation_id) gid : vec3<u32>) {
     // 段 C-0: 保存形(単発版 prepB の同名分岐と同形)。面係数 = 両側セルの
     // 外向き係数の和、南北は cos(面)/cos(中心) の計量。東西を gzE/gzW、
     // 南北/cosC を gN/gS の作業場へ畳み込み、風上 1 点参照の項は 0 にする
-    let cEf = advOutTo(i, 0u) + advOutTo(east, 1u);
-    let cWf = advOutTo(i, 1u) + advOutTo(west, 0u);
+    let gI = advGripOf(i);
+    let cEf = (advOutTo(i, 0u) + advOutTo(east, 1u)) * gI * advGripOf(east);
+    let cWf = (advOutTo(i, 1u) + advOutTo(west, 0u)) * gI * advGripOf(west);
     var cNf = 0.0;
-    if (rl > 0u) { cNf = (advOutTo(i, 2u) + advOutTo(north, 3u)) * cos(phiEdgeN); }
+    if (rl > 0u) { cNf = (advOutTo(i, 2u) + advOutTo(north, 3u)) * cos(phiEdgeN) * gI * advGripOf(north); }
     var cSf = 0.0;
-    if (rl < P.ch - 1u) { cSf = (advOutTo(i, 3u) + advOutTo(south, 2u)) * cos(phiEdgeS); }
+    if (rl < P.ch - 1u) { cSf = (advOutTo(i, 3u) + advOutTo(south, 2u)) * cos(phiEdgeS) * gI * advGripOf(south); }
     setWork(1u, i, workF(11u, i) + L.olrB + workF(12u, i) + workF(13u, i)
       + gzE + gzW + gNEff + gSEff + cEf + cWf + (cNf + cSf) / cosC);
     setWork(2u, i, gzE + cEf);
@@ -876,6 +890,7 @@ export function createEbmGpuBatchAccel(
           // 段 C-0: 保存的移流(末尾のパディング枠 _q0 を使う — 既存の並びは不変)
           lu[o + 26] = k.advectionConservative !== 0 ? 1 : 0;
           lf[o + 27] = k.stormWinterHeatDiffBoost;
+          lf[o + 28] = k.snowGripFactor;
         }
         device.queue.writeBuffer(bufLevelParams, 0, levelBuf);
 

@@ -236,6 +236,8 @@ export interface EbmConstants {
    * CPU(step05 の dMeridOfRow)と GPU 両カーネルに同式が入っている前提
    */
   stormWinterHeatDiffBoost: number;
+  /** 段 C-1(2026-08-31)。雪氷面の移流遮断。CPU/GPU 3 実装に同式 */
+  snowGripFactor: number;
 }
 
 export interface EbmAccelResult {

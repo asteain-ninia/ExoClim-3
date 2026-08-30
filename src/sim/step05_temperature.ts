@@ -927,6 +927,20 @@ export async function computeTemperature(
       let advOutW: Float64Array | null = null;
       let advOutN: Float64Array | null = null;
       let advOutS: Float64Array | null = null;
+      // 段 C-1(2026-08-31): 雪氷面の移流遮断。面には**両側の grip の積**を
+      // 掛ける(片側だけだと風上=海の面が素通りし、i/j の面値も割れる)。
+      // T^n で評価(半陰的 — 反復内では固定)。既定 1 = 全て 1 で不変
+      let advGripW: Float64Array | null = null;
+      if ((K.snowGripFactor as number) < 1) {
+        advGripW = new Float64Array(N);
+        for (let i = 0; i < N; i++) {
+          const snowWA = Math.min(
+            1,
+            Math.max(0, ((iceOnset[i] ?? 0) - (t[i] ?? 0)) / K.iceRampWidthC),
+          );
+          advGripW[i] = 1 - (1 - K.snowGripFactor) * snowWA;
+        }
+      }
       if ((K.advectionConservative as number) !== 0) {
         advOutE = new Float64Array(N);
         advOutW = new Float64Array(N);
@@ -1018,9 +1032,11 @@ export async function computeTemperature(
             const i = row * CW + col;
             const uMs = uField?.[i] ?? 0;
             const vMs = vField?.[i] ?? 0;
-            const inv = isWinterRow
+            let inv = isWinterRow
               ? 1 - (1 - K.winterInversionAdvectionFactor) * (interior01[i] ?? 0)
               : 1;
+            // 段 C-1: 雪氷面の移流遮断(旧経路は受け手中心なので i 側のみ)
+            if (advGripW) inv *= advGripW[i] ?? 1;
             const advScale = seasonFactor * inv * K.zonalAdvectionCouplingWm2PerK;
             const east = row * CW + ((col + 1) % CW);
             const west = row * CW + ((col + CW - 1) % CW);
@@ -1077,13 +1093,24 @@ export async function computeTemperature(
                 advCu * (t[upwindU] ?? 0) +
                 advCv * (t[upwindV] ?? 0);
             } else {
-              const cEf = (advOutE[i] ?? 0) + (advOutW![east] ?? 0);
-              const cWf = (advOutW![i] ?? 0) + (advOutE[west] ?? 0);
+              const gI = advGripW ? (advGripW[i] ?? 1) : 1;
+              const cEf =
+                ((advOutE[i] ?? 0) + (advOutW![east] ?? 0)) *
+                (advGripW ? gI * (advGripW[east] ?? 1) : 1);
+              const cWf =
+                ((advOutW![i] ?? 0) + (advOutE[west] ?? 0)) *
+                (advGripW ? gI * (advGripW[west] ?? 1) : 1);
               const cNf =
-                row > 0 ? ((advOutN![i] ?? 0) + (advOutS![north] ?? 0)) * Math.cos(phiEdgeN) : 0;
+                row > 0
+                  ? ((advOutN![i] ?? 0) + (advOutS![north] ?? 0)) *
+                    Math.cos(phiEdgeN) *
+                    (advGripW ? gI * (advGripW[north] ?? 1) : 1)
+                  : 0;
               const cSf =
                 row < CH - 1
-                  ? ((advOutS![i] ?? 0) + (advOutN![south] ?? 0)) * Math.cos(phiEdgeS)
+                  ? ((advOutS![i] ?? 0) + (advOutN![south] ?? 0)) *
+                    Math.cos(phiEdgeS) *
+                    (advGripW ? gI * (advGripW[south] ?? 1) : 1)
                   : 0;
               diag =
                 cOverDt +
@@ -1334,6 +1361,7 @@ export async function computeTemperature(
     seaIceCoverScaleMm: K.seaIceCoverScaleMm,
     advectionConservative: K.advectionConservative as number,
     stormWinterHeatDiffBoost: K.stormWinterHeatDiffBoost as number,
+    snowGripFactor: K.snowGripFactor as number,
   };
   const integrateAny = async (
     permanentIce: Uint8Array | null,
