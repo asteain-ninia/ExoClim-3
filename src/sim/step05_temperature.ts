@@ -718,6 +718,17 @@ export async function computeTemperature(
       }
     }
     const rhs = new Float64Array(N);
+    // 段 C-2: 大気温 T_a(mode=1 のときだけ意味を持つ。初期は T_s と同値)
+    const twoTemp = (K.twoTemperatureMode as number) !== 0;
+    if (twoTemp && (K.advectionConservative as number) === 0) {
+      throw new Error(
+        '段 C-2(twoTemperatureMode=1)は保存的移流(advectionConservative=1)が前提。' +
+          '旧式移流の上では T_a の輸送が定義できない',
+      );
+    }
+    const ta = twoTemp ? Float64Array.from(t) : null;
+    const taN = twoTemp ? new Float64Array(N) : null; // ステップ入口の T_a^n
+    const caOverDtBase = twoTemp ? (K.atmosColumnHeatCapJm2K as number) : 0;
     // 海氷断熱: 氷結セルの実効熱容量(氷量に応じて毎ステップ更新)。
     // 注: 氷厚状態を持つ 0 層海氷(融解 0°C 固定)は 2026-07-30 に試行したが、
     // 断熱×融解固定の正帰還で南極海リングが夏に融け残り −60S が −14°C へ
@@ -761,6 +772,7 @@ export async function computeTemperature(
     const live = makeLiveTemperature();
 
     for (let step = 0; step < totalSteps; step++) {
+      if (ta && taN) taN.set(ta); // 段 C-2: T_a^n の控え(半陰的の基準点)
       if (step > 0 && step % TICK_STEPS === 0) {
         throwIfCancelled(opts?.signal, 'EBM');
         if (opts?.progress) {
@@ -1133,10 +1145,65 @@ export async function computeTemperature(
                 cWf * (t[west] ?? 0) +
                 (cNf * (t[north] ?? 0) + cSf * (t[south] ?? 0)) / cosC;
             }
-            const next = ((rhs[i] ?? 0) + off) / diag;
-            const d = Math.abs(next - (t[i] ?? 0));
-            if (d > maxDelta) maxDelta = d;
-            t[i] = next;
+            if (ta && taN && advOutE) {
+              // ---- 段 C-2: 2 温度場のセル内 2×2 消去(mode=1)----
+              // 表面: Ds·T_s' = rhsS + kx·T_a'(rhsS = 既存 rhs — Cs/dt·T_s^n +
+              //        放射・海氷・蒸発帰還・qFlux が全部入っている)
+              // 大気: Da·T_a' = Ca/dt·T_a^n + off_a(輸送は T_a 側)+ kx·T_s'
+              // 消去して T_a' を先に解く。輸送は保存形が前提(advOutE 必須)
+              const gripI = advGripW ? (advGripW[i] ?? 1) : 1;
+              const kx = K.airSurfaceExchangeWm2PerK * gripI;
+              const cOverDtS = (capEff[i] ?? 1) / dt;
+              const Ds =
+                cOverDtS + K.olrBWm2PerC + (iceCond[i] ?? 0) + (evapK[i] ?? 0) + kx;
+              const rhsS = rhs[i] ?? 0;
+              // 面係数は保存形と同一(grip 込みで diag/off の組で既に計算済み —
+              // ただし off は t で評価されているので ta で作り直す)
+              const gI2 = advGripW ? (advGripW[i] ?? 1) : 1;
+              const cEf2 =
+                ((advOutE[i] ?? 0) + (advOutW![east] ?? 0)) *
+                (advGripW ? gI2 * (advGripW[east] ?? 1) : 1);
+              const cWf2 =
+                ((advOutW![i] ?? 0) + (advOutE[west] ?? 0)) *
+                (advGripW ? gI2 * (advGripW[west] ?? 1) : 1);
+              const cNf2 =
+                row > 0
+                  ? ((advOutN![i] ?? 0) + (advOutS![north] ?? 0)) *
+                    Math.cos(phiEdgeN) *
+                    (advGripW ? gI2 * (advGripW[north] ?? 1) : 1)
+                  : 0;
+              const cSf2 =
+                row < CH - 1
+                  ? ((advOutS![i] ?? 0) + (advOutN![south] ?? 0)) *
+                    Math.cos(phiEdgeS) *
+                    (advGripW ? gI2 * (advGripW[south] ?? 1) : 1)
+                  : 0;
+              const transDiag = gzE + gzW + gNEff + gSEff + cEf2 + cWf2 + (cNf2 + cSf2) / cosC;
+              const offA =
+                gzE * (ta[east] ?? 0) +
+                gzW * (ta[west] ?? 0) +
+                gNEff * (ta[north] ?? 0) +
+                gSEff * (ta[south] ?? 0) +
+                cEf2 * (ta[east] ?? 0) +
+                cWf2 * (ta[west] ?? 0) +
+                (cNf2 * (ta[north] ?? 0) + cSf2 * (ta[south] ?? 0)) / cosC;
+              const caOverDt = (caOverDtBase / dt) * capScale;
+              const Da = caOverDt + kx + transDiag;
+              const denom = Da - (kx * kx) / Ds;
+              const nextA = (caOverDt * (taN[i] ?? 0) + offA + (kx * rhsS) / Ds) / denom;
+              const nextS = (rhsS + kx * nextA) / Ds;
+              const dS = Math.abs(nextS - (t[i] ?? 0));
+              const dA = Math.abs(nextA - (ta[i] ?? 0));
+              if (dS > maxDelta) maxDelta = dS;
+              if (dA > maxDelta) maxDelta = dA;
+              t[i] = nextS;
+              ta[i] = nextA;
+            } else {
+              const next = ((rhs[i] ?? 0) + off) / diag;
+              const d = Math.abs(next - (t[i] ?? 0));
+              if (d > maxDelta) maxDelta = d;
+              t[i] = next;
+            }
           }
         }
         // 極行の緩和は「1 スイープの終わり」に 1 回。赤黒では黒の後だけ
@@ -1144,6 +1211,11 @@ export async function computeTemperature(
           // 極行の平滑も反復作用素の一部なので、その変化量も残差に算入する
           const polarDelta = relaxPolarRows(cg, t);
           if (polarDelta > maxDelta) maxDelta = polarDelta;
+          // 段 C-2: T_a も同じ作用素の一部として極行を平滑する
+          if (ta) {
+            const polarDeltaA = relaxPolarRows(cg, ta);
+            if (polarDeltaA > maxDelta) maxDelta = polarDeltaA;
+          }
           sweepsUsed++;
           // 残差基準(回数固定のときは判定しない)
           if (fixedSweeps === 0 && maxDelta < EBM_SOLVE_TOLERANCE_C) {
@@ -1275,7 +1347,11 @@ export async function computeTemperature(
   // ビット一致)。EXOCLIM_ADV_GPU=0 で CPU 参照実装へ強制できる(切り分け用)
   const advGpuForced =
     typeof process !== 'undefined' && process.env?.['EXOCLIM_ADV_GPU'] === '0';
-  const ebmAccel = advGpuForced ? null : (opts?.accel?.ebm(N) ?? null);
+  // 段 C-2(mode=1)は当面 CPU のみ(GPU 移植・検収まで。C-0 と同じ作法)
+  const ebmAccel =
+    advGpuForced || (K.twoTemperatureMode as number) !== 0
+      ? null
+      : (opts?.accel?.ebm(N) ?? null);
   const f32 = (a: ArrayLike<number>, n = a.length): Float32Array => {
     const out = new Float32Array(n);
     for (let i = 0; i < n; i++) out[i] = a[i] ?? 0;
