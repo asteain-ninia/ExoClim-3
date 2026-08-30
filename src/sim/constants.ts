@@ -755,9 +755,10 @@ export const MODEL_CONSTANTS = {
    * 段 C-2(2026-08-31、docs/事前登録_段C2_二温度場)。完全 2 温度場:
    * T_s(表面 = 現行 T の後継。放射・海氷・蒸発帰還・下流の読者はこちら)と
    * T_a(大気 = 輸送の内部状態)。k_x 交換で結合し、k_x→大で単一場に漸近。
-   * **0 = 旧経路そのまま(ビット一致)。1 は CPU のみ(GPU 移植まで)。**
+   * **1 が既定(2026-08-31、GPU 検収後に切替 — v40 の再基準線)。**
+   * 0 = 旧単一場(過去版の再現用)。
    */
-  twoTemperatureMode: 0,
+  twoTemperatureMode: 1,
   /** T_s↔T_a の交換係数 W/m²/K(SPACE 候補。雪 grip で変調 = 段 C-1 の転用) */
   airSurfaceExchangeWm2PerK: 15,
   /** 大気柱の熱容量 J/m²/K(c_p·p/g の算術 ≈ 1.0e7。物理定数 — 掃引しない) */

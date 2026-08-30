@@ -1347,15 +1347,11 @@ export async function computeTemperature(
   // ビット一致)。EXOCLIM_ADV_GPU=0 で CPU 参照実装へ強制できる(切り分け用)
   const advGpuForced =
     typeof process !== 'undefined' && process.env?.['EXOCLIM_ADV_GPU'] === '0';
-  // 段 C-2(mode=1)は当面 CPU のみ(GPU 移植・検収まで。C-0 と同じ作法)。
-  // EXOCLIM_C2_GPU=1 は**検収用の抜け穴**(out/check_c2_gpu_acid.ts が使う)。
-  // 既定動作は不変 — 検収合格後にこの守りごと外す
-  const c2GpuForced =
-    typeof process !== 'undefined' && process.env?.['EXOCLIM_C2_GPU'] === '1';
-  const ebmAccel =
-    advGpuForced || ((K.twoTemperatureMode as number) !== 0 && !c2GpuForced)
-      ? null
-      : (opts?.accel?.ebm(N) ?? null);
+  // 段 C-2 の GPU 移植は 2026-08-31 に検収済み(酸性 ○・バッチ/単発一致)。
+  // EXOCLIM_C2_GPU=0 で CPU 参照実装へ強制できる(切り分け用)
+  const c2CpuForced =
+    typeof process !== 'undefined' && process.env?.['EXOCLIM_C2_GPU'] === '0';
+  const ebmAccel = advGpuForced || c2CpuForced ? null : (opts?.accel?.ebm(N) ?? null);
   const f32 = (a: ArrayLike<number>, n = a.length): Float32Array => {
     const out = new Float32Array(n);
     for (let i = 0; i < n; i++) out[i] = a[i] ?? 0;

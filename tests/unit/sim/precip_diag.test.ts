@@ -113,6 +113,15 @@ describe('降水内部要因の診断(R1)', () => {
     const land = diagRun.result.context.terrain.landMask;
     const travelKmPerMonth =
       (MODEL_CONSTANTS.condensationRefWindMs * SECONDS_PER_MONTH) / 1000;
+    // 凝結閉包の二成分化(2026-08-26)後の上限(2026-08-31 更新、crh_inner と同形):
+    //   C ≤ [(1−c)·rate_old + c·bg + c·conv]·W(cap 項 0 の保守的上限)。
+    // 旧上限(rate_old のみ)は閉包が対流項を出す条件で恒等的に破れる —
+    // mode=1(2 温度場)の温度変化で cap が縮み露出した
+    const cBlend = MODEL_CONSTANTS.condensationClosureBlend as number;
+    const bgRate =
+      cBlend > 0 ? 30.44 / Math.max(0.1, MODEL_CONSTANTS.backgroundCondensationTimeDays) : 0;
+    const convRate =
+      cBlend > 0 ? 30.44 / Math.max(0.05, MODEL_CONSTANTS.convectiveAdjustmentDays) : 0;
     let checked = 0;
     let worstRatio = 0;
     for (let m = 0; m < 12; m++) {
@@ -128,7 +137,8 @@ describe('降水内部要因の診断(R1)', () => {
         const lKm = land[i]
           ? MODEL_CONSTANTS.moistureDecayLandKm
           : MODEL_CONSTANTS.moistureDecayOceanKm;
-        const rate = Math.max(0.05, (travelKmPerMonth / Math.max(1, lKm)) * (g[i] ?? 0));
+        const rateOld = Math.max(0.05, (travelKmPerMonth / Math.max(1, lKm)) * (g[i] ?? 0));
+        const rate = cBlend > 0 ? (1 - cBlend) * rateOld + cBlend * bgRate + cBlend * convRate : rateOld;
         const implied = (pre[i] ?? 0) / water;
         worstRatio = Math.max(worstRatio, implied / Math.max(1e-9, rate));
         checked++;
