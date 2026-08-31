@@ -567,6 +567,8 @@ export interface FieldScore {
   /** v6: 位相の帯別 RMSE の平均(帯 = |緯度| [0,15)/[15,35)/[35,90])。
    * 全球 RMSE は冬雨型少数派が支配するため、帯別平均を目的関数 v6 の距離にする */
   precipPhaseBandMeanDays: number;
+  /** 診断用: 位相の帯別 RMSE の内訳 [0-15, 15-35, 35-90] 日。採点には使わない */
+  precipPhaseBandDays: [number, number, number];
   /** 最少月降水の RMSE mm/月。乾季の深さ = Af/Am/Aw と s/w を決める */
   precipDriestRmseMm: number;
   /** 最多月降水の RMSE mm/月 */
@@ -903,6 +905,11 @@ export function fieldScore(
       (Math.sqrt((sePPhaseBand[0] ?? 0) / Math.max(1e-9, wPPhaseBand[0] ?? 0)) +
         Math.sqrt((sePPhaseBand[1] ?? 0) / Math.max(1e-9, wPPhaseBand[1] ?? 0)) +
         Math.sqrt((sePPhaseBand[2] ?? 0) / Math.max(1e-9, wPPhaseBand[2] ?? 0))) / 3,
+    precipPhaseBandDays: [
+      Math.sqrt((sePPhaseBand[0] ?? 0) / Math.max(1e-9, wPPhaseBand[0] ?? 0)),
+      Math.sqrt((sePPhaseBand[1] ?? 0) / Math.max(1e-9, wPPhaseBand[1] ?? 0)),
+      Math.sqrt((sePPhaseBand[2] ?? 0) / Math.max(1e-9, wPPhaseBand[2] ?? 0)),
+    ],
     precipDriestRmseMm: Math.sqrt(seDry / Math.max(1e-9, wDryWet)),
     precipWettestRmseMm: Math.sqrt(seWet / Math.max(1e-9, wDryWet)),
     obsSdTempC: sd(oT, oT2, wObs),
