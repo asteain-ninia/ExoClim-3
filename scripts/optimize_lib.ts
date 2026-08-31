@@ -83,6 +83,10 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // docs/事前登録_段C2_二温度場_2026-08-31.md
   ['airSurfaceExchangeWm2PerK', 5, 60],
   ['snowGripFactor', 0.1, 1],
+  // v41(2026-09-01): 熱的 SLP の復活(段 9 第 2 版 — T_s で入力が初めて本物)。
+  // 掃引: 東岸夏流入が初の正転(us −144→+192)・ゲート 17 歴代最多・
+  // RMSE 悪化なし。docs/事前登録_温度から気圧への帰還 追記
+  ['thermalLowHpaPerK', 0, 2],
   // **外した(2026-08-17)**: 範囲 [0.4, 1.2] は供給の分布の下に沈んで
   // ゲートが 96% 常時飽和(死んだ範囲)。掃引で生かすと東岸緩和が絞られて
   // **本丸の C→B 地域(米南東・東アジア)が乾く**逆効果と確認。
