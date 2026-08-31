@@ -569,6 +569,8 @@ export interface FieldScore {
   precipPhaseBandMeanDays: number;
   /** 診断用: 位相の帯別 RMSE の内訳 [0-15, 15-35, 35-90] 日。採点には使わない */
   precipPhaseBandDays: [number, number, number];
+  /** 診断用: 符号付き位相差の帯別平均(正 = モデルの雨季が観測より遅い)。採点には使わない */
+  precipPhaseBandSignedDays: [number, number, number];
   /** 最少月降水の RMSE mm/月。乾季の深さ = Af/Am/Aw と s/w を決める */
   precipDriestRmseMm: number;
   /** 最多月降水の RMSE mm/月 */
@@ -688,6 +690,8 @@ export function fieldScore(
   let wPPhase = 0;
   const sePPhaseBand = [0, 0, 0];
   const wPPhaseBand = [0, 0, 0];
+  /** 診断用: 符号付き位相差の帯別積算(正 = モデルの雨季が観測より遅い) */
+  const sgPPhaseBand = [0, 0, 0];
   let seDry = 0;
   let seWet = 0;
   let wDryWet = 0;
@@ -838,6 +842,7 @@ export function fieldScore(
             const bi = Math.abs(lat) < 15 ? 0 : Math.abs(lat) < 35 ? 1 : 2;
             sePPhaseBand[bi] = (sePPhaseBand[bi] ?? 0) + w * days * days;
             wPPhaseBand[bi] = (wPPhaseBand[bi] ?? 0) + w;
+            sgPPhaseBand[bi] = (sgPPhaseBand[bi] ?? 0) + w * days;
           }
         }
         seDry += w * dDry * dDry;
@@ -909,6 +914,11 @@ export function fieldScore(
       Math.sqrt((sePPhaseBand[0] ?? 0) / Math.max(1e-9, wPPhaseBand[0] ?? 0)),
       Math.sqrt((sePPhaseBand[1] ?? 0) / Math.max(1e-9, wPPhaseBand[1] ?? 0)),
       Math.sqrt((sePPhaseBand[2] ?? 0) / Math.max(1e-9, wPPhaseBand[2] ?? 0)),
+    ],
+    precipPhaseBandSignedDays: [
+      (sgPPhaseBand[0] ?? 0) / Math.max(1e-9, wPPhaseBand[0] ?? 0),
+      (sgPPhaseBand[1] ?? 0) / Math.max(1e-9, wPPhaseBand[1] ?? 0),
+      (sgPPhaseBand[2] ?? 0) / Math.max(1e-9, wPPhaseBand[2] ?? 0),
     ],
     precipDriestRmseMm: Math.sqrt(seDry / Math.max(1e-9, wDryWet)),
     precipWettestRmseMm: Math.sqrt(seWet / Math.max(1e-9, wDryWet)),
