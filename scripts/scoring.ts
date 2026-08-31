@@ -638,7 +638,7 @@ export const PRECIP_QUANTILE_EPS_MM = 1;
  * **これは観測データ側の暦の都合**であり、モデルには持ち込まない
  * (モデルの月は惑星の軌道で定義される)。位相を比べるときだけ補正する。
  */
-const OBS_MONTH_ORIGIN_OFFSET = 0.355;
+export const OBS_MONTH_ORIGIN_OFFSET = 0.355;
 
 /** 季節位相を比べる下限振幅(°C)。これ未満の熱帯は位相が定義しにくい */
 const PHASE_MIN_AMPLITUDE_C = 2;
@@ -647,10 +647,10 @@ const PHASE_MIN_AMPLITUDE_C = 2;
  * 降水の位相を比べる下限(年 1 周期の振幅 / 年平均月降水)。
  * 季節性の乏しい場所は位相が定義しにくいので除く
  */
-const PRECIP_PHASE_MIN_RATIO = 0.3;
+export const PRECIP_PHASE_MIN_RATIO = 0.3;
 
 /** 12 点の周期系列から年 1 周期の振幅と位相(月単位)を取り出す */
-function annualHarmonic(series: number[]): { amp: number; peak: number } {
+export function annualHarmonic(series: number[]): { amp: number; peak: number } {
   let a = 0;
   let b = 0;
   for (let m = 0; m < 12; m++) {
