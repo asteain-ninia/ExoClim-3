@@ -184,7 +184,7 @@ export const MODEL_CONSTANTS = {
   /** 寒流(SST 負偏差)上の層積雲デッキ: 偏差 -2°C で雲 +この比率 */
   stratocumulusBoostPerNegC: 0.4936800000000001,
   /** 冬(月日射 < 年平均)の陸上における移流結合の低減率(接地逆転層) */
-  winterInversionAdvectionFactor: 0.5331199999999999,
+  winterInversionAdvectionFactor: 0.56112,
   /**
    * 冬の接地逆転層は移流だけでなく拡散(自由大気との混合)も絶縁する。
    * 内陸度 1 の冬に拡散をこの係数まで低減(シベリア・南極内陸の冬の冷え込み)
@@ -358,7 +358,7 @@ export const MODEL_CONSTANTS = {
    * SPACE 非投入。**0 = 無効(従来とビット一致)。**
    * docs/事前登録_v31物理バッチ_2026-08-21.md 件 2
    */
-  itczMoistLandPullDeg: 0.3599999999999999,
+  itczMoistLandPullDeg: 0.8999999999999999,
   /** 経度平滑化後に混ぜ戻す生値の割合(0 = 完全平滑)。モンスーンの経度局所性を保つ */
   itczSmoothLocalBlend: 0.26104000000000005,
   /** ITCZ 影響帯の半幅(度) */
@@ -522,7 +522,7 @@ export const MODEL_CONSTANTS = {
    * 連続しているか」で判別し、ベンガル湾北岸(モンスーンの主供給源)を守る。
    * SST が年一枚のため、夏半球は「ITCZ 年最大変位の深い側の半球」で判定する。
    */
-  somaliUpwellingC: 1.5904,
+  somaliUpwellingC: 2.0224,
   /**
    * 暖流ゲートの幅チェック(0 = 従来とビット一致 / 1 = 有効)。
    * 事前登録: docs/事前登録_v31物理バッチ_2026-08-21.md 件 1。
@@ -774,11 +774,11 @@ export const MODEL_CONSTANTS = {
   stormBaroclinicityNormKPer1000Km: 5,
   condensationClosureBlend: 0.132,
   /** 背景(層状)凝結の時定数 日(実物の滞留 ~9 日は対流込み — 背景は長い) */
-  backgroundCondensationTimeDays: 79.08959999999999,
+  backgroundCondensationTimeDays: 90,
   /** 湿潤対流の発火する臨界柱相対湿度(cap = これ × W_sat / G) */
   criticalColumnRelativeHumidity: 0.83904,
   /** 対流調整の時定数 日 */
-  convectiveAdjustmentDays: 0.43999999999999995,
+  convectiveAdjustmentDays: 0.6639999999999999,
 
   // ---- Step 6 降水 (docs/spec/06_降水.md) ----
   /**
@@ -813,13 +813,13 @@ export const MODEL_CONSTANTS = {
    * 亜熱帯の冬雨(地中海型)を作る機構 — モデルは G が平坦で冬雨を持たない。
    * **0 = 無効(従来とビット一致)。**
    */
-  winterStormEquatorwardReachDeg: 0,
+  winterStormEquatorwardReachDeg: 4,
   /** 水蒸気供給の海上減衰距離(km) */
   moistureDecayOceanKm: 1500,
   /** 陸上減衰距離(km、再循環なしの素の値) */
   moistureDecayLandKm: 1887.5482424630225,
   /** 陸面再蒸発の強さ(0〜1、二回目のパスで局所降水に比例) */
-  landRecyclingStrength: 0.3524743448968977,
+  landRecyclingStrength: 0.32047434489689774,
   /**
    * R3 土壌水分(地域降水 FB §7): 根群域の植物利用可能水量(mm)。
    * 0 = 無効(旧来の「当月降水に比例」へ戻す)。熱帯林の深根系は 2〜3m 級で
@@ -922,7 +922,7 @@ export const MODEL_CONSTANTS = {
    */
   itczLiftSupplyNorm: 6.6739999999999995,
   /** ストームトラック(温帯低気圧帯)の増幅 */
-  stormTrackBoost: 0.4,
+  stormTrackBoost: 0.456,
   /** 寒候期のストームトラック追加増幅 */
   stormTrackWinterBoost: 0.1986,
   /** 地形性上昇の増幅(基準勾配あたり) */
@@ -1030,7 +1030,7 @@ export const MODEL_CONSTANTS = {
    * (最多雨月のこの割合、上限 mm)。年総量は保存(湿潤月から比例控除)。
    * タイガの Dw 化(実物は Df)と Cwa 最多/最少比 276 への対策
    */
-  winterFloorFracOfWettest: 0.4676,
+  winterFloorFracOfWettest: 0.3896,
   winterFloorMaxMm: 34,
   /** 夏半球の偏西風移流の弱化率(ジェットの季節弱化) */
   summerAdvectionFactor: 0.576,
@@ -1058,7 +1058,7 @@ export const MODEL_CONSTANTS = {
   upwindBlockScanKm: 900,
   upwindBlockFloor: 1,
   /** 寒流沿岸の追加抑制率 */
-  coldCoastSuppression: 0.25252,
+  coldCoastSuppression: 0.25,
   /** 全球スケール係数(供給×持ち上げ → mm/月) */
   precipScaleMmPerUnit: 8.2,
 
