@@ -811,6 +811,13 @@ export const MODEL_CONSTANTS = {
    * 0 = 従来と厳密一致。計画_W実寸化章_2026-09-02.md 段 W-1。
    */
   condensationGNormalize: 0,
+  /**
+   * cap の減算形(2026-09-02)。γ > 0 のとき対流閾値を
+   * cap = W_sat·max(0.05, RHcrit − γ·G) にする(持ち上げ G が閾値を線形に
+   * 下げる)。既定 0 = 従来の除算形 RHcrit·W_sat/G(G 形状に過敏だった)。
+   * 事前登録_Wの熱力学係留_2026-09-02.md 追加登録 3(予測 96-99)。
+   */
+  capLiftSubtractGamma: 0,
   /** 背景(層状)凝結の時定数 日(実物の滞留 ~9 日は対流込み — 背景は長い) */
   backgroundCondensationTimeDays: 90,
   /** 湿潤対流の発火する臨界柱相対湿度(cap = これ × W_sat / G) */

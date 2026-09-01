@@ -1582,11 +1582,17 @@ export async function computePrecipitation(
       linRate = new Float32Array(N);
       capField = new Float32Array(N);
       if (rhFloor > 0) linFloorField = new Float32Array(N);
+      // cap の減算形(2026-09-02、事前登録_Wの熱力学係留 追加登録 3):
+      // γ>0 のとき cap = W_sat·max(0.05, RHcrit − γ·G) — 持ち上げが閾値を
+      // **線形に**下げる。除算形(既定 γ=0)は G 形状に過敏だった
+      const capGamma = K.capLiftSubtractGamma as number;
       for (let i = 0; i < N; i++) {
         linRate[i] = (1 - cClosure) * (rate[i] ?? 0) + cClosure * bgRate;
         const wSat = saturatedColumnMm(tField[i] ?? 0, pHpa);
         capField[i] =
-          (K.criticalColumnRelativeHumidity * wSat) / Math.max(0.05, G[i] ?? 0);
+          capGamma > 0
+            ? wSat * Math.max(0.05, K.criticalColumnRelativeHumidity - capGamma * (G[i] ?? 0))
+            : (K.criticalColumnRelativeHumidity * wSat) / Math.max(0.05, G[i] ?? 0);
         if (linFloorField) linFloorField[i] = rhFloor * wSat;
         rate[i] = cClosure * convRate;
       }
