@@ -1535,17 +1535,24 @@ export async function computePrecipitation(
     const cClosure = K.condensationClosureBlend as number;
     let linRate: Float32Array | null = null;
     let capField: Float32Array | null = null;
+    // W の熱力学係留(2026-09-02、事前登録_Wの熱力学係留): 線形凝結の床
+    // floor = rhFloor·W_sat(T)。lin·W → lin·(W−floor)⁺。既定 0 = 床なしで
+    // 従来と厳密一致。閉包(lin がある)ときだけ意味を持つ
+    let linFloorField: Float32Array | null = null;
     if (cClosure > 0) {
       const pHpa = ctx.params.atmosphere.surfacePressureBar * 1013.25;
       const bgRate = MONTH_DAYS / Math.max(0.1, K.backgroundCondensationTimeDays);
       const convRate = MONTH_DAYS / Math.max(0.05, K.convectiveAdjustmentDays);
+      const rhFloor = K.condensationRhFloor as number;
       linRate = new Float32Array(N);
       capField = new Float32Array(N);
+      if (rhFloor > 0) linFloorField = new Float32Array(N);
       for (let i = 0; i < N; i++) {
         linRate[i] = (1 - cClosure) * (rate[i] ?? 0) + cClosure * bgRate;
         const wSat = saturatedColumnMm(tField[i] ?? 0, pHpa);
         capField[i] =
           (K.criticalColumnRelativeHumidity * wSat) / Math.max(0.05, G[i] ?? 0);
+        if (linFloorField) linFloorField[i] = rhFloor * wSat;
         rate[i] = cClosure * convRate;
       }
     }
@@ -1623,6 +1630,7 @@ export async function computePrecipitation(
       {
         ...(linRate ? { linearRatePerMonth: linRate } : {}),
         ...(capField ? { holdingCapacityMm: capField } : {}),
+        ...(linFloorField ? { linearFloorMm: linFloorField } : {}),
         diffusivityM2PerS: diffOpt,
         // **上限が答えを決めないところまで上げる。** 既定 4000 では 84 か月分が
         // 未収束のまま残った(2026-08-09)。EBM で 3 回踏んだ隠しパラメータと

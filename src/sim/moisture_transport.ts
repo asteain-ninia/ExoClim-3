@@ -90,6 +90,15 @@ export interface MoistureTransportOptions {
    */
   linearRatePerMonth?: ArrayLike<number>;
   /**
+   * [cell] 線形凝結の床 mm(**W の熱力学係留**、2026-09-02。
+   * docs/事前登録_Wの熱力学係留_2026-09-02.md)。
+   * 渡すと線形項が lin·W → lin·max(0, W − floor) になる — 凝結を駆動するのは
+   * W の量ではなく**飽和からの距離**(床 = rhFloor·W_sat(T))。床下の W は
+   * 凝結を免除され輸送で生き残る。渡さない・全 0 は従来と厳密に一致。
+   * 床は非線形(枝)なので、指定時は直接解法を使わず緩和経路で解く。
+   */
+  linearFloorMm?: ArrayLike<number>;
+  /**
    * [cell] 鉛直輸出率 1/月(**沈降域で柱から抜ける水蒸気**)。
    *
    * なぜ要るか(2026-08-04 実測、docs/実験記録_保存型水蒸気輸送_2026-08-04.md):
@@ -234,6 +243,18 @@ export function solveMoistureTransport(
   }
   /** 背景凝結率(全 0 なら null = 従来と厳密一致) */
   const linRate = linIsZero ? null : linGiven;
+  // 線形凝結の床(全 0 か lin 不在なら null = 従来と厳密一致)
+  const floorGiven = options.linearFloorMm ?? null;
+  let floorIsZero = floorGiven !== null;
+  if (floorGiven && linRate) {
+    for (let i = 0; i < N; i++) {
+      if ((floorGiven[i] ?? 0) > 0) {
+        floorIsZero = false;
+        break;
+      }
+    }
+  }
+  const linFloor = floorIsZero || !linRate ? null : floorGiven;
   const vExport = options.verticalExportRatePerMonth ?? null;
 
   const aM = radiusKm * 1000;
@@ -421,8 +442,8 @@ export function solveMoistureTransport(
     }
   };
 
-  // 閾値なしなら対角は反復不変なので、分解は 1 度だけ作る
-  if (!capacity) {
+  // 閾値なしなら対角は反復不変なので、分解は 1 度だけ作る(床も枝を持つ)
+  if (!capacity && !linFloor) {
     for (let row = 0; row < H; row++) {
       const base = row * W;
       for (let col = 0; col < W; col++) rowDiag[col] = diagArr[base + col] ?? 1;
@@ -599,7 +620,10 @@ export function solveMoistureTransport(
   // 線緩和そのものなので、Krylov に化けると測定の意味が変わる)
   const solverMode = TRANSPORT_SOLVER_OVERRIDE.mode ?? options.solver ?? 'auto';
   const useKrylov =
-    capacity === null && solverMode === 'auto' && options.relaxation === undefined;
+    capacity === null &&
+    linFloor === null &&
+    solverMode === 'auto' &&
+    options.relaxation === undefined;
   let krylovDone = false;
   let krylovSweeps = 0;
   if (useKrylov) {
@@ -762,6 +786,21 @@ export function solveMoistureTransport(
               condNow = (linArr[i] ?? 0) * wi;
             }
           }
+          // 床(W の熱力学係留): lin·W → lin·(W − floor)⁺。
+          // 上の cap 両枝はどちらも lin を対角と condNow に含むので、
+          // ここで床の枝ぶんだけ差し引けば両者と合成できる
+          if (linFloor) {
+            const fl = Math.max(0, linFloor[i] ?? 0);
+            if (fl > 0) {
+              if (wi > fl) {
+                rhs += (linArr[i] ?? 0) * fl;
+                condNow -= (linArr[i] ?? 0) * fl;
+              } else {
+                diagI = Math.max(1e-9, diagI - (linArr[i] ?? 0));
+                condNow -= (linArr[i] ?? 0) * wi;
+              }
+            }
+          }
           rowRhs[col] = rhs;
           rowDiag[col] = diagI;
           // **反復前の残差**(南北は既知、東西は現在値で評価)
@@ -778,7 +817,7 @@ export function solveMoistureTransport(
           // **NaN を素通りさせない**
           if (!(absImb <= maxImbalance)) maxImbalance = absImb;
         }
-        if (capacity) factorizeRow(row);
+        if (capacity || linFloor) factorizeRow(row);
         // 周期三重対角を解く(分解は反復不変なので使い回す)
         let prev = 0;
         for (let col = 0; col < W; col++) {
@@ -847,9 +886,11 @@ export function solveMoistureTransport(
     // 凝結で除いた水は必ず同じセルの降水に計上する(漏れを作らない)。
     // 閾値ありのときは「持てる量を超えたぶん」だけが降る
     const excess = capacity ? Math.max(0, wi - Math.max(0, capacity[i] ?? 0)) : wi;
+    // 床(熱力学係留)ありなら lin は床上の超過分だけ凝結する
+    const linBase = linFloor ? Math.max(0, wi - Math.max(0, linFloor[i] ?? 0)) : wi;
     condensationMm[i] =
       Math.max(1e-6, condensationRatePerMonth[i] ?? 0) * excess +
-      (linRate ? Math.max(0, linRate[i] ?? 0) * wi : 0);
+      (linRate ? Math.max(0, linRate[i] ?? 0) * linBase : 0);
     exportedMm[i] = vExport ? Math.max(0, vExport[i] ?? 0) * wi : 0;
   }
   return { waterMm, condensationMm, exportedMm, iterations, residual, converged };

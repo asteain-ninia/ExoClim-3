@@ -787,6 +787,21 @@ export const MODEL_CONSTANTS = {
   /** 渦風が全開になる傾圧性 K/1000km(中緯度冬の典型値。掃引しない固定尺) */
   stormBaroclinicityNormKPer1000Km: 5,
   condensationClosureBlend: 0.132,
+  /**
+   * W の熱力学係留(2026-09-02)。線形凝結の床: lin·W → lin·(W − floor)⁺、
+   * floor = rhFloor × W_sat(T)。凝結を駆動するのは W の量ではなく
+   * **飽和からの距離**という一次近似。
+   *
+   * なぜ要るか(W 収支監査の実測): 蒸発は実寸(全球 1462mm/年)・P も実寸
+   * なのに W だけ 1/5(滞留 1.2 日、実物 9 日)。W を RH·W_sat へ積み上げる
+   * 熱力学の錨がモデルに無く、P=λ·G·W は「縮尺 W × 過大 λ」の縮退で
+   * 実寸 P を偽造していた。床下の W は凝結を免除され輸送で生き残る —
+   * 冬雨の移入(L×7 掃引で符号 88 日正転を実証)の受け皿。
+   *
+   * 0 = 床なしで従来と厳密一致。閉包(condensationClosureBlend > 0)の
+   * ときだけ効く。事前登録: docs/事前登録_Wの熱力学係留_2026-09-02.md
+   */
+  condensationRhFloor: 0,
   /** 背景(層状)凝結の時定数 日(実物の滞留 ~9 日は対流込み — 背景は長い) */
   backgroundCondensationTimeDays: 90,
   /** 湿潤対流の発火する臨界柱相対湿度(cap = これ × W_sat / G) */
