@@ -70,6 +70,11 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // (docs/事前登録_凝結閉包の二成分化 判定 2・予測 114〜115)。
   // τ_bg 上限 90 = 背景凝結が実質オフの側。τ_conv 下限 0.2 = 数時間スケール
   ['condensationClosureBlend', 0, 1],
+  // v43(2026-09-02、W 実寸化章): W の熱力学係留(RH フロア)と cap の減算形。
+  // 単独掃引で地中海時計 118→61 日・γ で東岸が開く(96 ○)ことを実証済み。
+  // docs/事前登録_Wの熱力学係留_2026-09-02.md(予測 84-99)
+  ['condensationRhFloor', 0, 0.85],
+  ['capLiftSubtractGamma', 0, 1.8],
   ['backgroundCondensationTimeDays', 8, 90],
   ['criticalColumnRelativeHumidity', 0.4, 0.95],
   ['convectiveAdjustmentDays', 0.2, 3],
