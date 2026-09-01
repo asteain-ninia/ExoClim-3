@@ -198,7 +198,9 @@ async function runPipelineCore(
   // 温度 → 気圧 → 風 の帰還(段 9)。パス 1 の気温で気圧場と風を作り直し、
   // パス 2 をその風で回す。**反復はしない**(正帰還の暴走を避けるため —
   // 2026-08-01 の蒸発冷却フィードバックが同じ型で大破している)
-  const thermalFeedback = MODEL_CONSTANTS.thermalLowHpaPerK > 0;
+  // 段 10(熱風リンク)も同じ 2 パス配管を使う: パス 1 の気温で風を作り直す
+  const thermalFeedback =
+    MODEL_CONSTANTS.thermalLowHpaPerK > 0 || MODEL_CONSTANTS.thermalWindFactor > 0;
   const twoPass =
     MODEL_CONSTANTS.evapCoolingWm2PerMmDay > 0 ||
     MODEL_CONSTANTS.landDryCapacityFrac < 1 ||
@@ -418,8 +420,9 @@ async function runPipelineCore(
     airflow2 = await stage(
       'airflow',
       'step4b_airflow',
-      [context, itcz, windBelt2, P.body],
-      () => computeAirflow(context, itcz, windBelt2),
+      // 段 10: 熱風リンクがパス 1 の気温を読むので依存に temperature1 を含める
+      [context, itcz, windBelt2, temperature1, P.body],
+      () => computeAirflow(context, itcz, windBelt2, temperature1.monthlyTemperatureC),
       (r) => ({ airflow: r }),
     );
   }

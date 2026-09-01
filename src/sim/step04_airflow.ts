@@ -12,12 +12,59 @@ export function computeAirflow(
   ctx: SimContext,
   itcz: ItczResult,
   windBelt: WindBeltResult,
+  priorTemperatureC?: Float32Array[],
 ): AirflowResult {
   const { grid, params, terrain } = ctx;
   const W = grid.widthCells;
   const H = grid.heightCells;
   const dirSign = params.body.rotationDirection >= 0 ? 1 : -1;
   const dyKm = cellHeightKm(grid, params.body.radiusKm);
+
+  // 段 10: 熱風リンク(2026-09-01。docs/事前登録_熱風リンク_2026-09-01.md)。
+  // 偏西風帯の振幅は月別の子午温度勾配(バロクリニシティ)を読む。
+  // 実測: モデルの西風は DJF/JJA 比 0.72 と**反季節**(実物は冬 ≈2 倍)で、
+  // 冬雨型への移入が上流海洋 W の秋の暦の写しになっていた。温度場は
+  // 2 温度場で正しい季節性(勾配比 1.65)を既に持つ — 読む側だけが欠けていた。
+  // B(m) = 行平均 T(|lat|30-40) − 行平均 T(55-65) を半球別に取り、
+  // s(m) = 1 + factor·(B/B̄ − 1)(箍 [0.5, 1.7])を偏西風帯の帯状風だけに乗算。
+  // 地理中立(行平均・半球相対)。**既定 0 では s=1 で従来とビット一致。**
+  // パス 1(気温未計算)は素通しで、thermalFeedback の 2 パス目だけが読む。
+  const tw = K.thermalWindFactor as number;
+  let sWestN: number[] | null = null;
+  let sWestS: number[] | null = null;
+  if (tw > 0 && priorTemperatureC && priorTemperatureC.length === MONTHS_PER_YEAR) {
+    const bN: number[] = [];
+    const bS: number[] = [];
+    for (let m = 0; m < MONTHS_PER_YEAR; m++) {
+      const t = priorTemperatureC[m];
+      let loN = 0, nLoN = 0, hiN = 0, nHiN = 0;
+      let loS = 0, nLoS = 0, hiS = 0, nHiS = 0;
+      for (let row = 0; row < H; row++) {
+        const lat = latDegOfRow(grid, row);
+        const a = Math.abs(lat);
+        const inLo = a >= 30 && a <= 40;
+        const inHi = a >= 55 && a <= 65;
+        if (!inLo && !inHi) continue;
+        let s = 0;
+        for (let col = 0; col < W; col++) s += t?.[row * W + col] ?? 0;
+        if (lat > 0) {
+          if (inLo) { loN += s; nLoN += W; } else { hiN += s; nHiN += W; }
+        } else {
+          if (inLo) { loS += s; nLoS += W; } else { hiS += s; nHiS += W; }
+        }
+      }
+      bN.push(nLoN > 0 && nHiN > 0 ? loN / nLoN - hiN / nHiN : 0);
+      bS.push(nLoS > 0 && nHiS > 0 ? loS / nLoS - hiS / nHiS : 0);
+    }
+    // 年平均勾配がほぼ 0 の惑星(自転軸 0 など)では季節を持たない = 素通し
+    const mk = (b: number[]): number[] | null => {
+      const mean = b.reduce((x, y) => x + y, 0) / b.length;
+      if (!(mean > 1e-3)) return null;
+      return b.map((x) => Math.min(1.7, Math.max(0.5, 1 + tw * (x / mean - 1))));
+    };
+    sWestN = mk(bN);
+    sWestS = mk(bS);
+  }
 
   const monthlyWindU: Float32Array[] = [];
   const monthlyWindV: Float32Array[] = [];
@@ -58,6 +105,9 @@ export function computeAirflow(
     const ridgeShiftCol = windBelt.monthlyRidgeShiftDegByCol[m];
     const pfN = windBelt.monthlyPolarFrontLatNDeg[m] ?? 60;
     const pfS = windBelt.monthlyPolarFrontLatSDeg[m] ?? -60;
+    // 段 10: 当月の偏西風スケール(無効時は 1 = ビット一致)
+    const swN = sWestN?.[m] ?? 1;
+    const swS = sWestS?.[m] ?? 1;
 
     for (let row = 0; row < H; row++) {
       const lat = latDegOfRow(grid, row);
@@ -147,12 +197,12 @@ export function computeAirflow(
           bv = K.tradeWindMs * 0.4 * t * meridRev;
         } else if (lat > ridgeN && lat <= pfN) {
           const t = bandWeight(lat, ridgeN, pfN);
-          bu = K.westerlyWindMs * t * dirSign;
-          bv = K.westerlyWindMs * 0.15 * t;
+          bu = K.westerlyWindMs * t * dirSign * swN;
+          bv = K.westerlyWindMs * 0.15 * t * swN;
         } else if (lat < ridgeS && lat >= pfS) {
           const t = bandWeight(lat, ridgeS, pfS);
-          bu = K.westerlyWindMs * t * dirSign;
-          bv = -K.westerlyWindMs * 0.15 * t;
+          bu = K.westerlyWindMs * t * dirSign * swS;
+          bv = -K.westerlyWindMs * 0.15 * t * swS;
         } else if (lat > pfN) {
           bu = -K.polarEasterlyMs * dirSign;
           bv = -K.polarEasterlyMs * 0.3;
