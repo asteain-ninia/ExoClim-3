@@ -1403,6 +1403,26 @@ export async function computePrecipitation(
     return out;
   };
 
+  // ---- 段 W-1: G の年平均スカラー正規化(2026-09-02、計画_W実寸化章)----
+  // G(持ち上げ積)は縮尺 W 時代の較正で帯平均 3 級まで膨張しており、
+  // W_sat スケールの閾値(cap・床)を壊す。**全球年平均 Ḡ(1 スカラー)**で
+  // 割って形状場(平均 1)にする — 月別正規化にしないのは、G の季節振幅
+  // (冬の嵐 = 位相の資産)を保つため。Ḡ は前の反復パス(初期推定 12 か月
+  // または前の結合反復)で測る。基底 G は反復不変なので Ḡ は 2 周目以降
+  // 一定 = 収束点は自己整合。**既定 0 では null = 従来と厳密一致。**
+  const gNorm =
+    (K.condensationGNormalize as number) > 0
+      ? { sumW: 0, sumWG: 0, meanPrev: null as number | null }
+      : null;
+  /** 反復パスの境目で Ḡ を確定し、積算をリセットする */
+  const snapshotGNorm = (): void => {
+    if (gNorm && gNorm.sumW > 0) {
+      gNorm.meanPrev = gNorm.sumWG / gNorm.sumW;
+      gNorm.sumWG = 0;
+      gNorm.sumW = 0;
+    }
+  };
+
   const conservativeMonthCore = (
     m: number,
     tField: Float32Array,
@@ -1465,6 +1485,21 @@ export async function computePrecipitation(
       }
       const mean = sw / Math.max(1e-9, ww);
       for (let i = 0; i < N; i++) G[i] = (G[i] ?? 0) * ((oroNorm[i] ?? 1) / Math.max(1e-9, mean));
+    }
+    // 段 W-1: 当反復の Ḡ を積み、前パスの Ḡ で割る(rate・cap・診断の全てが
+    // 正規化後 G を読む)。meanPrev が無い最初のパスは素通し
+    if (gNorm) {
+      for (let row = 0; row < grid.heightCells; row++) {
+        const cw = Math.cos((latDegOfRow(grid, row) * Math.PI) / 180);
+        for (let col = 0; col < grid.widthCells; col++) {
+          gNorm.sumWG += cw * (G[row * grid.widthCells + col] ?? 0);
+          gNorm.sumW += cw;
+        }
+      }
+      if (gNorm.meanPrev !== null && gNorm.meanPrev > 1e-9) {
+        const inv = 1 / gNorm.meanPrev;
+        for (let i = 0; i < N; i++) G[i] = (G[i] ?? 0) * inv;
+      }
     }
 
     // 診断の G は「実際に走った演算子」でなければならない。
@@ -1955,6 +1990,8 @@ export async function computePrecipitation(
     );
   }
   applyPostAdjust(precipEst);
+  // 段 W-1: 初期推定 12 か月で測った Ḡ を確定(以降の結合反復は正規化 G で走る)
+  snapshotGNorm();
 
   const soilOn = K.soilWaterCapacityMm > 0;
   const isLand = (i: number): boolean => terrain.landMask[i] === 1;
@@ -2051,6 +2088,8 @@ export async function computePrecipitation(
       if (lastDiagMonths && dm) lastDiagMonths.push(dm);
     }
     applyPostAdjust(next);
+    // 段 W-1: この結合反復の Ḡ を確定(基底 G は反復不変なので 2 周目以降は同値)
+    snapshotGNorm();
     // 残差は**緩和の前**で測る。収束判定は不動点への近さ `F(x) − x` であって
     // 「今回どれだけ動かしたか」ではない。緩和を入れても判定の意味を変えない
     residual = meanAbsChange(next, precipEst);
