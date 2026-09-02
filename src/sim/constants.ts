@@ -786,7 +786,7 @@ export const MODEL_CONSTANTS = {
   stormEddyPolewardSkew: 0.6,
   /** 渦風が全開になる傾圧性 K/1000km(中緯度冬の典型値。掃引しない固定尺) */
   stormBaroclinicityNormKPer1000Km: 5,
-  condensationClosureBlend: 0.4,
+  condensationClosureBlend: 0.132,
   /**
    * W の熱力学係留(2026-09-02)。線形凝結の床: lin·W → lin·(W − floor)⁺、
    * floor = rhFloor × W_sat(T)。凝結を駆動するのは W の量ではなく
@@ -801,7 +801,7 @@ export const MODEL_CONSTANTS = {
    * 0 = 床なしで従来と厳密一致。閉包(condensationClosureBlend > 0)の
    * ときだけ効く。事前登録: docs/事前登録_Wの熱力学係留_2026-09-02.md
    */
-  condensationRhFloor: 0.6,
+  condensationRhFloor: 0,
   /**
    * 段 W-1(2026-09-02): G(持ち上げ積)の年平均スカラー正規化。
    * 1 = G を全球年平均 Ḡ で割って形状場(平均 1)にする。規模(全球の
@@ -810,14 +810,14 @@ export const MODEL_CONSTANTS = {
    * 月別でなく年平均 1 本で割るのは G の季節振幅(冬の嵐)を保つため。
    * 0 = 従来と厳密一致。計画_W実寸化章_2026-09-02.md 段 W-1。
    */
-  condensationGNormalize: 1,
+  condensationGNormalize: 0,
   /**
    * cap の減算形(2026-09-02)。γ > 0 のとき対流閾値を
    * cap = W_sat·max(0.05, RHcrit − γ·G) にする(持ち上げ G が閾値を線形に
    * 下げる)。既定 0 = 従来の除算形 RHcrit·W_sat/G(G 形状に過敏だった)。
    * 事前登録_Wの熱力学係留_2026-09-02.md 追加登録 3(予測 96-99)。
    */
-  capLiftSubtractGamma: 1.2,
+  capLiftSubtractGamma: 0,
   /** 背景(層状)凝結の時定数 日(実物の滞留 ~9 日は対流込み — 背景は長い) */
   backgroundCondensationTimeDays: 90,
   /** 湿潤対流の発火する臨界柱相対湿度(cap = これ × W_sat / G) */
@@ -860,9 +860,9 @@ export const MODEL_CONSTANTS = {
    */
   winterStormEquatorwardReachDeg: 4,
   /** 水蒸気供給の海上減衰距離(km) */
-  moistureDecayOceanKm: 713.946,
+  moistureDecayOceanKm: 1500,
   /** 陸上減衰距離(km、再循環なしの素の値) */
-  moistureDecayLandKm: 898.4047,
+  moistureDecayLandKm: 1887.5482424630225,
   /** 陸面再蒸発の強さ(0〜1、二回目のパスで局所降水に比例) */
   landRecyclingStrength: 0.32047434489689774,
   /**

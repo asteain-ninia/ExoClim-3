@@ -35,8 +35,10 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // 排水率範囲になる: 海 [1500,3200]/2.101 → [714,1523]、陸 [1100,2400]/2.101 →
   // [524,1143]。v43 は旧範囲のまま走り、既定 714/898 が下限へクリップされて
   // 両 L が下限に張り付いた(実行漏れの訂正。結果を見た拡張ではなく算術付け替え)。
-  ['moistureDecayOceanKm', 714, 1523],
-  ['moistureDecayLandKm', 524, 1143],
+  // v43b 判定(2026-09-03): 換算範囲は向きが逆だった(較正は正規化後も長い L を
+  // 選好、陸は新上限 1143 に張り付き)。v42 復帰に伴い旧範囲へ戻す。
+  ['moistureDecayOceanKm', 1500, 3200],
+  ['moistureDecayLandKm', 1100, 2400],
   ['landRecyclingStrength', 0.2, 0.6],
   ['itczLiftBoost', 1.4, 3.2],
   // **範囲を [0.6, 1.8] → [0.5, 18] へ引き直した(2026-08-17)。**
