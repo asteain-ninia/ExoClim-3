@@ -225,6 +225,10 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['landSurfaceFrictionFactor', 0.3, 1],
   ['subpolarWinterLowHpa', 3, 7],
   ['tradeWindMs', 5, 7.5],
+  // v44(2026-09-03、段 W-3): 気圧勾配の横断流係数。較正が一度も触れていない
+  // SPACE 外の係数で、亜熱帯の発散の 6 割を作り、×0.25 で argentina PASS・
+  // east_asia +0.13(東岸の夏の過剰流入の源)。docs/事前登録_発散輸出の監査 追加登録
+  ['pressureGradientCrossMsPerHpaPerMm', 0.4, 2.0],
   // **段 38(2026-08-15): westerlyWindMs を探索空間から外した。**
   // 較正はこの定数を範囲の**下端 6.5 に張り付かせていた**(目的関数が
   // 「均す」方向を報酬にしているため。
