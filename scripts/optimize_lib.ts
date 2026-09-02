@@ -75,6 +75,10 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // docs/事前登録_Wの熱力学係留_2026-09-02.md(予測 84-99)
   ['condensationRhFloor', 0, 0.85],
   ['capLiftSubtractGamma', 0, 1.8],
+  // v43b(2026-09-02): 熱風リンク(段 10)。v43 で W が厚くなった後の再訪 —
+  // 35-90 冬雨(移入の暦)が残る最大欠損で、これはこの機構の照準そのもの。
+  // docs/事前登録_熱風リンク_2026-09-01.md / 実験記録_v43判定_2026-09-02.md
+  ['thermalWindFactor', 0, 1.5],
   ['backgroundCondensationTimeDays', 8, 90],
   ['criticalColumnRelativeHumidity', 0.4, 0.95],
   ['convectiveAdjustmentDays', 0.2, 3],
