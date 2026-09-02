@@ -96,6 +96,9 @@ function currentVector(): Record<string, number> {
       const spec = SPACE.find(([n]) => n === k);
       if (!spec) throw new Error(`--seed-file に SPACE 外の定数: ${k}`);
       v[k] = Math.min(spec[2], Math.max(spec[1], val));
+      // 2026-09-02: 無言のクリップで v43 の両 L が旧下限に張り付いた。必ず告げる
+      if (v[k] !== val)
+        console.warn(`[較正] 種の ${k}=${val} は範囲 [${spec[1]}, ${spec[2]}] 外 → ${v[k]} へクリップ`);
     }
     console.log(`[較正] 種を --seed-file から読み込み: ${p}(${Object.keys(seedVec).length} 定数)`);
   }
