@@ -818,6 +818,13 @@ export const MODEL_CONSTANTS = {
    * 事前登録_Wの熱力学係留_2026-09-02.md 追加登録 3(予測 96-99)。
    */
   capLiftSubtractGamma: 0,
+  /**
+   * 台帳 27(2026-09-03): 沈降抑制の非線形化 residual = (1 − c·subs)^p。
+   * 1 = 従来と厳密一致。実測: サバナの乾季は W が雨季と同じで G だけが 0.52 に
+   * 落ち、その 0.52 は抑制の残存(線形形の床)で決まっている。実物の下降枝の下は
+   * 雨がほぼ 0。docs/事前登録_沈降抑制の非線形化_2026-09-03.md
+   */
+  subsidenceSuppressionExponent: 1,
   /** 背景(層状)凝結の時定数 日(実物の滞留 ~9 日は対流込み — 背景は長い) */
   backgroundCondensationTimeDays: 90,
   /** 湿潤対流の発火する臨界柱相対湿度(cap = これ × W_sat / G) */

@@ -2874,7 +2874,13 @@ function convertToPrecip(
         (1 - eastRelief) *
         (1 - K.convergenceSubsidenceRelief * wetConv) *
         (1 - troughRelief);
-      const subsResidualF = 1 - K.subsidenceSuppression * subs;
+      // 台帳 27(2026-09-03): 抑制の非線形化。residual = (1 − c·subs)^p。p=1 で従来と
+      // 厳密一致。サバナの乾季は subs≈0.88 でも残存 0.28(× 緩和で 0.38)が残り、
+      // 乾季に 30mm 降り続ける(観測 1.7)。下降枝の下は乾く物理を p>1 で表す。
+      // docs/事前登録_沈降抑制の非線形化_2026-09-03.md
+      const subsLin = 1 - K.subsidenceSuppression * subs;
+      const subsResidualF =
+        K.subsidenceSuppressionExponent === 1 ? subsLin : Math.pow(Math.max(0, subsLin), K.subsidenceSuppressionExponent);
       lift *= subsResidualF;
 
       // 寒流沿岸の安定化(亜熱帯〜中緯度の海岸乾燥: 沿岸〜300km。
