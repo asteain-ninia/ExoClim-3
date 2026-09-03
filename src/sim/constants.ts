@@ -358,7 +358,7 @@ export const MODEL_CONSTANTS = {
    * SPACE 非投入。**0 = 無効(従来とビット一致)。**
    * docs/事前登録_v31物理バッチ_2026-08-21.md 件 2
    */
-  itczMoistLandPullDeg: 0.8999999999999999,
+  itczMoistLandPullDeg: 1.44,
   /** 経度平滑化後に混ぜ戻す生値の割合(0 = 完全平滑)。モンスーンの経度局所性を保つ */
   itczSmoothLocalBlend: 0.26104000000000005,
   /** ITCZ 影響帯の半幅(度) */
@@ -466,7 +466,7 @@ export const MODEL_CONSTANTS = {
    * 半永続低気圧 — アリューシャン/アイスランド低相当)。海氷は後段のため
    * 極前線相対で配置。回転成分を通じて冬の西岸への暖気移流を生む
    */
-  subpolarWinterLowHpa: 5.4288,
+  subpolarWinterLowHpa: 4.2768,
   /**
    * 亜熱帯高気圧の離散セル化(WL#29): 帯ではなく海盆ごとのセルで、
    * 「自転方向の東」に大陸が近い側(= 寒流の流れる海盆東縁)ほど強い。
@@ -828,7 +828,7 @@ export const MODEL_CONSTANTS = {
   /** 背景(層状)凝結の時定数 日(実物の滞留 ~9 日は対流込み — 背景は長い) */
   backgroundCondensationTimeDays: 90,
   /** 湿潤対流の発火する臨界柱相対湿度(cap = これ × W_sat / G) */
-  criticalColumnRelativeHumidity: 0.83904,
+  criticalColumnRelativeHumidity: 0.93804,
   /** 対流調整の時定数 日 */
   convectiveAdjustmentDays: 0.6639999999999999,
 
@@ -972,7 +972,7 @@ export const MODEL_CONSTANTS = {
    * ITCZ 傘の海洋性ゲート: 供給(無次元)がこの値で傘が全開。乾燥内陸の
    * トラフ直下(アラビア型)では傘が開かず、湿潤収束(ベンガル型)では開く
    */
-  itczLiftSupplyNorm: 6.6739999999999995,
+  itczLiftSupplyNorm: 5.273999999999999,
   /** ストームトラック(温帯低気圧帯)の増幅 */
   stormTrackBoost: 0.456,
   /** 寒候期のストームトラック追加増幅 */
@@ -1082,10 +1082,10 @@ export const MODEL_CONSTANTS = {
    * (最多雨月のこの割合、上限 mm)。年総量は保存(湿潤月から比例控除)。
    * タイガの Dw 化(実物は Df)と Cwa 最多/最少比 276 への対策
    */
-  winterFloorFracOfWettest: 0.3896,
+  winterFloorFracOfWettest: 0.3332,
   winterFloorMaxMm: 34,
   /** 夏半球の偏西風移流の弱化率(ジェットの季節弱化) */
-  summerAdvectionFactor: 0.576,
+  summerAdvectionFactor: 0.6,
   /**
    * ストームトラック帯の渦による水蒸気供給(月平均風では運べない移動性低気圧の
    * 混合を表す)。海岸距離の減衰長と強度。derle 教訓 §8.2「月平均風だけでは
