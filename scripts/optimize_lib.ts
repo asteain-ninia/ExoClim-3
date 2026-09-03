@@ -52,7 +52,10 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['stormTrackWinterBoost', 0.15, 0.6],
   ['orographicBoost', 0.9, 2.5],
   ['rainShadowFloor', 0.2, 0.55],
-  ['subsidenceSuppression', 0.5, 0.82],
+  // v45(2026-09-03): 上限 0.82→0.95。8/24 の「均す天井」分類は実測と逆で、
+  // 0.95 は乾いた端を作る(1% 分位 76→26・詳細 +0.32・雨林無傷)。実物の沈降域は
+  // 降水ほぼ 0。docs/事前登録_v45較正_2026-09-03.md / 事前登録_沈降抑制の上限
+  ['subsidenceSuppression', 0.5, 0.95],
   ['subsidenceItczProtection', 0.6, 0.95],
   ['eastCoastSubsidenceRelief', 0.5, 0.95],
   // v33(2026-08-24): 上限 1300→2000。亜熱帯高気圧の西縁は大陸内へ 2000〜3000km
