@@ -197,7 +197,10 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // (docs/実験記録_v26判定_2026-08-18.md 発見 3)
   ['itczMonsoonPullDeg', 4, 13],
   // v35(2026-08-25): 上限 14→20(実在のトラフ北上 15〜20°。同上)
-  ['itczPlateauPullDeg', 6, 20],
+  // v46(2026-09-04): 上限 20→30。v42〜v45 で上限に張り付き、単独掃引で 25 が内点最適
+  // (fitness +0.30・tibet_ET 0.56→0.86、30 で反落)。実物のトラフは 25〜30N。
+  // docs/事前登録_v46較正_2026-09-04.md / 事前登録_高原引き上げの上限
+  ['itczPlateauPullDeg', 6, 30],
   ['itczSmoothLocalBlend', 0.25, 0.55],
   ['itczDeclinationFollowRatio', 0.28, 0.42],
   ['subtropicalCellEastBoost', 0.3, 0.9],
