@@ -825,6 +825,14 @@ export const MODEL_CONSTANTS = {
    * 雨がほぼ 0。docs/事前登録_沈降抑制の非線形化_2026-09-03.md
    */
   subsidenceSuppressionExponent: 1,
+  /**
+   * 段 11(2026-09-04): 沿岸ジェット列(幾何判定 J、地理中立)で ITCZ の収束線を
+   * 通過流に置換する度合い。liftItczF ← 1 + (liftItczF−1)·(1 − r·J′)。0 = 従来と厳密一致。
+   * 角(horn)の盛夏 250mm/月(観測 10-20)の処方。docs/事前登録_沿岸ジェット_2026-09-04.md
+   */
+  jetItczLiftReduce: 0,
+  /** 段 11: ジェット下流の発散 → 沈降。subs ← min(1, subs + a·J′)。0 = 従来と厳密一致 */
+  jetSubsidenceAdd: 0,
   /** 背景(層状)凝結の時定数 日(実物の滞留 ~9 日は対流込み — 背景は長い) */
   backgroundCondensationTimeDays: 90,
   /** 湿潤対流の発火する臨界柱相対湿度(cap = これ × W_sat / G) */

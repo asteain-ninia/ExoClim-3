@@ -2610,6 +2610,53 @@ function convertToPrecip(
   );
   /** 供給の規格化基準(20°C の飽和水蒸気圧)。供給を作った側と同じ基準にする */
   const q0Local = saturationVaporPressureHpa(20);
+  // 段 11(2026-09-04、docs/事前登録_沿岸ジェット_2026-09-04.md): 沿岸ジェット列の
+  // 判定 J(幾何のみ、地理中立)。夏半球で ITCZ が赤道から変位しているとき、赤道〜ITCZ の
+  // 帯で「当列が海・西隣 3〜6° が陸」× spanEq(西隣の陸が赤道の両側にある)× (1−陸割合) ×
+  // 高地係数。下流拡張 J′ = 東隣へ 0.7 倍ずつ漏らす(ジェットは海岸を離れて北東へ加速)。
+  // 適用は liftItczF(収束線 → 通過流)と subs(ジェット下流の沈降)。**既定 0 では null =
+  // 計算も適用も飛ぶ(従来と厳密一致)。**
+  const jetOn = (K.jetItczLiftReduce as number) > 0 || (K.jetSubsidenceAdd as number) > 0;
+  let jetJ: Float64Array | null = null;
+  let jetItczLat: Float32Array | ArrayLike<number> | null = null;
+  if (jetOn) {
+    const centersJ = itcz.monthlyCenterLatDegByCol[month];
+    const rowOfLat = (la: number) => Math.min(H - 1, Math.max(0, Math.round((90 - la) / grid.resolutionDeg - 0.5)));
+    const raw = new Float64Array(W);
+    const step = Math.max(1, Math.round(3 / grid.resolutionDeg)); // 西隣 3° と 6°
+    for (let col = 0; col < W; col++) {
+      const itczLat = centersJ?.[col] ?? 0;
+      const disp = Math.min(1, Math.abs(itczLat) / K.crossEquatorialRefDeg);
+      if (disp < 0.3) continue;
+      let wlS = 0, nS = 0, wlN = 0, nN = 0;
+      for (let la = -12; la <= 12; la += grid.resolutionDeg) {
+        const row = rowOfLat(la);
+        const iw = row * W + ((col - step + W) % W), iw2 = row * W + ((col - 2 * step + W) % W);
+        const wl = terrain.landMask[iw] || terrain.landMask[iw2] ? 1 : 0;
+        if (la < 0) { wlS += wl; nS++; } else { wlN += wl; nN++; }
+      }
+      const spanEq = Math.min(wlS / Math.max(1, nS), wlN / Math.max(1, nN));
+      if (spanEq <= 0) continue;
+      const lo = Math.min(0, itczLat), hi = Math.max(0, itczLat);
+      let sea = 0, westLand = 0, n = 0, landCnt = 0, hiCnt = 0;
+      for (let la = lo; la <= hi; la += grid.resolutionDeg) {
+        const row = rowOfLat(la);
+        const i0 = row * W + col, iw = row * W + ((col - step + W) % W), iw2 = row * W + ((col - 2 * step + W) % W);
+        n++; if (!terrain.landMask[i0]) sea++; else landCnt++;
+        if (terrain.landMask[iw] || terrain.landMask[iw2]) { westLand++; if ((elev[iw] ?? 0) > 1000 || (elev[iw2] ?? 0) > 1000) hiCnt++; }
+      }
+      if (!n) continue;
+      raw[col] = disp * (sea / n) * (westLand / n) * spanEq * (1 - landCnt / n) * (1 + hiCnt / n);
+    }
+    // 下流拡張: 東隣へ 0.7 倍ずつ(8 列まで)
+    jetJ = new Float64Array(W);
+    for (let col = 0; col < W; col++) {
+      let best = 0;
+      for (let k = 0; k <= 8 * step; k += step) { const v = (raw[(col - k + W) % W] ?? 0) * Math.pow(0.7, k / step); if (v > best) best = v; }
+      jetJ[col] = Math.min(1, best);
+    }
+    jetItczLat = centersJ ?? null;
+  }
   // 段 44: モンスーントラフの R-H 位相(経度列ごと)。既定 0 では計算ごと飛ぶ
   let troughPhase: Float64Array | null = null;
   const troughItczByCol = itcz.monthlyCenterLatDegByCol[month];
@@ -2701,6 +2748,16 @@ function convertToPrecip(
           Math.max(0, -(convIndex[i] ?? 0) / Math.max(1e-9, K.moistureConvergenceNorm)),
         );
         liftItczF = 1 + (liftItczF - 1) * (1 - K.itczDivergenceSuppress * divF);
+      }
+      // 段 11: ジェット列(J′>0)では収束線を通過流に置換。緯度は赤道〜ITCZ+halfWidth の
+      // 夏半球側だけ(ジェットの走る帯)。既定 0 では jetJ=null で不変
+      let jetCell = 0;
+      if (jetJ && (jetJ[col] ?? 0) > 0) {
+        const il = jetItczLat?.[col] ?? 0;
+        const inBand = il !== 0 && lat * il >= 0 && Math.abs(lat) <= Math.abs(il) + itcz.halfWidthDeg;
+        if (inBand) jetCell = jetJ[col] ?? 0;
+        if (jetCell > 0 && (K.jetItczLiftReduce as number) > 0)
+          liftItczF = 1 + (liftItczF - 1) * (1 - K.jetItczLiftReduce * jetCell);
       }
       lift *= liftItczF;
 
@@ -2878,7 +2935,9 @@ function convertToPrecip(
       // 厳密一致。サバナの乾季は subs≈0.88 でも残存 0.28(× 緩和で 0.38)が残り、
       // 乾季に 30mm 降り続ける(観測 1.7)。下降枝の下は乾く物理を p>1 で表す。
       // docs/事前登録_沈降抑制の非線形化_2026-09-03.md
-      const subsLin = 1 - K.subsidenceSuppression * subs;
+      // 段 11: ジェット下流の発散 → 沈降(既定 0 で不変)
+      const subsJet = jetCell > 0 && (K.jetSubsidenceAdd as number) > 0 ? Math.min(1, subs + K.jetSubsidenceAdd * jetCell) : subs;
+      const subsLin = 1 - K.subsidenceSuppression * subsJet;
       const subsResidualF =
         K.subsidenceSuppressionExponent === 1 ? subsLin : Math.pow(Math.max(0, subsLin), K.subsidenceSuppressionExponent);
       lift *= subsResidualF;
