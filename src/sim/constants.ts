@@ -184,12 +184,12 @@ export const MODEL_CONSTANTS = {
   /** 寒流(SST 負偏差)上の層積雲デッキ: 偏差 -2°C で雲 +この比率 */
   stratocumulusBoostPerNegC: 0.4936800000000001,
   /** 冬(月日射 < 年平均)の陸上における移流結合の低減率(接地逆転層) */
-  winterInversionAdvectionFactor: 0.56112,
+  winterInversionAdvectionFactor: 0.62412,
   /**
    * 冬の接地逆転層は移流だけでなく拡散(自由大気との混合)も絶縁する。
    * 内陸度 1 の冬に拡散をこの係数まで低減(シベリア・南極内陸の冬の冷え込み)
    */
-  winterInversionDiffusionFactor: 0.85,
+  winterInversionDiffusionFactor: 0.7869999999999999,
   /** 周極海峡行の海洋混合層の増深倍率(遮られない流路の深い鉛直混合) */
   channelMixedLayerBoost: 3.0,
   /** 気温減率(°C/km、標高降尺度と OLR 標高補正に使用) */
@@ -536,7 +536,7 @@ export const MODEL_CONSTANTS = {
    * 連続しているか」で判別し、ベンガル湾北岸(モンスーンの主供給源)を守る。
    * SST が年一枚のため、夏半球は「ITCZ 年最大変位の深い側の半球」で判定する。
    */
-  somaliUpwellingC: 2.0224,
+  somaliUpwellingC: 2.7424,
   /**
    * 暖流ゲートの幅チェック(0 = 従来とビット一致 / 1 = 有効)。
    * 事前登録: docs/事前登録_v31物理バッチ_2026-08-21.md 件 1。
@@ -555,7 +555,7 @@ export const MODEL_CONSTANTS = {
   polarEasterlyMs: 3,
   /** 気圧勾配風の結合係数(m/s per hPa/1000km): 回転成分と横断成分 */
   pressureGradientRotationalMsPerHpaPerMm: 3.2,
-  pressureGradientCrossMsPerHpaPerMm: 1.6,
+  pressureGradientCrossMsPerHpaPerMm: 1.312,
   /**
    * 赤道越えモンスーン(WL#29)の強さ。赤道と ITCZ の間の帯で貿易風の
    * 東西成分を反転させる度合い。**0 = 無効(従来と厳密に一致)**、
@@ -828,7 +828,7 @@ export const MODEL_CONSTANTS = {
   /** 背景(層状)凝結の時定数 日(実物の滞留 ~9 日は対流込み — 背景は長い) */
   backgroundCondensationTimeDays: 90,
   /** 湿潤対流の発火する臨界柱相対湿度(cap = これ × W_sat / G) */
-  criticalColumnRelativeHumidity: 0.93804,
+  criticalColumnRelativeHumidity: 0.89404,
   /** 対流調整の時定数 日 */
   convectiveAdjustmentDays: 0.6639999999999999,
 
@@ -846,13 +846,13 @@ export const MODEL_CONSTANTS = {
    * 月・半球ごとに取水計 = 給水計(水は創らない)。
    * 事前登録: docs/事前登録_コンベア接続_2026-08-18.md
    */
-  conveyorStrength: 42.599999999999994,
+  conveyorStrength: 53.39999999999999,
   /**
    * コンベアの緯度窓の極側の縁(リッジからの度数)。窓 = ITCZ 極側〜リッジ+これ。
    * 45b-2 の分解で、+5 のリテラルはゴビ(40°N)まで給水帯を延ばして B→D を
    * 作った。地域名指しの手直しはせず、定数化して較正に決めさせる(v27 候補)
    */
-  conveyorLatPolewardDeg: 8.88,
+  conveyorLatPolewardDeg: 6.720000000000001,
   /** コンベアの緯度窓の縁の減衰幅(度)。窓の外は線形にこの幅で 0 へ */
   conveyorLatSoftDeg: 3,
   /** コンベアの給水帯の奥行き(km)。東海岸からの減衰距離。SPACE 非投入 */
@@ -865,7 +865,7 @@ export const MODEL_CONSTANTS = {
    * 亜熱帯の冬雨(地中海型)を作る機構 — モデルは G が平坦で冬雨を持たない。
    * **0 = 無効(従来とビット一致)。**
    */
-  winterStormEquatorwardReachDeg: 4,
+  winterStormEquatorwardReachDeg: 5.4399999999999995,
   /** 水蒸気供給の海上減衰距離(km) */
   moistureDecayOceanKm: 1500,
   /** 陸上減衰距離(km、再循環なしの素の値) */
@@ -972,19 +972,19 @@ export const MODEL_CONSTANTS = {
    * ITCZ 傘の海洋性ゲート: 供給(無次元)がこの値で傘が全開。乾燥内陸の
    * トラフ直下(アラビア型)では傘が開かず、湿潤収束(ベンガル型)では開く
    */
-  itczLiftSupplyNorm: 5.273999999999999,
+  itczLiftSupplyNorm: 8.424,
   /** ストームトラック(温帯低気圧帯)の増幅 */
   stormTrackBoost: 0.456,
   /** 寒候期のストームトラック追加増幅 */
-  stormTrackWinterBoost: 0.1986,
+  stormTrackWinterBoost: 0.27959999999999996,
   /** 地形性上昇の増幅(基準勾配あたり) */
   orographicBoost: 1.44016,
   /** 風下雨陰の最大抑制(0〜1 が残存率の下限) */
-  rainShadowFloor: 0.2252,
+  rainShadowFloor: 0.2,
   /** 亜熱帯高圧帯(沈降域)の抑制率(0〜1)。下降枝全域(リッジ−16°〜+5°)に適用 */
-  subsidenceSuppression: 0.82,
+  subsidenceSuppression: 0.9009999999999999,
   /** 沈降抑制に対する ITCZ 影響の防護係数(1 = 完全防護) */
-  subsidenceItczProtection: 0.7722,
+  subsidenceItczProtection: 0.8351999999999999,
   /**
    * 亜熱帯高気圧の西翼(大陸東岸側)の湿潤化: 順行自転では東に海が近いセルほど
    * 沈降抑制を緩める(バミューダ高気圧西縁の湿潤流の相当物)。減衰距離 km。
@@ -1002,7 +1002,7 @@ export const MODEL_CONSTANTS = {
    * 縁海・地中海・アラビア海・ベンガル湾は自動的に 0 = 誤発火しない)。
    * **0 = 機構ごと不発で従来とビット一致。**
    */
-  subsidenceBasinAsymmetry: 0.874,
+  subsidenceBasinAsymmetry: 0.95,
   /** 海盆西縁からの減衰距離 km(上の機構の形) */
   subsidenceBasinAsymDecayKm: 1957.6,
   /** 寒候期でも残る前線性の最低水蒸気(qRel の下限。弱い前線雪の表現) */
@@ -1110,7 +1110,7 @@ export const MODEL_CONSTANTS = {
   upwindBlockScanKm: 900,
   upwindBlockFloor: 1,
   /** 寒流沿岸の追加抑制率 */
-  coldCoastSuppression: 0.25,
+  coldCoastSuppression: 0.313,
   /** 全球スケール係数(供給×持ち上げ → mm/月) */
   precipScaleMmPerUnit: 8.2,
 
