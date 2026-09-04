@@ -2617,13 +2617,16 @@ function convertToPrecip(
   // 適用は liftItczF(収束線 → 通過流)と subs(ジェット下流の沈降)。**既定 0 では null =
   // 計算も適用も飛ぶ(従来と厳密一致)。**
   const jetOn = (K.jetItczLiftReduce as number) > 0 || (K.jetSubsidenceAdd as number) > 0;
+  // 第 3 版(同日): 列別には disp × spanEq(西隣 3〜6° の陸が赤道の両側にある)だけを持ち、
+  // 陸海はセル側で「沿岸性」(東〜南東 3° 以内に海)として掛ける。第 2 版の「当列が海」は
+  // 南半球夏の海の帯で点灯し、盛夏の角(陸)では 0 だった取り違えの訂正
   let jetJ: Float64Array | null = null;
   let jetItczLat: Float32Array | ArrayLike<number> | null = null;
   if (jetOn) {
     const centersJ = itcz.monthlyCenterLatDegByCol[month];
     const rowOfLat = (la: number) => Math.min(H - 1, Math.max(0, Math.round((90 - la) / grid.resolutionDeg - 0.5)));
-    const raw = new Float64Array(W);
-    const step = Math.max(1, Math.round(3 / grid.resolutionDeg)); // 西隣 3° と 6°
+    const step = Math.max(1, Math.round(3 / grid.resolutionDeg));
+    jetJ = new Float64Array(W);
     for (let col = 0; col < W; col++) {
       const itczLat = centersJ?.[col] ?? 0;
       const disp = Math.min(1, Math.abs(itczLat) / K.crossEquatorialRefDeg);
@@ -2636,24 +2639,7 @@ function convertToPrecip(
         if (la < 0) { wlS += wl; nS++; } else { wlN += wl; nN++; }
       }
       const spanEq = Math.min(wlS / Math.max(1, nS), wlN / Math.max(1, nN));
-      if (spanEq <= 0) continue;
-      const lo = Math.min(0, itczLat), hi = Math.max(0, itczLat);
-      let sea = 0, westLand = 0, n = 0, landCnt = 0, hiCnt = 0;
-      for (let la = lo; la <= hi; la += grid.resolutionDeg) {
-        const row = rowOfLat(la);
-        const i0 = row * W + col, iw = row * W + ((col - step + W) % W), iw2 = row * W + ((col - 2 * step + W) % W);
-        n++; if (!terrain.landMask[i0]) sea++; else landCnt++;
-        if (terrain.landMask[iw] || terrain.landMask[iw2]) { westLand++; if ((elev[iw] ?? 0) > 1000 || (elev[iw2] ?? 0) > 1000) hiCnt++; }
-      }
-      if (!n) continue;
-      raw[col] = disp * (sea / n) * (westLand / n) * spanEq * (1 - landCnt / n) * (1 + hiCnt / n);
-    }
-    // 下流拡張: 東隣へ 0.7 倍ずつ(8 列まで)
-    jetJ = new Float64Array(W);
-    for (let col = 0; col < W; col++) {
-      let best = 0;
-      for (let k = 0; k <= 8 * step; k += step) { const v = (raw[(col - k + W) % W] ?? 0) * Math.pow(0.7, k / step); if (v > best) best = v; }
-      jetJ[col] = Math.min(1, best);
+      jetJ[col] = disp * spanEq;
     }
     jetItczLat = centersJ ?? null;
   }
@@ -2755,7 +2741,18 @@ function convertToPrecip(
       if (jetJ && (jetJ[col] ?? 0) > 0) {
         const il = jetItczLat?.[col] ?? 0;
         const inBand = il !== 0 && lat * il >= 0 && Math.abs(lat) <= Math.abs(il) + itcz.halfWidthDeg;
-        if (inBand) jetCell = jetJ[col] ?? 0;
+        if (inBand) {
+          // 沿岸性: 東〜南東(赤道側)3° 以内に海があるか(ジェットは海岸沿い〜内陸 300km)
+          const stepJ = Math.max(1, Math.round(3 / grid.resolutionDeg));
+          const eqRow = il > 0 ? Math.min(H - 1, row + stepJ) : Math.max(0, row - stepJ);
+          let seaN = 0, tot = 0;
+          for (let k = 1; k <= stepJ; k++) {
+            const ce = (col + k) % W;
+            tot += 2; if (!terrain.landMask[row * W + ce]) seaN++; if (!terrain.landMask[eqRow * W + ce]) seaN++;
+          }
+          const coastal = seaN / Math.max(1, tot);
+          jetCell = (jetJ[col] ?? 0) * coastal;
+        }
         if (jetCell > 0 && (K.jetItczLiftReduce as number) > 0)
           liftItczF = 1 + (liftItczF - 1) * (1 - K.jetItczLiftReduce * jetCell);
       }
