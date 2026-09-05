@@ -51,7 +51,7 @@ export const MODEL_CONSTANTS = {
    * ハドレー域(リッジ内側)の南北拡散増強。等方拡散 EBM は熱帯を単調減少に
    * してしまうが、実物はハドレー循環が |lat|<25° を平坦に均す。
    */
-  hadleyDiffusionBoost: 1.1546399999999999,
+  hadleyDiffusionBoost: 1.2,
   /** 周極海峡と見なす緯度行の陸面積率の上限と適用緯度上限(極海の氷蓋下は対象外) */
   channelLandFracMax: 0.04,
   /**
@@ -184,7 +184,7 @@ export const MODEL_CONSTANTS = {
   /** 寒流(SST 負偏差)上の層積雲デッキ: 偏差 -2°C で雲 +この比率 */
   stratocumulusBoostPerNegC: 0.4504800000000001,
   /** 冬(月日射 < 年平均)の陸上における移流結合の低減率(接地逆転層) */
-  winterInversionAdvectionFactor: 0.55244,
+  winterInversionAdvectionFactor: 0.61544,
   /**
    * 冬の接地逆転層は移流だけでなく拡散(自由大気との混合)も絶縁する。
    * 内陸度 1 の冬に拡散をこの係数まで低減(シベリア・南極内陸の冬の冷え込み)
@@ -225,7 +225,7 @@ export const MODEL_CONSTANTS = {
    * 結線そのものではなく代用した物理量だったという読みに至り、
    * 実蒸発散へ繋ぎ替えた(types.ts の LandSurfaceState を参照)。
    */
-  evapCoolingWm2PerMmDay: 0,
+  evapCoolingWm2PerMmDay: 0.96,
   /**
    * 潜熱の物理定数(W/m² per mm/日) = ρ_w·L_v/86400。**較正しない。**
    * 蒸発帰還の大きさを理論値から起こすために置く。
@@ -358,7 +358,7 @@ export const MODEL_CONSTANTS = {
    * 赤道常湿帯: 年平均 ITCZ 線の残留影響(0〜1)。実物の熱赤道近傍は年 2 回の
    * 通過と近接で乾季にも雨が残る(赤道 = 雨林の定量化)。幅は半幅 ×0.7
    */
-  equatorialItczResidual: 0.3,
+  equatorialItczResidual: 0.33999999999999997,
   /** 経度方向平滑化の半幅(度)。広すぎるとモンスーンの経度応答が希釈される */
   itczSmoothingHalfWidthDeg: 12,
 
@@ -429,7 +429,7 @@ export const MODEL_CONSTANTS = {
    * 0 = 従来とビット一致(パス 1 は常に素通し、2 パス目だけが読む)。
    * 事前登録: docs/事前登録_熱風リンク_2026-09-01.md(予測 72-75)
    */
-  thermalWindFactor: 0,
+  thermalWindFactor: 0.162,
   /**
    * 熱的低気圧の「厚み」の下限(0〜1)。**乾いた柱ほど浅い。**
    *
@@ -451,7 +451,7 @@ export const MODEL_CONSTANTS = {
    * 半永続低気圧 — アリューシャン/アイスランド低相当)。海氷は後段のため
    * 極前線相対で配置。回転成分を通じて冬の西岸への暖気移流を生む
    */
-  subpolarWinterLowHpa: 4.376,
+  subpolarWinterLowHpa: 5.416,
   /**
    * 亜熱帯高気圧の離散セル化(WL#29): 帯ではなく海盆ごとのセルで、
    * 「自転方向の東」に大陸が近い側(= 寒流の流れる海盆東縁)ほど強い。
@@ -775,7 +775,7 @@ export const MODEL_CONSTANTS = {
    * 下げる)。既定 0 = 従来の除算形 RHcrit·W_sat/G(G 形状に過敏だった)。
    * 事前登録_Wの熱力学係留_2026-09-02.md 追加登録 3(予測 96-99)。
    */
-  capLiftSubtractGamma: 0.07200000000000001,
+  capLiftSubtractGamma: 0,
   /**
    * 台帳 27(2026-09-03): 沈降抑制の非線形化 residual = (1 − c·subs)^p。
    * 1 = 従来と厳密一致。実測: サバナの乾季は W が雨季と同じで G だけが 0.52 に
@@ -818,7 +818,7 @@ export const MODEL_CONSTANTS = {
    * 45b-2 の分解で、+5 のリテラルはゴビ(40°N)まで給水帯を延ばして B→D を
    * 作った。地域名指しの手直しはせず、定数化して較正に決めさせる(v27 候補)
    */
-  conveyorLatPolewardDeg: 6.24,
+  conveyorLatPolewardDeg: 7.2,
   /** コンベアの緯度窓の縁の減衰幅(度)。窓の外は線形にこの幅で 0 へ */
   conveyorLatSoftDeg: 3,
   /** コンベアの給水帯の奥行き(km)。東海岸からの減衰距離。SPACE 非投入 */
@@ -923,14 +923,14 @@ export const MODEL_CONSTANTS = {
    */
   fetchOpenOceanCapKm: 2000,
   /** ITCZ 収束の降水増幅(中心で ×(1+この値)) */
-  itczLiftBoost: 2.732,
+  itczLiftBoost: 2.8760000000000003,
   /**
    * ITCZ 傘の海洋性ゲート: 供給(無次元)がこの値で傘が全開。乾燥内陸の
    * トラフ直下(アラビア型)では傘が開かず、湿潤収束(ベンガル型)では開く
    */
   itczLiftSupplyNorm: 9.824,
   /** ストームトラック(温帯低気圧帯)の増幅 */
-  stormTrackBoost: 0.456,
+  stormTrackBoost: 0.4,
   /** 寒候期のストームトラック追加増幅 */
   stormTrackWinterBoost: 0.24359999999999996,
   /** 地形性上昇の増幅(基準勾配あたり) */
@@ -938,9 +938,9 @@ export const MODEL_CONSTANTS = {
   /** 風下雨陰の最大抑制(0〜1 が残存率の下限) */
   rainShadowFloor: 0.2,
   /** 亜熱帯高圧帯(沈降域)の抑制率(0〜1)。下降枝全域(リッジ−16°〜+5°)に適用 */
-  subsidenceSuppression: 0.95,
+  subsidenceSuppression: 0.98,
   /** 沈降抑制に対する ITCZ 影響の防護係数(1 = 完全防護) */
-  subsidenceItczProtection: 0.9121999999999999,
+  subsidenceItczProtection: 0.95,
   /**
    * 亜熱帯高気圧の西翼(大陸東岸側)の湿潤化: 順行自転では東に海が近いセルほど
    * 沈降抑制を緩める(バミューダ高気圧西縁の湿潤流の相当物)。減衰距離 km。
@@ -964,7 +964,7 @@ export const MODEL_CONSTANTS = {
   /** 寒候期でも残る前線性の最低水蒸気(qRel の下限。弱い前線雪の表現) */
   stormMinQRel: 0.55,
   /** 高温湿潤の陸での対流性増幅(T≥22°C かつ供給豊富で最大 +この倍率) */
-  warmHumidConvectiveBoost: 0,
+  warmHumidConvectiveBoost: 0.032,
   /** 対流性増幅の供給正規化(この供給で全開。二乗で立ち上げ半乾燥を除外) */
   warmHumidSupplyNorm: 2.5904,
   /**
@@ -1038,10 +1038,10 @@ export const MODEL_CONSTANTS = {
    * (最多雨月のこの割合、上限 mm)。年総量は保存(湿潤月から比例控除)。
    * タイガの Dw 化(実物は Df)と Cwa 最多/最少比 276 への対策
    */
-  winterFloorFracOfWettest: 0.3548,
+  winterFloorFracOfWettest: 0.3308,
   winterFloorMaxMm: 34,
   /** 夏半球の偏西風移流の弱化率(ジェットの季節弱化) */
-  summerAdvectionFactor: 0.6,
+  summerAdvectionFactor: 0.576,
   /**
    * ストームトラック帯の渦による水蒸気供給(月平均風では運べない移動性低気圧の
    * 混合を表す)。海岸距離の減衰長と強度。derle 教訓 §8.2「月平均風だけでは
