@@ -333,7 +333,6 @@ export interface PrecipDiagnostics {
   subsDescW: Float32Array[];
   subsItczProt: Float32Array[];
   subsEastRel: Float32Array[];
-  subsConvRel: Float32Array[];
   /** 風上山脈の遮蔽倍率(1 = 遮蔽なし) */
   upwindBlock: Float32Array[];
   /** その他の倍率の積(ストーム帯持上げ × 寒流沿岸 × 高温湿潤対流) */
@@ -880,7 +879,6 @@ interface PrecipDiagMonth {
   subsDescW: Float32Array;
   subsItczProt: Float32Array;
   subsEastRel: Float32Array;
-  subsConvRel: Float32Array;
   upwindBlock: Float32Array;
   liftOther: Float32Array;
   crhSuppression: Float32Array;
@@ -903,7 +901,6 @@ function newDiagMonth(n: number): PrecipDiagMonth {
     subsDescW: new Float32Array(n),
     subsItczProt: new Float32Array(n),
     subsEastRel: new Float32Array(n),
-    subsConvRel: new Float32Array(n),
     upwindBlock: new Float32Array(n),
     liftOther: new Float32Array(n),
     crhSuppression: new Float32Array(n),
@@ -941,7 +938,6 @@ export async function computePrecipitation(
         subsDescW: [],
         subsItczProt: [],
         subsEastRel: [],
-        subsConvRel: [],
         upwindBlock: [],
         liftOther: [],
         crhSuppression: [],
@@ -2175,7 +2171,6 @@ export async function computePrecipitation(
       diag.subsDescW.push(diagM.subsDescW);
       diag.subsItczProt.push(diagM.subsItczProt);
       diag.subsEastRel.push(diagM.subsEastRel);
-      diag.subsConvRel.push(diagM.subsConvRel);
       diag.upwindBlock.push(diagM.upwindBlock);
       diag.liftOther.push(diagM.liftOther);
       diag.crhSuppression.push(diagM.crhSuppression);
@@ -2615,8 +2610,7 @@ function convertToPrecip(
   }
 
   // R4: 水蒸気フラックス収束(供給場と地表風から。診断時は生の場も返す)
-  const convergenceOn =
-    K.convergenceLiftBoost > 0 || K.convergenceSubsidenceRelief > 0 || diagM !== undefined;
+  const convergenceOn = K.convergenceLiftBoost > 0 || diagM !== undefined;
   const convIndex = convergenceOn
     ? moistureConvergenceIndex(grid, params.body.radiusKm, supply, u, v)
     : null;
@@ -2846,7 +2840,6 @@ function convertToPrecip(
         descW *
         (1 - K.subsidenceItczProtection * gI * marineW) *
         (1 - eastRelief) *
-        (1 - K.convergenceSubsidenceRelief * wetConv) *
         (1 - troughRelief);
       // 台帳 27(2026-09-03): 抑制の非線形化。residual = (1 − c·subs)^p。p=1 で従来と
       // 厳密一致。サバナの乾季は subs≈0.88 でも残存 0.28(× 緩和で 0.38)が残り、
@@ -3038,7 +3031,6 @@ function convertToPrecip(
         diagM.subsDescW[i] = descW;
         diagM.subsItczProt[i] = 1 - K.subsidenceItczProtection * gI * marineW;
         diagM.subsEastRel[i] = 1 - eastRelief;
-        diagM.subsConvRel[i] = 1 - K.convergenceSubsidenceRelief * wetConv;
         diagM.upwindBlock[i] = blockFactor;
         diagM.liftOther[i] = liftStormF * coldCoastF * warmHumidF;
         diagM.crhSuppression[i] = crhFactor;
