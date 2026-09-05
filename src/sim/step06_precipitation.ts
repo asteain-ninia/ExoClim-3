@@ -91,8 +91,9 @@ export const CONSERVATIVE_STATS = {
 };
 
 /**
- * 雲底下の再蒸発は降水量そのものに依存する(弱い雨ほど多く失われる)ので、
- * 凝結率を下げて解き直す**外側反復**が要る。
+ * 凝結率を下げて解き直す**外側反復**。もとは雲底下の再蒸発(virga)のために
+ * 置いたが、virga は 2026-09-06 に削除し、いまは段 25 の CRH 内部解法が同じ
+ * ループを使う。
  * 反復数と減衰は**答えを決めてはならない** — 収束を確かめたうえで使う。
  */
 /**
@@ -108,7 +109,7 @@ export const CONSERVATIVE_STATS = {
  * 60 は**上限が答えを決めないところまで上げる**という EBM で確立した作法に
  * 従った値で、余裕を 2 倍取ってある。収束すれば月ごとに即座に抜けるので、
  * 上げても収束の速い月の費用は増えない。
- * **virga は既定で無効(`subCloudEvapCoef = 0`)なので出荷時の費用は変わらない。**
+ * **virga 本体は 2026-09-06 に削除した。この反復はいま段 25 の CRH 内部解法が使う。**
  */
 const VIRGA_OUTER_ITERATIONS = 60;
 /**
@@ -125,7 +126,8 @@ const VIRGA_OUTER_ITERATIONS = 60;
  *
  * `trace` を有効にすると、呼び出しごとの maxChange の列が `series` に積まれる。
  * **収束しないと分かったら、次に見るのは成績ではなく残差の列と隣接比**である
- * (docs/教訓.md §9)。検査: scripts/diag_virga_ratio.ts
+ * (docs/教訓.md §9)。検査に使った scripts/diag_virga_ratio.ts は virga 本体と
+ * ともに 2026-09-06 に削除した(履歴は git に残る)。
  */
 export const VIRGA_OVERRIDE = {
   maxIterations: 0,
@@ -1670,8 +1672,8 @@ export async function computePrecipitation(
       }
     };
 
-    // **CRH を内部で解くときも外側反復が要る(段 25)。** virga と同じループを使う
-    if (K.subCloudEvapCoef <= 0 && !crhInner) {
+    // **CRH を内部で解くには外側反復が要る(段 25)。** virga と同じループだった
+    if (!crhInner) {
       if (diagM) diagM.waterMm.set(r.waterMm);
       return r.condensationMm;
     }
@@ -1699,8 +1701,8 @@ export async function computePrecipitation(
     // 増えなければ 1 へ戻していく — 振動が収まった後まで遅いままにしない。
     //
     // **緩和は不動点を変えない**ので、これは物理の変更ではなく解き方の変更である。
-    // virga は既定で無効(`subCloudEvapCoef = 0`)なので、出荷時の答えは 1 ビットも
-    // 動かない(この関数はその手前で return する)。
+    // この外側反復はいま段 25 の CRH 内部解法のためのもの(virga 本体は
+    // 2026-09-06 に削除)。crhInner が無いときはこの関数の手前で return する。
     // `VIRGA_OVERRIDE.relaxation > 0` を指定したときだけ、従来どおり α を固定する。
     const fixedAlpha = VIRGA_OVERRIDE.relaxation > 0 ? VIRGA_OVERRIDE.relaxation : 0;
     let alpha = fixedAlpha > 0 ? fixedAlpha : 1;
@@ -1709,13 +1711,6 @@ export async function computePrecipitation(
       let maxChange = 0;
       const virgaAlpha = alpha;
       for (let i = 0; i < N; i++) {
-        const p = cond[i] ?? 0;
-        let lost = 0;
-        if (p > 0) {
-          const wSat = saturatedColumnMm(tField[i] ?? 0, pressureHpa);
-          const rh = Math.min(1, (water[i] ?? 0) / Math.max(1e-6, wSat));
-          lost = Math.min(K.subCloudEvapMaxFrac, (K.subCloudEvapCoef * (1 - rh)) / Math.sqrt(p));
-        }
         // **CRH を「いま解いている W」から作り直す(段 25)。**
         // 外側で `G(W_{k−1})` と代入すると 1 段遅れの帰還になり、
         // 2 周期振動を生む(段 24 で偶奇分裂として実測した)。
@@ -1727,7 +1722,7 @@ export async function computePrecipitation(
           crhNow = Math.exp(K.crhSuppressionSharpness * (crh - 1));
           crhInner[i] = crhNow;
         }
-        const target = (rate[i] ?? 0) * crhNow * (1 - lost);
+        const target = (rate[i] ?? 0) * crhNow;
         // 減衰つきで更新する(P ↓ → 失われる割合 ↑ の帰還が振動しうる)
         const prev = outer === 0 ? (rate[i] ?? 0) : (rateEff[i] ?? 0);
         const next = prev + virgaAlpha * (target - prev);
@@ -2961,7 +2956,7 @@ function convertToPrecip(
 
       // 供給 × 持ち上げ × 遮蔽 → mm/月(気圧が低い惑星は降水効率も下がる)
       const pressureFactor = Math.pow(Math.max(0.1, params.atmosphere.surfacePressureBar), 0.5);
-      let precipMm = Math.max(
+      const precipMm = Math.max(
         0,
         ((supply[i] ?? 0) + stormSupply) *
           blockFactor *
@@ -2971,28 +2966,6 @@ function convertToPrecip(
           pressureFactor,
       );
 
-      // ---- 雲底下での再蒸発(virga)----
-      // 乾いた厚い境界層では、上空で凝結しても地面に届く前に蒸発する。
-      // 英国気象庁の GCM で使われている形(Gregory 1995, Mon. Wea. Rev. 123, 2716):
-      //   E = k · (1 − RH) · √P
-      // 失われる**割合**は E/P = k(1−RH)/√P なので、**弱い雨ほど多く失われる**。
-      // これは CRH の指数抑制とは別の軸で効く — 砂漠の降水は弱い雨が主体で、
-      // そこを選択的に削る。中東で RegCM3 に導入した実測では年降水が最大 20%
-      // 減り、湿潤バイアスが観測の 15% 以内へ収束した(Marcella & Eltahir 2008,
-      // J. Climate 21, 2976)。乾燥地では雲底下で降水質量の 20〜50% が蒸発する。
-      if (K.subCloudEvapCoef > 0 && precipMm > 0) {
-        const qSatLocal = saturationVaporPressureHpa(tField[i] ?? 0) / q0Local;
-        const rh = Math.min(
-          1,
-          (supply[i] ?? 0) / Math.max(1e-6, K.crhSupplyNormPerQSat * qSatLocal),
-        );
-        // √P の P は mm/月。係数が単位を吸収する(較正で決める)
-        const lostFrac = Math.min(
-          K.subCloudEvapMaxFrac,
-          (K.subCloudEvapCoef * (1 - rh)) / Math.sqrt(precipMm),
-        );
-        precipMm *= 1 - lostFrac;
-      }
       out[i] = precipMm;
       // **CRH を分けて返せるようにする(段 25)。**
       // `crhOut` を渡した呼び出しでは G から CRH を外し、CRH は別に返す。

@@ -876,14 +876,6 @@ export const MODEL_CONSTANTS = {
    * ここでその惑星の「飽和した空気に相当する供給量」を決める。
    */
   crhSupplyNormPerQSat: 2.0,
-  /**
-   * 雲底下での再蒸発の係数。失われる割合 = coef × (1 − RH) / √(降水 mm/月)。
-   * **0 で無効**。弱い雨ほど多く失われる(Gregory 1995, Mon. Wea. Rev. 123, 2716
-   * の E = k(1−RH)√P を割合に直した形)。単位は係数が吸収する。
-   */
-  subCloudEvapCoef: 0,
-  /** 再蒸発で失える割合の上限(全部消える解を作らないための歯止め) */
-  subCloudEvapMaxFrac: 0.8,
   soilWaterCapacityMm: 600,
   /**
    * 20°C 基準の可能蒸発散(mm/月)。実際の可能蒸発散は飽和水蒸気圧比で

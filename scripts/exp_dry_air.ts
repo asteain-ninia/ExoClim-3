@@ -1,4 +1,6 @@
-// 実験: 乾いた空気で降水を止める 2 経路の効果を実測する。
+// 実験: 乾いた空気で降水を止める経路(C 柱相対湿度の指数抑制)の効果を実測する。
+// (D 雲底下の再蒸発 subCloudEvapCoef)は 2 度の棄却を経て 2026-09-06 に削除したので、
+// この実験も (C) だけを振る。
 //
 // 対応 spec: docs/spec/01-06_降水.md。
 //
@@ -7,21 +9,11 @@
 //       降水倍率 = exp(sharpness × (CRH − 1))。CRH は「届いた水蒸気 ÷ その場の
 //       空気が持てる量」の代理(供給 ÷ 局所飽和水蒸気圧比)。
 //       Bretherton et al. 2004: 熱帯海上で P ∝ exp(15.6·CRH)。
-//   (D) 雲底下の再蒸発 subCloudEvapCoef
-//       失う割合 = coef × (1 − RH) / √(降水)。**弱い雨ほど多く失う**。
-//       Gregory 1995 の E = k(1−RH)√P を割合に直した形。
-//
-// なぜ 2 つを別々に測るか:
-//   どちらも「乾いた空気では降らない」だが効き方の軸が違う。
-//   (C) は乾いた場所の降水を一律に指数で削り、(D) は弱い雨を選択的に削る。
-//   合算すると二重に削って「効いた」ように見えるので、単独 → 併用の順に測る。
 //
 // **事前に登録する判定**(結果を見る前に固定):
 //   (C) 成立 … 観測 100mm/年未満の陸で、モデル年降水 61mm が観測 44mm へ近づき、
 //       かつ**夏の過大**(6月 モデル 8.1 / 観測 3.0 mm)が縮む。
 //       降水 年RMSE と最少月RMSE が悪化しない。
-//   (D) 成立 … 同じく砂漠の年降水が下がる。**弱い雨を削るので、多雨域の
-//       最多月RMSE は動かない**はず(動くなら効き方が想定と違う)。
 //   共通 … 大分類・詳細・ゲートを下げないこと。
 //   棄却 … 砂漠が乾く代わりに湿潤域まで乾いて陸平均が観測(約 800mm)を
 //       大きく下回る、または詳細一致が下がる。
@@ -77,18 +69,14 @@ function drySelection(result: PipelineResult, maxMm: number): number[] {
 interface Case {
   label: string;
   crh: number;
-  evap: number;
 }
 
 const CASES: Case[] = [
-  { label: '従来(両方 無効)', crh: 0, evap: 0 },
-  { label: 'C 指数 2', crh: 2, evap: 0 },
-  { label: 'C 指数 4', crh: 4, evap: 0 },
-  { label: 'C 指数 8', crh: 8, evap: 0 },
-  { label: 'C 指数 15.6(文献値)', crh: 15.6, evap: 0 },
-  { label: 'D 再蒸発 1', crh: 0, evap: 1 },
-  { label: 'D 再蒸発 3', crh: 0, evap: 3 },
-  { label: 'D 再蒸発 6', crh: 0, evap: 6 },
+  { label: '従来(無効)', crh: 0 },
+  { label: 'C 指数 2', crh: 2 },
+  { label: 'C 指数 4', crh: 4 },
+  { label: 'C 指数 8', crh: 8 },
+  { label: 'C 指数 15.6(文献値)', crh: 15.6 },
 ];
 
 async function main(): Promise<void> {
@@ -107,7 +95,6 @@ async function main(): Promise<void> {
   const rows: Array<Record<string, number | string>> = [];
   for (const c of CASES) {
     target.crhSuppressionSharpness = c.crh;
-    target.subCloudEvapCoef = c.evap;
     const t0 = Date.now();
     const accel = await openAccel();
     let result: PipelineResult;
@@ -138,7 +125,6 @@ async function main(): Promise<void> {
     rows.push({
       label: c.label,
       crh: c.crh,
-      evap: c.evap,
       fitness: s.fitness,
       fitnessV2: s.fitnessV2,
       majorPct: s.majorPct,

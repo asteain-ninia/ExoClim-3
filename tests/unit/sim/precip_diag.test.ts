@@ -145,7 +145,7 @@ describe('降水内部要因の診断(R1)', () => {
       }
     }
     expect(checked).toBeGreaterThan(10000);
-    // virga が無効(subCloudEvapCoef = 0)ならこの比は 1。有効なら 1 未満へ下がる
+    // virga(2026-09-06 に削除)が無ければこの比は 1。抑制が入れば 1 未満へ下がる
     expect(worstRatio).toBeLessThan(1 + 1e-3);
   });
 
