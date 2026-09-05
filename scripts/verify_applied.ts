@@ -41,13 +41,34 @@ const best = JSON.parse(fs.readFileSync(path.resolve(bestPath), 'utf8')) as Reco
       head = '';
     }
     if (meta.gitCommit && head && meta.gitCommit !== head) {
-      console.error(
-        `来歴の不一致: 較正 ${meta.runName ?? '?'} は ${meta.gitCommit.slice(0, 7)} で開始したが、` +
-          `現在の HEAD は ${head.slice(0, 7)}。`,
+      // 2026-09-06: 12 時間の較正の間に docs/ のコミット(記録・台帳・作戦盤)が入るのは
+      // 通常運転であり、それだけで止まると毎回「手で突合」に退化する。
+      // 止めるべきは**較正が評価したコード**(src/ と採点・探索空間・掃引の道具)が
+      // 変わった場合だけ。開始コミットと HEAD の差分をその範囲に限って調べる。
+      const evaluatedPaths = ['src', 'scripts/optimize_lib.ts', 'scripts/scoring.ts', 'scripts/sweep_lib.ts', 'scripts/optimize.ts'];
+      let codeDiff = '';
+      try {
+        codeDiff = execSync(`git diff --stat ${meta.gitCommit} ${head} -- ${evaluatedPaths.join(' ')}`, {
+          encoding: 'utf8',
+        }).trim();
+      } catch {
+        codeDiff = '(git diff に失敗 — 差分ありとして扱う)';
+      }
+      if (codeDiff) {
+        console.error(
+          `来歴の不一致: 較正 ${meta.runName ?? '?'} は ${meta.gitCommit.slice(0, 7)} で開始したが、` +
+            `現在の HEAD は ${head.slice(0, 7)} で、評価対象のコードに差分がある:`,
+        );
+        console.error(codeDiff);
+        console.error('較正の走行中にコードが変わっている。この結果の自己採点は現在のコードで');
+        console.error('再現しない。採用してはならない(較正をやり直すか、較正点のビット再現を');
+        console.error('2° で示して記録に残すこと)。');
+        process.exit(3);
+      }
+      console.log(
+        `来歴 OK: 開始 ${meta.gitCommit.slice(0, 7)} → HEAD ${head.slice(0, 7)} の差分は docs 等のみ` +
+          `(評価対象 ${evaluatedPaths.join(', ')} に変更なし)`,
       );
-      console.error('較正の走行中にコードが変わっている。この結果の自己採点は現在のコードで');
-      console.error('再現しない。採用してはならない(較正をやり直すこと)。');
-      process.exit(3);
     }
     if (meta.gitDirty) {
       console.error('来歴の不一致: 較正開始時点で作業ツリーが dirty だった。採用してはならない。');
