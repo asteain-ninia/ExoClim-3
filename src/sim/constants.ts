@@ -780,7 +780,6 @@ export const MODEL_CONSTANTS = {
   olrWaterTrapWm2: 0,
   /** ln の基準水蒸気量 mm(全球平均 W 程度。固定・掃引しない) */
   olrWaterRefMm: 8,
-  itczDivergenceSuppress: 0,
   condensationClosureBlend: 0.132,
   /**
    * W の熱力学係留(2026-09-02)。線形凝結の床: lin·W → lin·(W − floor)⁺、

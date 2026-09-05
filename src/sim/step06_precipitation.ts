@@ -2691,15 +2691,6 @@ function convertToPrecip(
       const marineW = Math.min(1, (supply[i] ?? 0) / K.itczLiftSupplyNorm);
       // R1 診断のため各倍率を named 化(乗算の順序・値は従来と同一 — ビット不変)
       let liftItczF = 1 + K.itczLiftBoost * gI * marineW;
-      // 傘の発散ゲート(2026-08-28): 柱が正味発散している場所では傘を閉じる
-      // (ソマリジェット型。収束側は divF=0 で不変)。既定 0 ビット一致
-      if ((K.itczDivergenceSuppress as number) > 0 && convIndex) {
-        const divF = Math.min(
-          1,
-          Math.max(0, -(convIndex[i] ?? 0) / Math.max(1e-9, K.moistureConvergenceNorm)),
-        );
-        liftItczF = 1 + (liftItczF - 1) * (1 - K.itczDivergenceSuppress * divF);
-      }
       // 段 11: ジェット列(J′>0)では収束線を通過流に置換。緯度は赤道〜ITCZ+halfWidth の
       // 夏半球側だけ(ジェットの走る帯)。既定 0 では jetJ=null で不変
       let jetCell = 0;
