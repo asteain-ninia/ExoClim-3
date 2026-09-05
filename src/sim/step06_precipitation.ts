@@ -2536,13 +2536,7 @@ function convertToPrecip(
   const H = grid.heightCells;
   const out = new Float32Array(grid.cellCount);
   const elev = terrain.elevationMeters;
-  // 段 46c: 冬ゲート(winterDepth01)の暦は独自の遅れを持てる。lag 0 では
-  // monthlyDeclinationDeg[month] と厳密一致(円環補間が恒等になる)
-  const decl = laggedDeclinationDegLocal(
-    ctx.insolation.monthlyDeclinationDeg,
-    month,
-    K.winterGateLagMonths,
-  );
+  const decl = ctx.insolation.monthlyDeclinationDeg[month] ?? 0;
   /** 供給の規格化基準(20°C の飽和水蒸気圧)。供給を作った側と同じ基準にする */
   const q0Local = saturationVaporPressureHpa(20);
   // 段 11(2026-09-04、docs/事前登録_沿岸ジェット_2026-09-04.md): 沿岸ジェット列の
@@ -3180,24 +3174,4 @@ export function nearestOceanAnomaly(
     if (a < minA) minA = a;
   });
   return minA;
-}
-
-/**
- * 段 46c: 冬ゲートが参照する赤緯(暦の遅れつき)。lag = 0 なら配列参照と
- * 厳密一致。円環の線形補間(step01/step02 の laggedDeclinationDeg と同形 —
- * 計算層の作法により層間 import を増やさず各段に局所で持つ)
- */
-function laggedDeclinationDegLocal(
-  monthlyDeclinationDeg: ArrayLike<number>,
-  m: number,
-  lagMonths: number,
-): number {
-  if (lagMonths === 0) return monthlyDeclinationDeg[m] ?? 0;
-  const n = 12;
-  let t = m - lagMonths;
-  while (t < 0) t += n;
-  const i0 = Math.floor(t) % n;
-  const i1 = (i0 + 1) % n;
-  const f = t - Math.floor(t);
-  return (monthlyDeclinationDeg[i0] ?? 0) * (1 - f) + (monthlyDeclinationDeg[i1] ?? 0) * f;
 }
