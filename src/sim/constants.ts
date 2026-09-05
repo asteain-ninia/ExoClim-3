@@ -781,11 +781,6 @@ export const MODEL_CONSTANTS = {
   /** ln の基準水蒸気量 mm(全球平均 W 程度。固定・掃引しない) */
   olrWaterRefMm: 8,
   itczDivergenceSuppress: 0,
-  stormEddyWindMs: 0,
-  /** 渦風の極向き成分の割合(残りは平均風に沿う) */
-  stormEddyPolewardSkew: 0.6,
-  /** 渦風が全開になる傾圧性 K/1000km(中緯度冬の典型値。掃引しない固定尺) */
-  stormBaroclinicityNormKPer1000Km: 5,
   condensationClosureBlend: 0.132,
   /**
    * W の熱力学係留(2026-09-02)。線形凝結の床: lin·W → lin·(W − floor)⁺、

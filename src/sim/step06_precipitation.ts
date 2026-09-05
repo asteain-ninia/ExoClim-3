@@ -1626,41 +1626,6 @@ export async function computePrecipitation(
         vq[i] = wBlend * (v[i] ?? 0) + (1 - wBlend) * (colV[i] ?? 0);
       }
     }
-    // ---- 渦水蒸気輸送(2026-08-28、監査 #5。既定 0 ビット一致)----
-    // 傾圧性 |∂T/∂y| で局在化した渦風を V_q に加算(風上流束なので保存的)。
-    // 極向き成分が v′q′ の正体、沿い成分がストームトラックの下流運び。
-    // docs/事前登録_渦水蒸気輸送_2026-08-28.md
-    if ((K.stormEddyWindMs as number) > 0) {
-      if (uq === u) {
-        uq = Float32Array.from(u);
-        vq = Float32Array.from(v);
-      }
-      const skew = K.stormEddyPolewardSkew;
-      const normKPerM = K.stormBaroclinicityNormKPer1000Km / 1e6;
-      const dyM = dyKm * 1000;
-      const GW = grid.widthCells;
-      for (let row = 0; row < grid.heightCells; row++) {
-        const lat = latDegOfRow(grid, row);
-        const poleSign = lat >= 0 ? 1 : -1;
-        for (let col = 0; col < GW; col++) {
-          const i = row * GW + col;
-          const iN = row > 0 ? i - GW : i;
-          const iS = row < grid.heightCells - 1 ? i + GW : i;
-          const dTdy = Math.abs(((tField[iN] ?? 0) - (tField[iS] ?? 0)) / (2 * dyM));
-          const baroF = Math.min(2, dTdy / normKPerM);
-          if (baroF <= 0) continue;
-          const eddy = (K.stormEddyWindMs as number) * baroF;
-          const uu = uq[i] ?? 0;
-          const vv = vq[i] ?? 0;
-          const mag = Math.hypot(uu, vv);
-          if (mag > 0.1) {
-            uq[i] = uu + (1 - skew) * eddy * (uu / mag);
-            vq[i] = vv + (1 - skew) * eddy * (vv / mag);
-          }
-          vq[i] = (vq[i] ?? 0) + skew * eddy * poleSign;
-        }
-      }
-    }
     const r = solveMoistureTransport(
       grid,
       ctx.params.body.radiusKm,
