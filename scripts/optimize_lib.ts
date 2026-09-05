@@ -58,7 +58,7 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // v47(2026-09-05): 上限 0.95→0.98(v45 登録の許容上限。実物の沈降域は残存 2〜5%)。
   // v46 で 0.95 に再張り付き。これ以上は拡張しない。docs/事前登録_v47較正_2026-09-05.md
   ['subsidenceSuppression', 0.5, 0.98],
-  ['subsidenceItczProtection', 0.6, 0.95],
+  ['subsidenceItczProtection', 0.6, 1.0], // v48: 上限 0.95→1.0(物理の上限、9/6 事前登録)
   ['eastCoastSubsidenceRelief', 0.5, 0.95],
   // v33(2026-08-24): 上限 1300→2000。亜熱帯高気圧の西縁は大陸内へ 2000〜3000km
   // 及ぶ(湾流〜ミシシッピ、東シナ海〜四川)。3000 は単独掃引で大分類 −0.84 の
@@ -69,7 +69,7 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // argentina share 0.079→0.159)。docs/事前登録_沈降の海盆非対称_2026-08-24.md
   // v35(2026-08-25): 上限 0.8→0.95。物理根拠 = 海盆西翼に沈降は実在しない
   // (docs/事前登録_海盆非対称の上限拡張_2026-08-25.md)。v34b は 0.8 上限に張り付いた
-  ['subsidenceBasinAsymmetry', 0, 0.95],
+  ['subsidenceBasinAsymmetry', 0, 1.0], // v48: 上限 0.95→1.0(物理の上限、9/6 事前登録)
   ['subsidenceBasinAsymDecayKm', 800, 3000],
   // v35(2026-08-25): 気柱輸送風(監査 #1)。東岸仮説は棄却されたが乾端形成・
   // 内陸輸送のレバーとして登録(docs/事前登録_気柱輸送風の分離 予測 86〜89)
@@ -212,7 +212,7 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['circulationLagMonths', 0, 1.5],
   // 段 45b: モンスーンコンベア。機構の関門は突破(流入が単調増・閉包維持・
   // 分布誤差は改善)。強度と窓の縁の綱引きは較正が決める
-  ['conveyorStrength', 0, 60],
+  ['conveyorStrength', 0, 90], // v48: 上限 60→90(取水は供給の半分で頭打ち、9/6 事前登録)
   // v28: 段 44 の沈降置換。45c で「コンベアとの組が超相加・豪州巻き添えゼロ」を
   // 実証済み(docs/事前登録_コンベア沈降の組_2026-08-19.md)。単独でも生きる
   ['monsoonTroughSubsRelief', 0, 0.8],
