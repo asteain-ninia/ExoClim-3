@@ -206,8 +206,6 @@ export function computeOceanEvaporation(
         const vEff = Math.max(K.evapMinWindMs, spd);
         const rho = (rhoRef * 288.15) / (tc + 273.15);
         const qs = saturationSpecificHumidity(tc, pressureHpa);
-        // 3 版(2026-08-24): 大気側湿度を風上の気温で取る。冬の大陸風下の海では
-        // 風上が冷たく q_a が下がり蒸発が増える(実物の冬の蒸発極大)。既定 0 = 従来
         let deficit = qs * (1 - K.evapOceanRelHumidity);
         // 段 B 改: 大気側湿度だけ境界層温で取る(飽和側は T_s のまま)。
         // 冬の暖流上に冷気が流入すると qs(T_s) − RH·qs(T_bl) が開く
@@ -216,19 +214,6 @@ export function computeOceanEvaporation(
             0,
             qs - K.evapOceanRelHumidity * saturationSpecificHumidity(tbl[i] ?? tc, pressureHpa),
           );
-        }
-        if (K.evapUpwindHumidity > 0) {
-          const uu = u?.[i] ?? 0;
-          const vv = v?.[i] ?? 0;
-          // 風上セル: 東西は風の逆向きに 1 列、南北は行を 1 つ(北風 = v<0 は北が風上)
-          const dc = uu > 0.5 ? -1 : uu < -0.5 ? 1 : 0;
-          const dr = vv > 0.5 ? 1 : vv < -0.5 ? -1 : 0;
-          const r2 = Math.min(grid.heightCells - 1, Math.max(0, row + dr));
-          const c2 = (((col + dc) % grid.widthCells) + grid.widthCells) % grid.widthCells;
-          const tUp = t?.[r2 * grid.widthCells + c2] ?? tc;
-          const qa = K.evapOceanRelHumidity * saturationSpecificHumidity(tUp, pressureHpa);
-          const deficitUp = Math.max(0, qs - qa);
-          deficit = (1 - K.evapUpwindHumidity) * deficit + K.evapUpwindHumidity * deficitUp;
         }
         const eKgM2S = rho * K.evapBulkCoef * vEff * deficit;
         // kg/m²/s → mm/月(水 1kg/m² = 1mm)
