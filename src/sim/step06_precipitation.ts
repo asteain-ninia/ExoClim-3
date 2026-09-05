@@ -2248,10 +2248,10 @@ export async function computePrecipitation(
  * 4,914m → 5,277m(1.07 倍)、アマゾン平地は 33m → 43m。狭い山脈だけが跳ね、
  * 広い高原の縁を誤って狭い山脈と判定しない。
  *
- * 高解像度データの無い地形(手続き生成・簡易プリセット)では平均標高と同じ値に
- * なるため、隣接との比高(プロミネンス)による推定を加算で補う
- * (K.crestProminenceFactor。既定 0 = 無効 — 高原の縁と区別できず熱帯を壊した
- * 実測があるため)。演算子は全惑星で同一で、入力データの精細さだけが違う。
+ * 高解像度データの無い地形(手続き生成・簡易プリセット)向けに、隣接との比高
+ * (プロミネンス)で補う枝を持っていたが(K.crestProminenceFactor)、高原の縁と
+ * 区別できず熱帯を壊したため既定 0 のまま、2026-09-06 に削除した。代替は上の
+ * セル内 p95 データ(crestElevationMeters、2026-08-01 に整備済み)。
  */
 export function buildCrestElev(ctx: SimContext): Float32Array {
   const { grid, terrain } = ctx;
@@ -2262,22 +2262,7 @@ export function buildCrestElev(ctx: SimContext): Float32Array {
     for (let col = 0; col < W; col++) {
       const i = row * W + col;
       const e = Math.max(0, terrain.elevationMeters[i] ?? 0);
-      const dataCrest = Math.max(e, terrain.crestElevationMeters[i] ?? 0);
-      let minNb = e;
-      const nbs = [
-        row > 0 ? (row - 1) * W + col : -1,
-        row < H - 1 ? (row + 1) * W + col : -1,
-        row * W + ((col + 1) % W),
-        row * W + ((col + W - 1) % W),
-      ];
-      for (const nb of nbs) {
-        if (nb < 0) continue;
-        const en = Math.max(0, terrain.elevationMeters[nb] ?? 0);
-        if (en < minNb) minNb = en;
-      }
-      // セル内分位で足りない分だけプロミネンス推定で補う(二重計上しない)
-      const prominence = K.crestProminenceFactor * Math.max(0, e - minNb);
-      out[i] = Math.max(dataCrest, e + prominence);
+      out[i] = Math.max(e, terrain.crestElevationMeters[i] ?? 0);
     }
   }
   return out;
