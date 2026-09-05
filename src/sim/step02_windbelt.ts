@@ -113,9 +113,7 @@ export function computeWindBelt(
   }
 
   for (let m = 0; m < MONTHS_PER_YEAR; m++) {
-    // 段 46b: 風帯の暦の遅れは ITCZ(circulationLagMonths)から分離。
-    // 掃引で中緯度は遅れを掛けると悪化した(事前登録の追記を参照)
-    const decl = laggedDeclinationDeg(insolation.monthlyDeclinationDeg, m, K.windbeltLagMonths);
+    const decl = insolation.monthlyDeclinationDeg[m] ?? 0;
     const declNorm = Math.max(-1.5, Math.min(1.5, decl / tilt)); // -1..1(高離心率で ±1.5)
     const shift = K.ridgeSeasonalShiftDeg * declNorm;
     const ridgeN = ridgeBase + shift;
@@ -229,19 +227,4 @@ export function computeWindBelt(
     monthlyPolarFrontLatSDeg,
     monthlyPressureAnomalyHpa,
   };
-}
-
-/**
- * 段 46: 循環が参照する赤緯(暦の遅れつき)。lag = 0 なら配列参照と厳密一致。
- * 円環の線形補間(月 11.5 と 0.5 の間も正しく繋ぐ)
- */
-function laggedDeclinationDeg(monthlyDeclinationDeg: ArrayLike<number>, m: number, lagMonths: number): number {
-  if (lagMonths === 0) return monthlyDeclinationDeg[m] ?? 0;
-  const n = 12;
-  let t = m - lagMonths;
-  while (t < 0) t += n;
-  const i0 = Math.floor(t) % n;
-  const i1 = (i0 + 1) % n;
-  const f = t - Math.floor(t);
-  return (monthlyDeclinationDeg[i0] ?? 0) * (1 - f) + (monthlyDeclinationDeg[i1] ?? 0) * f;
 }
