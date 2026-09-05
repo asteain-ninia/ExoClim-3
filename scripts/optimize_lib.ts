@@ -55,7 +55,9 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // v45(2026-09-03): 上限 0.82→0.95。8/24 の「均す天井」分類は実測と逆で、
   // 0.95 は乾いた端を作る(1% 分位 76→26・詳細 +0.32・雨林無傷)。実物の沈降域は
   // 降水ほぼ 0。docs/事前登録_v45較正_2026-09-03.md / 事前登録_沈降抑制の上限
-  ['subsidenceSuppression', 0.5, 0.95],
+  // v47(2026-09-05): 上限 0.95→0.98(v45 登録の許容上限。実物の沈降域は残存 2〜5%)。
+  // v46 で 0.95 に再張り付き。これ以上は拡張しない。docs/事前登録_v47較正_2026-09-05.md
+  ['subsidenceSuppression', 0.5, 0.98],
   ['subsidenceItczProtection', 0.6, 0.95],
   ['eastCoastSubsidenceRelief', 0.5, 0.95],
   // v33(2026-08-24): 上限 1300→2000。亜熱帯高気圧の西縁は大陸内へ 2000〜3000km
