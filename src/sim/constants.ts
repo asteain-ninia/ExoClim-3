@@ -744,7 +744,7 @@ export const MODEL_CONSTANTS = {
   olrWaterTrapWm2: 0,
   /** ln の基準水蒸気量 mm(全球平均 W 程度。固定・掃引しない) */
   olrWaterRefMm: 8,
-  condensationClosureBlend: 0.4,
+  condensationClosureBlend: 0.132,
   /**
    * W の熱力学係留(2026-09-02)。線形凝結の床: lin·W → lin·(W − floor)⁺、
    * floor = rhFloor × W_sat(T)。凝結を駆動するのは W の量ではなく
@@ -759,7 +759,7 @@ export const MODEL_CONSTANTS = {
    * 0 = 床なしで従来と厳密一致。閉包(condensationClosureBlend > 0)の
    * ときだけ効く。事前登録: docs/事前登録_Wの熱力学係留_2026-09-02.md
    */
-  condensationRhFloor: 0.736,
+  condensationRhFloor: 0,
   /**
    * 段 W-1(2026-09-02): G(持ち上げ積)の年平均スカラー正規化。
    * 1 = G を全球年平均 Ḡ で割って形状場(平均 1)にする。規模(全球の
@@ -768,14 +768,14 @@ export const MODEL_CONSTANTS = {
    * 月別でなく年平均 1 本で割るのは G の季節振幅(冬の嵐)を保つため。
    * 0 = 従来と厳密一致。計画_W実寸化章_2026-09-02.md 段 W-1。
    */
-  condensationGNormalize: 1,
+  condensationGNormalize: 0,
   /**
    * cap の減算形(2026-09-02)。γ > 0 のとき対流閾値を
    * cap = W_sat·max(0.05, RHcrit − γ·G) にする(持ち上げ G が閾値を線形に
    * 下げる)。既定 0 = 従来の除算形 RHcrit·W_sat/G(G 形状に過敏だった)。
    * 事前登録_Wの熱力学係留_2026-09-02.md 追加登録 3(予測 96-99)。
    */
-  capLiftSubtractGamma: 1.524,
+  capLiftSubtractGamma: 0,
   /**
    * 台帳 27(2026-09-03): 沈降抑制の非線形化 residual = (1 − c·subs)^p。
    * 1 = 従来と厳密一致。実測: サバナの乾季は W が雨季と同じで G だけが 0.52 に
@@ -835,7 +835,7 @@ export const MODEL_CONSTANTS = {
   /** 水蒸気供給の海上減衰距離(km) */
   moistureDecayOceanKm: 1500,
   /** 陸上減衰距離(km、再循環なしの素の値) */
-  moistureDecayLandKm: 1143,
+  moistureDecayLandKm: 1887.5482424630225,
   /** 陸面再蒸発の強さ(0〜1、二回目のパスで局所降水に比例) */
   landRecyclingStrength: 0.30447434489689773,
   /**
