@@ -1184,6 +1184,29 @@ export const MODEL_CONSTANTS = {
   smallWaterMaxAreaKm2: 1_200_000,
   /** 風上山脈の遮蔽が始まる比高(m)。これ以下は遮蔽なし */
   upwindBlockReliefOnsetM: 300,
+
+  // ===================================================================
+  // 水蒸気の 2 層化(段 L-0、2026-09-06、docs/計画_水蒸気の2層化_2026-09-06.md)。
+  // 境界層 W_b と自由対流圏 W_f を別々の風で運び、層間交換は鉛直輸出の口で表す。
+  // **moistureLayerSplit = 0(既定)で従来の単層とビット一致**(W_f を作らない)。
+  // SPACE には入れていない(段 L-2 で定数ごとに事前登録)。
+  // ===================================================================
+
+  /** 2 層化のフラグ。0 = 単層(従来とビット一致)、1 = 2 層 */
+  moistureLayerSplit: 0,
+  /** 地表収束 1 単位(収束指標、無次元)あたりの上向き交換率 k_up [1/月]。収束域で境界層の水が上へ */
+  layerExchangeUpPerConv: 0,
+  /** 地表発散 1 単位あたりの下向き交換率 k_dn [1/月]。発散域で自由対流圏の(乾いた)空気が下へ */
+  layerExchangeDownPerDiv: 0,
+  /** cap(逆転層)越しの背景混合 ε [1/月]。両方向に同じだけ掛かる */
+  layerBackgroundMixPerMonth: 0,
+  /**
+   * 境界層が持てる飽和水の割合(cap・床を W_sat のこの割合で縮める)。水蒸気のスケール高
+   * 2〜2.5km に対し境界層 1〜1.5km で 0.5〜0.7。自由対流圏の cap は残り (1 − この値)
+   */
+  boundaryLayerSatFrac: 0.6,
+  /** 自由対流圏の線形(層状)凝結率 = 境界層の線形率 × この値。0 = 自由対流圏は対流項でだけ降る */
+  freeLayerLinearRateFrac: 0,
 } as const;
 
 export type ModelConstants = typeof MODEL_CONSTANTS;

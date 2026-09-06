@@ -12,7 +12,11 @@ import { MONTHS_PER_YEAR } from '@/domain/insolation';
 import { latDegOfRow, cellHeightKm, cellWidthKm, wrapCol } from '@/domain/grid';
 import type { Grid } from '@/domain/grid';
 import { MODEL_CONSTANTS as K } from './constants';
-import { solveMoistureTransport, SECONDS_PER_MONTH } from './moisture_transport';
+import {
+  solveMoistureTransport,
+  solveTwoLayerTransport,
+  SECONDS_PER_MONTH,
+} from './moisture_transport';
 import {
   computeOceanEvaporation,
   saturatedColumnMm,
@@ -88,6 +92,12 @@ export const CONSERVATIVE_STATS = {
    */
   meanWaterMm: 0,
   waterSamples: 0,
+  /** 2 層化のとき: 境界層 W_b の全球平均(mm)。W_f = meanWaterMm − これ */
+  meanWaterBoundaryMm: 0,
+  /** 2 層化のとき: 層間の往復が収束しなかった月の数 */
+  layerNonConverged: 0,
+  /** 2 層化のとき: Gauss–Seidel の往復回数の合計(費用の目安) */
+  layerPasses: 0,
 };
 
 /**
@@ -295,6 +305,9 @@ export function resetConservativeStats(): void {
   // 単発で測る scripts/diag_water_vapor.ts は自前で 0 にしていたので無傷。
   CONSERVATIVE_STATS.meanWaterMm = 0;
   CONSERVATIVE_STATS.waterSamples = 0;
+  CONSERVATIVE_STATS.meanWaterBoundaryMm = 0;
+  CONSERVATIVE_STATS.layerNonConverged = 0;
+  CONSERVATIVE_STATS.layerPasses = 0;
 }
 
 /** 飽和水蒸気圧 hPa(Magnus 式)。水蒸気供給のスケールとして使用 */
@@ -1376,6 +1389,10 @@ export async function computePrecipitation(
    * 突き合わせる)。速度のために答えを動かしては本末転倒である。
    */
   const warmStart: Array<Float32Array | null> = new Array(MONTHS_PER_YEAR).fill(null);
+  /** 2 層化(moistureLayerSplit > 0)のときだけ使う層ごとの温間開始 */
+  const warmStartLayers: Array<{ b: Float32Array; f: Float32Array } | null> = new Array(
+    MONTHS_PER_YEAR,
+  ).fill(null);
 
   /**
    * 降水を**凝結量**として作る。
@@ -1594,6 +1611,98 @@ export async function computePrecipitation(
         vq[i] = wBlend * (v[i] ?? 0) + (1 - wBlend) * (colV[i] ?? 0);
       }
     }
+    // ---- 水蒸気の 2 層化(段 L-0、2026-09-06、docs/計画_水蒸気の2層化_2026-09-06.md)----
+    // 境界層 W_b(地表風)と自由対流圏 W_f(気柱輸送風)を別々に運ぶ。層間交換は
+    // 鉛直輸出の口(σ·W を線形シンクとして抜き、抜けた水をもう一方の層の源に渡す)。
+    // **既定 0 = ここを通らず、従来の単層とビット一致。** crhInner の外側反復(CRH_INNER、
+    // 既定 off)は 2 層では未対応(L-0 の制限)。
+    if ((K.moistureLayerSplit as number) > 0) {
+      const kUp = Math.max(0, K.layerExchangeUpPerConv as number);
+      const kDn = Math.max(0, K.layerExchangeDownPerDiv as number);
+      const eps = Math.max(0, K.layerBackgroundMixPerMonth as number);
+      const satFrac = Math.min(1, Math.max(0.05, K.boundaryLayerSatFrac as number));
+      const freeLinFrac = Math.max(0, K.freeLayerLinearRateFrac as number);
+      // 風の発散: 供給場で重み付けない純粋な −div(V)·τ。既存の収束指標に q ≡ 1 を渡して得る
+      const ones = new Float32Array(N).fill(1);
+      const conv = moistureConvergenceIndex(grid, ctx.params.body.radiusKm, ones, uq, vq);
+      const sigmaUp = new Float32Array(N);
+      const sigmaDn = new Float32Array(N);
+      for (let i = 0; i < N; i++) {
+        const c = conv[i] ?? 0;
+        sigmaUp[i] = kUp * Math.max(0, c) + eps;
+        sigmaDn[i] = kDn * Math.max(0, -c) + eps;
+      }
+      const scaled = (a: Float32Array | null, f: number): Float32Array | undefined => {
+        if (!a) return undefined;
+        const o = new Float32Array(N);
+        for (let i = 0; i < N; i++) o[i] = (a[i] ?? 0) * f;
+        return o;
+      };
+      // 自由対流圏の対流項: 閉包が二成分なら同じ対流率(cap は残りの割合)、
+      // 単成分(c = 0)なら rate × freeLinFrac(0 なら自由対流圏は降らず、運ばれて戻るだけ)
+      const rateFree = capField ? rate : (scaled(rate, freeLinFrac) as Float32Array);
+      const linFree = scaled(linRate, freeLinFrac);
+      const two = solveTwoLayerTransport(
+        grid,
+        ctx.params.body.radiusKm,
+        { u: uq, v: vq },
+        { u: colU ?? uq, v: colV ?? vq },
+        src,
+        {
+          condensationRatePerMonth: rate,
+          ...(linRate ? { linearRatePerMonth: linRate } : {}),
+          ...(capField ? { holdingCapacityMm: scaled(capField, satFrac) as Float32Array } : {}),
+          ...(linFloorField ? { linearFloorMm: scaled(linFloorField, satFrac) as Float32Array } : {}),
+        },
+        {
+          condensationRatePerMonth: rateFree,
+          ...(linFree ? { linearRatePerMonth: linFree } : {}),
+          ...(capField ? { holdingCapacityMm: scaled(capField, 1 - satFrac) as Float32Array } : {}),
+          ...(linFloorField && linFree
+            ? { linearFloorMm: scaled(linFloorField, 1 - satFrac) as Float32Array }
+            : {}),
+        },
+        sigmaUp,
+        sigmaDn,
+        {
+          diffusivityM2PerS: diffOpt,
+          maxIterations: TRANSPORT_MAX_ITERATIONS,
+          ...(warmStartLayers[m]
+            ? {
+                initialBoundaryMm: warmStartLayers[m]!.b,
+                initialFreeMm: warmStartLayers[m]!.f,
+              }
+            : {}),
+        },
+      );
+      warmStartLayers[m] = { b: two.waterBoundaryMm, f: two.waterFreeMm };
+      warmStart[m] = two.waterMm;
+      {
+        let sw = 0;
+        let sb = 0;
+        let ww = 0;
+        for (let row = 0; row < grid.heightCells; row++) {
+          const cw = Math.cos((latDegOfRow(grid, row) * Math.PI) / 180);
+          for (let col = 0; col < grid.widthCells; col++) {
+            const i = row * grid.widthCells + col;
+            sw += cw * (two.waterMm[i] ?? 0);
+            sb += cw * (two.waterBoundaryMm[i] ?? 0);
+            ww += cw;
+          }
+        }
+        CONSERVATIVE_STATS.meanWaterMm += sw / Math.max(1e-9, ww);
+        CONSERVATIVE_STATS.meanWaterBoundaryMm += sb / Math.max(1e-9, ww);
+        CONSERVATIVE_STATS.waterSamples++;
+      }
+      CONSERVATIVE_STATS.nonConverged += two.nonConvergedSolves;
+      CONSERVATIVE_STATS.worstResidual = Math.max(CONSERVATIVE_STATS.worstResidual, two.worstResidual);
+      CONSERVATIVE_STATS.iterations += two.iterations;
+      if (!two.converged) CONSERVATIVE_STATS.layerNonConverged++;
+      CONSERVATIVE_STATS.layerPasses += two.passes;
+      if (diagM) diagM.waterMm.set(two.waterMm);
+      return two.condensationMm;
+    }
+
     const r = solveMoistureTransport(
       grid,
       ctx.params.body.radiusKm,
