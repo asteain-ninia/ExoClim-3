@@ -24,6 +24,21 @@ import type {
   TraceMonthlyFields,
   TraceStaticFields,
 } from '../accel';
+import { MODEL_CONSTANTS as K } from '../constants';
+
+/**
+ * 数を WGSL の f32 リテラルにする(整数は "250.0"、小数は "0.12")。
+ * Fetch 則の定数(fetchEntryBonusKm・fetchRampKm・fetchFloor)は CPU 側と同じ
+ * MODEL_CONSTANTS から取り、カーネル文字列に埋め込む(spec/06 §4.5 の命名、2026-09-06)。
+ * **この文字列はモジュール読み込み時に 1 度だけ作る**ので、これらを SPACE に入れて
+ * 実行中に動かすなら、カーネルを再生成する仕組みが要る。
+ */
+function wgslF32(x: number): string {
+  return Number.isInteger(x) ? x.toFixed(1) : String(x);
+}
+const FETCH_FLOOR = wgslF32(K.fetchFloor);
+const FETCH_ENTRY_BONUS_KM = wgslF32(K.fetchEntryBonusKm);
+const FETCH_RAMP_KM = wgslF32(K.fetchRampKm);
 
 const WGSL = /* wgsl */ `
 struct Params {
@@ -137,7 +152,7 @@ fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
           // commitBody: Fetch を超えた先も完全遮断はしない(下限 0.12)
           if (pendingSupply > 0.0) {
             let reach = min(bodyFetchKm, P.fetchCapKm);
-            let f = min(1.0, max(0.12, (reach + 250.0 - bodyLandAtEntry) / 500.0));
+            let f = min(1.0, max(${FETCH_FLOOR}, (reach + ${FETCH_ENTRY_BONUS_KM} - bodyLandAtEntry) / ${FETCH_RAMP_KM}));
             supply = supply + pendingSupply * f;
           }
           pendingSupply = 0.0;
@@ -150,7 +165,7 @@ fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
         inWater = false;
         if (pendingSupply > 0.0) {
           let reach = min(bodyFetchKm, P.fetchCapKm);
-          let f = min(1.0, max(0.12, (reach + 250.0 - bodyLandAtEntry) / 500.0));
+          let f = min(1.0, max(${FETCH_FLOOR}, (reach + ${FETCH_ENTRY_BONUS_KM} - bodyLandAtEntry) / ${FETCH_RAMP_KM}));
           supply = supply + pendingSupply * f;
         }
         pendingSupply = 0.0;
@@ -188,7 +203,7 @@ fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
   // 途中終了した水域の保留分を精算
   if (inWater && pendingSupply > 0.0) {
     let reach = min(bodyFetchKm, P.fetchCapKm);
-    let f = min(1.0, max(0.12, (reach + 250.0 - bodyLandAtEntry) / 500.0));
+    let f = min(1.0, max(${FETCH_FLOOR}, (reach + ${FETCH_ENTRY_BONUS_KM} - bodyLandAtEntry) / ${FETCH_RAMP_KM}));
     supply = supply + pendingSupply * f;
   }
 

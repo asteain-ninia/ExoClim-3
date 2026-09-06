@@ -1121,6 +1121,69 @@ export const MODEL_CONSTANTS = {
    *   でアルベドと断熱を連続にする。0.3 m 水等価 ≒ 被覆率が飽和する厚さ。
    */
   seaIceCoverScaleMm: 147.6,
+
+  // ===================================================================
+  // 名前を持たなかった数の命名(spec/06 §4.5、台帳 33、2026-09-06)。
+  // すべて SPACE の外(較正は動かさない)。値は命名前のリテラルと同一で、
+  // 既定ハッシュ(2°・CPU)が命名の前後でビット一致することを確かめた。
+  // SPACE へ入れるかは定数ごとに事前登録してから(禁止事項「隠しパラメータ」)。
+  // GPU 側(moisture_trace_gpu.ts の WGSL)へは文字列に埋め込んで渡すので、
+  // ここを SPACE に入れるならカーネル文字列の再生成も要る。
+  // ===================================================================
+
+  /** ストーム帯の赤道側の縁 = |リッジ| + この値(度)。冬は winterStormEquatorwardReachDeg 分だけ下がる */
+  stormBandRidgeOffsetDeg: 4,
+  /** ストーム帯の極側の縁 = |寒帯前線| + この値(度) */
+  stormBandPolarFrontOffsetDeg: 12,
+  /** ストーム帯の重みが赤道側の縁から 1 に立ち上がる幅(度) */
+  stormBandRiseDeg: 5,
+  /** ストーム帯の重みが極側の縁へ向けて 0 に落ちる幅(度) */
+  stormBandFallDeg: 10,
+  /** 寒候期のストーム追加増幅 stormTrackWinterBoost に掛かる係数(× winterDepth01) */
+  stormTrackWinterBoostScale: 1.4,
+  /** ストーム帯の渦供給の冬の増幅(1 + この値 × winterDepth01) */
+  stormSupplyWinterBoost: 0.55,
+  /** 冬の床(winterFloor)を置く帯の赤道側の縁 = |リッジ| + この値(度) */
+  winterFloorBandRidgeOffsetDeg: 1,
+  /** 冬の床を置く帯の極側の縁 = |寒帯前線| + この値(度) */
+  winterFloorBandPolarFrontOffsetDeg: 12,
+  /** 冬の床への移転は湿潤月の余剰のこの割合まで(無制限だとタイガが Ds に化ける — 実測) */
+  winterFloorTransferMaxFrac: 0.35,
+  /** 亜熱帯沈降帯の極側の縁 = |リッジ| + この値(度)。赤道側は subsidenceBandEquatorwardDeg */
+  subsidenceBandPolewardDeg: 5,
+  /** 沈降帯の縁の外側でのガウス裾の幅(度)。重み = exp(−d²/幅²)、幅² = 16 が旧リテラル */
+  subsidenceBandTailDeg: 4,
+  /** 赤道常湿帯の幅 = ITCZ 半幅 × この値 */
+  equatorialResidualWidthFactor: 0.55,
+  /** 寒流沿岸の判定を適用する |緯度| の下限・上限(度) */
+  coldCoastLatMinDeg: 10,
+  coldCoastLatMaxDeg: 50,
+  /** 寒流沿岸の判定を適用する海岸からの距離(km) */
+  coldCoastRangeKm: 300,
+  /** 寒流とみなす近傍最冷 SST 偏差の閾値(°C、これより冷たいとき発火) */
+  coldCoastAnomalyThresholdC: -0.8,
+  /** 寒流沿岸の抑制が飽和する SST 偏差の尺(°C) */
+  coldCoastAnomalyScaleC: 2.5,
+  /** 高温湿潤対流が立ち上がる地表気温(°C)と、飽和までの幅(°C) */
+  warmHumidOnsetC: 22,
+  warmHumidRampC: 8,
+  /** 前線の重み = min(上限, 極向き風速/この値 × 極向き勾配) */
+  frontalWindScaleMs: 4,
+  frontalWeightMax: 1.5,
+  /** 海盆非対称の幅ゲート: (海盆幅° − 開始)/幅 を 0〜1 に。境界流の 55° と同じ尺 */
+  basinWidthGateStartDeg: 35,
+  basinWidthGateRangeDeg: 20,
+  /** 東岸緩和の暖流ゲート: (東の海の SST 偏差 + オフセット)/幅 を 0〜1 に(°C) */
+  eastCoastSstOffsetC: 0.6,
+  eastCoastSstRangeC: 1.2,
+  /** Fetch 則(内海の供給): f = clamp((min(Fetch, cap) + 進入ボーナス − 進入前陸距離)/ランプ, 床, 1)。GPU の WGSL にも埋め込む */
+  fetchEntryBonusKm: 250,
+  fetchRampKm: 500,
+  fetchFloor: 0.12,
+  /** これより小さい海成分を「内海」として Fetch 則の対象にする(km²) */
+  smallWaterMaxAreaKm2: 1_200_000,
+  /** 風上山脈の遮蔽が始まる比高(m)。これ以下は遮蔽なし */
+  upwindBlockReliefOnsetM: 300,
 } as const;
 
 export type ModelConstants = typeof MODEL_CONSTANTS;

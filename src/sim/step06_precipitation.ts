@@ -1000,7 +1000,7 @@ export async function computePrecipitation(
     const dir = params.body.rotationDirection >= 0 ? 1 : -1;
     const W = grid.widthCells;
     const widthGateOf = (widthDeg: number): number =>
-      Math.min(1, Math.max(0, (widthDeg - 35) / 20));
+      Math.min(1, Math.max(0, (widthDeg - K.basinWidthGateStartDeg) / K.basinWidthGateRangeDeg));
     /** 海セルの幅ゲート(陸セルが東の海から引き継ぐために別持ち) */
     const oceanWidthGate = new Float32Array(grid.cellCount);
     for (let row = 0; row < grid.heightCells; row++) {
@@ -1279,11 +1279,11 @@ export async function computePrecipitation(
     const W = grid.widthCells;
     for (let row = 0; row < grid.heightCells; row++) {
       const aLat = Math.abs(latDegOfRow(grid, row));
-      if (aLat <= 10 || aLat >= 50) continue;
+      if (aLat <= K.coldCoastLatMinDeg || aLat >= K.coldCoastLatMaxDeg) continue;
       for (let col = 0; col < W; col++) {
         const i = row * W + col;
         if (!terrain.landMask[i]) continue;
-        if ((ctx.landDistToCoastKm[i] ?? 1e9) >= 300) continue;
+        if ((ctx.landDistToCoastKm[i] ?? 1e9) >= K.coldCoastRangeKm) continue;
         coldAnomalyCache[i] = nearestOceanAnomaly(ctx, ocean, row, col);
       }
     }
@@ -1848,7 +1848,9 @@ export async function computePrecipitation(
               lat >= 0
                 ? (windBelt.monthlyPolarFrontLatNDeg[m] ?? 60)
                 : (windBelt.monthlyPolarFrontLatSDeg[m] ?? -60);
-            const inBand = aLat > Math.abs(ridge) + 1 && aLat < Math.abs(pf) + 12;
+            const inBand =
+              aLat > Math.abs(ridge) + K.winterFloorBandRidgeOffsetDeg &&
+              aLat < Math.abs(pf) + K.winterFloorBandPolarFrontOffsetDeg;
             const f = summerNorm < 0.5 && inBand ? floorMm : 0;
             floors.push(f);
             const p = arr[m]?.[i] ?? 0;
@@ -1858,7 +1860,7 @@ export async function computePrecipitation(
           if (deficit <= 0 || surplus <= 0) continue;
           // 移転は湿潤月の余剰の 35% まで(無制限だと夏の雨をほぼ全部持って
           // いき、タイガが夏乾の Ds に化ける — 実測)
-          const transfer = Math.min(deficit, surplus * 0.35);
+          const transfer = Math.min(deficit, surplus * K.winterFloorTransferMaxFrac);
           const k = transfer / surplus;
           const fill = transfer / deficit;
           for (let m = 0; m < MONTHS_PER_YEAR; m++) {
@@ -2303,7 +2305,7 @@ export function buildSmallWaterMask(ctx: SimContext): Uint8Array {
         }
       }
     }
-    if (areaKm2 < 1_200_000) {
+    if (areaKm2 < K.smallWaterMaxAreaKm2) {
       for (const i of cells) mask[i] = 1;
     }
   }
@@ -2361,7 +2363,10 @@ export function traceMoistureSupply(
           // 遠方にも幾らか湿潤を送る。0.3 ではペルシャ湾型(q_sat が巨大な熱い
           // 内海)の漏れが大きすぎ、アラビア内陸が Aw 化した(2026-07-31)
           const reach = Math.min(bodyFetchKm, K.fetchOpenOceanCapKm);
-          const f = Math.min(1, Math.max(0.12, (reach + 250 - bodyLandAtEntry) / 500));
+          const f = Math.min(
+            1,
+            Math.max(K.fetchFloor, (reach + K.fetchEntryBonusKm - bodyLandAtEntry) / K.fetchRampKm),
+          );
           supply += pendingSupply * f;
         }
         pendingSupply = 0;
@@ -2623,7 +2628,8 @@ function convertToPrecip(
       // 低気圧 — 2026-07-30 レビュー A1)
       const gIm = itczInfluenceAt(itcz, month, col, lat, K.itczPrecipWidthFactor);
       // 赤道常湿帯: 年平均 ITCZ 線の周りは月別中心が離れた季節でも影響が残る
-      const dMean = (lat - (meanItczCenters[col] ?? 0)) / (itcz.halfWidthDeg * 0.55);
+      const dMean =
+        (lat - (meanItczCenters[col] ?? 0)) / (itcz.halfWidthDeg * K.equatorialResidualWidthFactor);
       const gIres = K.equatorialItczResidual * Math.exp(-dMean * dMean);
       const gI = Math.max(gIm, gIres);
       const marineW = Math.min(1, (supply[i] ?? 0) / K.itczLiftSupplyNorm);
@@ -2690,7 +2696,7 @@ function convertToPrecip(
           aLat0 > Math.abs(ridge) - K.frontalWindowEquatorwardDeg &&
           aLat0 < Math.abs(pf)
         ) {
-          const frontW = Math.min(1.5, (vPoleward / 4) * gradPoleward);
+          const frontW = Math.min(K.frontalWeightMax, (vPoleward / K.frontalWindScaleMs) * gradPoleward);
           liftFrontalF = 1 + K.frontalLiftBoost * frontW;
           lift *= liftFrontalF;
         }
@@ -2703,17 +2709,19 @@ function convertToPrecip(
       // 届かず、亜熱帯の冬雨の G が平坦(振幅 0.10)だった(2026-08-18 の分解)。
       // 既定 0 でビット一致。事前登録: docs/事前登録_亜熱帯の冬雨機構_2026-08-23.md
       const stLo =
-        Math.abs(ridge) + 4 - K.winterStormEquatorwardReachDeg * winterDepth01;
-      const stHi = Math.abs(pf) + 12;
+        Math.abs(ridge) + K.stormBandRidgeOffsetDeg - K.winterStormEquatorwardReachDeg * winterDepth01;
+      const stHi = Math.abs(pf) + K.stormBandPolarFrontOffsetDeg;
       const aLat = Math.abs(lat);
       let stormW = 0;
       let liftStormF = 1;
       if (aLat > stLo && aLat < stHi) {
-        const riseW = Math.min(1, (aLat - stLo) / 5);
-        const fallW = Math.min(1, (stHi - aLat) / 10);
+        const riseW = Math.min(1, (aLat - stLo) / K.stormBandRiseDeg);
+        const fallW = Math.min(1, (stHi - aLat) / K.stormBandFallDeg);
         stormW = Math.min(riseW, fallW);
         liftStormF =
-          1 + (K.stormTrackBoost + K.stormTrackWinterBoost * 1.4 * winterDepth01) * stormW;
+          1 +
+          (K.stormTrackBoost + K.stormTrackWinterBoost * K.stormTrackWinterBoostScale * winterDepth01) *
+            stormW;
         lift *= liftStormF;
       }
 
@@ -2768,13 +2776,13 @@ function convertToPrecip(
       // 21° 幅あるので 7 月のリッジ 37°N に対し帯は 21〜42°N となり、
       // east_asia(25〜40°N)が丸ごと入る。凝結率が半減する原因
       const descLo = Math.abs(ridge) - K.subsidenceBandEquatorwardDeg;
-      const descHi = Math.abs(ridge) + 5;
+      const descHi = Math.abs(ridge) + K.subsidenceBandPolewardDeg;
       let descW: number;
       if (aLat >= descLo && aLat <= descHi) {
         descW = 1;
       } else {
         const d = aLat < descLo ? descLo - aLat : aLat - descHi;
-        descW = Math.exp(-(d * d) / 16);
+        descW = Math.exp(-(d * d) / (K.subsidenceBandTailDeg * K.subsidenceBandTailDeg));
       }
       // 沈降の海盆非対称(2026-08-24、事前登録_沈降の海盆非対称): 帯を
       // 海盆西部で開く(源泉側)。陸は供給実績ゲート付き(アラビアの守り)
@@ -2797,7 +2805,10 @@ function convertToPrecip(
       // (b) その海から実際に湿潤が届いている(供給実績 — アラビア海のように
       // 「暖かいが乾いた流入」の海を自動除外する。2026-07-31: SST だけでは
       // アラビアと華中を区別できず、到達延長がアラビアを再湿潤化した)
-      const eastWarmth = Math.min(1, Math.max(0, ((eastOceanSstA[i] ?? 0) + 0.6) / 1.2));
+      const eastWarmth = Math.min(
+        1,
+        Math.max(0, ((eastOceanSstA[i] ?? 0) + K.eastCoastSstOffsetC) / K.eastCoastSstRangeC),
+      );
       const supplyGate = Math.min(1, (supply[i] ?? 0) / K.eastReliefSupplyNorm);
       const eastRelief =
         K.eastCoastSubsidenceRelief *
@@ -2835,14 +2846,15 @@ function convertToPrecip(
       // 寒流沿岸の安定化(亜熱帯〜中緯度の海岸乾燥: 沿岸〜300km。
       // フォークランド型の寒流帰還域まで含めるため上限 50°)
       let coldCoastF = 1;
-      if (terrain.landMask[i] && aLat > 10 && aLat < 50) {
+      if (terrain.landMask[i] && aLat > K.coldCoastLatMinDeg && aLat < K.coldCoastLatMaxDeg) {
         const coastKm = ctx.landDistToCoastKm[i] ?? 1e9;
-        if (coastKm < 300) {
+        if (coastKm < K.coldCoastRangeKm) {
           const cold = coldAnomalyCache
             ? (coldAnomalyCache[i] ?? 0)
             : nearestOceanAnomaly(ctx, ocean, row, col);
-          if (cold < -0.8) {
-            coldCoastF = 1 - K.coldCoastSuppression * Math.min(1, -cold / 2.5);
+          if (cold < K.coldCoastAnomalyThresholdC) {
+            coldCoastF =
+              1 - K.coldCoastSuppression * Math.min(1, -cold / K.coldCoastAnomalyScaleC);
             lift *= coldCoastF;
           }
         }
@@ -2853,7 +2865,10 @@ function convertToPrecip(
       // 飽和して豪州が Aw 化した — 較正記録の撤回理由への対処。レビュー H5)
       let warmHumidF = 1;
       if (terrain.landMask[i]) {
-        const warmth = Math.min(1, Math.max(0, ((tField[i] ?? 0) - 22) / 8));
+        const warmth = Math.min(
+          1,
+          Math.max(0, ((tField[i] ?? 0) - K.warmHumidOnsetC) / K.warmHumidRampC),
+        );
         if (warmth > 0) {
           const supplyNorm = Math.min(1, (supply[i] ?? 0) / K.warmHumidSupplyNorm);
           warmHumidF = 1 + K.warmHumidConvectiveBoost * warmth * supplyNorm * supplyNorm;
@@ -2901,7 +2916,11 @@ function convertToPrecip(
         const decayKm = K.stormMoistureDecayKm * (0.5 + 0.5 * onshore01);
         const reach = Math.exp(-coastKm / decayKm);
         stormSupply =
-          K.stormMoistureSupply * supplyW * qRel * reach * (1 + 0.55 * winterDepth01);
+          K.stormMoistureSupply *
+          supplyW *
+          qRel *
+          reach *
+          (1 + K.stormSupplyWinterBoost * winterDepth01);
         // **保存型はこの混合を「拡散の場」として受け取る(段 36)。**
         // 降水式には触らない — ここは非保存の経路のままである
         if (stormMixOut) stormMixOut[i] = supplyW * reach;
@@ -3041,8 +3060,8 @@ function upwindMountainFactor(
     if (e > maxRidge) maxRidge = e;
   }
   const relief = maxRidge - ownElev;
-  if (relief <= 300) return 1;
-  const t = Math.min(1, (relief - 300) / K.upwindBlockReliefM);
+  if (relief <= K.upwindBlockReliefOnsetM) return 1;
+  const t = Math.min(1, (relief - K.upwindBlockReliefOnsetM) / K.upwindBlockReliefM);
   return 1 - (1 - K.upwindBlockFloor) * t;
 }
 
