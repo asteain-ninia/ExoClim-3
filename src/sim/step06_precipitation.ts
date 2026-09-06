@@ -79,7 +79,9 @@ export const CONVEYOR_STATS = {
  * 結合反復ごとに進め、収束は外側の結合反復に委ねる。ソルバ水準の収束テストは
  * solveTwoLayerTransport に maxPasses を直接渡す。
  */
-export const TWO_LAYER = { passesPerCoupling: 1 };
+// 2026-09-07 の検証(k = 1・ε 0.1・1°): 1 往復 74.238 / 3 往復 74.348 / 20 往復 74.350(連続部分)。
+// 1 往復は不動点に届かず、3 往復で 20 往復と 0.002 差 → 既定 3(費用は 1 往復の 2 倍、単層の 5 倍)。
+export const TWO_LAYER = { passesPerCoupling: 3 };
 // 数値の検証用: 環境変数で往復回数を上書きする(掃引の親と子の全経路が読む)。
 // 較正やゲームからは設定しない。
 if (process.env['TWO_LAYER_PASSES']) {
@@ -1680,9 +1682,9 @@ export async function computePrecipitation(
         {
           diffusivityM2PerS: diffOpt,
           maxIterations: TRANSPORT_MAX_ITERATIONS,
-          // 層間の往復は結合反復 1 回につき既定 1 往復。温間開始で前反復の W_b・W_f を
-          // 引き継ぐので、往復の収束は外側の結合反復が担う(2026-09-07: 往復を内側で
-          // 20 回まで回す設計は 1 水準 30 分超で終わらなかった)
+          // 層間の往復は結合反復 1 回につき既定 3 往復(TWO_LAYER)。温間開始で前反復の
+          // W_b・W_f を引き継ぐ。2026-09-07 の検証: 1 往復は不動点に 0.11 届かず、3 往復で
+          // 20 往復と 0.002 差。内側で 20 回まで回す L-0 の設計は 1 水準 30 分超だった
           maxPasses: TWO_LAYER.passesPerCoupling,
           ...(warmStartLayers[m]
             ? {
