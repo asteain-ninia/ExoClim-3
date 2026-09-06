@@ -80,6 +80,11 @@ export const CONVEYOR_STATS = {
  * solveTwoLayerTransport に maxPasses を直接渡す。
  */
 export const TWO_LAYER = { passesPerCoupling: 1 };
+// 数値の検証用: 環境変数で往復回数を上書きする(掃引の親と子の全経路が読む)。
+// 較正やゲームからは設定しない。
+if (process.env['TWO_LAYER_PASSES']) {
+  TWO_LAYER.passesPerCoupling = Math.max(1, Number(process.env['TWO_LAYER_PASSES']));
+}
 
 export const CONSERVATIVE_STATS = {
   /** 収束しなかった月の数(12 か月 × 結合反復ぶん数える) */
