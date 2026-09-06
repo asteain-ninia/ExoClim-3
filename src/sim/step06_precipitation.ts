@@ -73,6 +73,14 @@ export const CONVEYOR_STATS = {
   skippedNoWarm: 0,
 };
 
+/**
+ * 2 層化(moistureLayerSplit > 0)の層間往復の回数(結合反復 1 回あたり)。
+ * 診断専用のモジュール定数(constants.ts にも UI にも無い)。既定 1 = Gauss–Seidel 1 往復を
+ * 結合反復ごとに進め、収束は外側の結合反復に委ねる。ソルバ水準の収束テストは
+ * solveTwoLayerTransport に maxPasses を直接渡す。
+ */
+export const TWO_LAYER = { passesPerCoupling: 1 };
+
 export const CONSERVATIVE_STATS = {
   /** 収束しなかった月の数(12 か月 × 結合反復ぶん数える) */
   nonConverged: 0,
@@ -1667,6 +1675,10 @@ export async function computePrecipitation(
         {
           diffusivityM2PerS: diffOpt,
           maxIterations: TRANSPORT_MAX_ITERATIONS,
+          // 層間の往復は結合反復 1 回につき既定 1 往復。温間開始で前反復の W_b・W_f を
+          // 引き継ぐので、往復の収束は外側の結合反復が担う(2026-09-07: 往復を内側で
+          // 20 回まで回す設計は 1 水準 30 分超で終わらなかった)
+          maxPasses: TWO_LAYER.passesPerCoupling,
           ...(warmStartLayers[m]
             ? {
                 initialBoundaryMm: warmStartLayers[m]!.b,
