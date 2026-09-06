@@ -914,3 +914,164 @@ export function globalBalanceResidual(
   }
   return Math.abs(net) / Math.max(1e-9, total);
 }
+
+// ===================================================================
+// 水蒸気の 2 層化(段 L-0、2026-09-06。docs/計画_水蒸気の2層化_2026-09-06.md)
+//
+// 境界層 W_b と自由対流圏 W_f を、それぞれの風で別々に運ぶ。層の間の交換は
+// 「鉛直輸出」の口(verticalExportRatePerMonth)をそのまま使う:
+//   境界層の解では σ_up·W_b が線形シンクとして抜け(exportedMm)、それを
+//   自由対流圏の**源**に渡す。自由対流圏では σ_dn·W_f が抜けて境界層の源へ戻る。
+// 8/4 に「抜いた水の返し先が無い」で棄却された鉛直輸出は、2 層にすると
+// 返し先(もう一方の層)が定義される。層の間は Gauss–Seidel で回し、
+// 往復する水(X_dn)の変化が平均源の tol 倍を切ったら止める。
+//
+// 保存: 収束すれば S = C_b + C_f + 面フラックスの和 が全球で閉じる
+// (テスト tests/unit/sim/two_layer.test.ts で固定)。
+// ===================================================================
+
+export interface LayerClosure {
+  /** [cell] 対流(閾値超過)の凝結率 1/月。閾値が無ければ C = rate·W */
+  condensationRatePerMonth: Float32Array;
+  linearRatePerMonth?: ArrayLike<number>;
+  holdingCapacityMm?: ArrayLike<number>;
+  linearFloorMm?: ArrayLike<number>;
+}
+
+export interface TwoLayerOptions {
+  diffusivityM2PerS?: number | ArrayLike<number>;
+  maxIterations?: number;
+  /** 内側の輸送ソルバの残差許容(単層と同じ既定) */
+  tolerance?: number;
+  /** 層間の往復水の収束判定: max|ΔX_dn| ≤ tol × 平均源(既定 1e-4) */
+  layerTolerance?: number;
+  /** Gauss–Seidel の上限回数(既定 20) */
+  maxPasses?: number;
+  initialBoundaryMm?: ArrayLike<number>;
+  initialFreeMm?: ArrayLike<number>;
+}
+
+export interface TwoLayerResult {
+  /** [cell] W_b + W_f */
+  waterMm: Float32Array;
+  waterBoundaryMm: Float32Array;
+  waterFreeMm: Float32Array;
+  /** [cell] C_b + C_f = 降水 */
+  condensationMm: Float32Array;
+  condensationBoundaryMm: Float32Array;
+  condensationFreeMm: Float32Array;
+  /** [cell] 最後の往復: 上向き X_up = σ_up·W_b、下向き X_dn = σ_dn·W_f */
+  exchangeUpMm: Float32Array;
+  exchangeDownMm: Float32Array;
+  passes: number;
+  /** 層間の往復が収束したか */
+  converged: boolean;
+  /** 内側の輸送ソルバが収束しなかった回数と最悪残差(層ごとに数える) */
+  nonConvergedSolves: number;
+  worstResidual: number;
+  iterations: number;
+}
+
+export function solveTwoLayerTransport(
+  grid: Grid,
+  radiusKm: number,
+  windBoundary: { u: Float32Array; v: Float32Array },
+  windFree: { u: Float32Array; v: Float32Array },
+  sourceMmPerMonth: Float32Array,
+  closureBoundary: LayerClosure,
+  closureFree: LayerClosure,
+  sigmaUpPerMonth: Float32Array,
+  sigmaDownPerMonth: Float32Array,
+  options: TwoLayerOptions = {},
+): TwoLayerResult {
+  const N = grid.cellCount;
+  const tol = options.layerTolerance ?? 1e-4;
+  const maxPasses = options.maxPasses ?? 20;
+  // 平均源(面積重み)— 収束判定の尺
+  let sSum = 0;
+  let wSum = 0;
+  for (let row = 0; row < grid.heightCells; row++) {
+    const w = Math.max(0, Math.cos((latDegOfRow(grid, row) * Math.PI) / 180));
+    for (let col = 0; col < grid.widthCells; col++) {
+      sSum += w * (sourceMmPerMonth[row * grid.widthCells + col] ?? 0);
+      wSum += w;
+    }
+  }
+  const meanS = Math.max(1e-9, sSum / Math.max(1e-9, wSum));
+
+  const srcB = new Float32Array(N);
+  let xDown: ArrayLike<number> = new Float32Array(N);
+  let prevB: ArrayLike<number> | undefined = options.initialBoundaryMm;
+  let prevF: ArrayLike<number> | undefined = options.initialFreeMm;
+  let rb: MoistureTransportResult | null = null;
+  let rf: MoistureTransportResult | null = null;
+  let nonConverged = 0;
+  let worst = 0;
+  let iterations = 0;
+  let converged = false;
+  let passes = 0;
+  const common = {
+    ...(options.diffusivityM2PerS !== undefined ? { diffusivityM2PerS: options.diffusivityM2PerS } : {}),
+    ...(options.maxIterations !== undefined ? { maxIterations: options.maxIterations } : {}),
+    ...(options.tolerance !== undefined ? { tolerance: options.tolerance } : {}),
+  };
+  const closureOpts = (c: LayerClosure): Partial<MoistureTransportOptions> => ({
+    ...(c.linearRatePerMonth ? { linearRatePerMonth: c.linearRatePerMonth } : {}),
+    ...(c.holdingCapacityMm ? { holdingCapacityMm: c.holdingCapacityMm } : {}),
+    ...(c.linearFloorMm ? { linearFloorMm: c.linearFloorMm } : {}),
+  });
+  for (passes = 1; passes <= maxPasses; passes++) {
+    for (let i = 0; i < N; i++) srcB[i] = (sourceMmPerMonth[i] ?? 0) + (xDown[i] ?? 0);
+    rb = solveMoistureTransport(grid, radiusKm, windBoundary.u, windBoundary.v, srcB, closureBoundary.condensationRatePerMonth, {
+      ...common,
+      ...closureOpts(closureBoundary),
+      verticalExportRatePerMonth: sigmaUpPerMonth,
+      ...(prevB ? { initialGuessMm: prevB } : {}),
+    });
+    rf = solveMoistureTransport(grid, radiusKm, windFree.u, windFree.v, rb.exportedMm, closureFree.condensationRatePerMonth, {
+      ...common,
+      ...closureOpts(closureFree),
+      verticalExportRatePerMonth: sigmaDownPerMonth,
+      ...(prevF ? { initialGuessMm: prevF } : {}),
+    });
+    for (const r of [rb, rf]) {
+      iterations += r.iterations;
+      if (!r.converged) {
+        nonConverged++;
+        worst = Math.max(worst, r.residual);
+      }
+    }
+    let dMax = 0;
+    for (let i = 0; i < N; i++) dMax = Math.max(dMax, Math.abs((rf.exportedMm[i] ?? 0) - (xDown[i] ?? 0)));
+    xDown = rf.exportedMm;
+    prevB = rb.waterMm;
+    prevF = rf.waterMm;
+    if (dMax <= tol * meanS) {
+      converged = true;
+      break;
+    }
+  }
+  if (!rb || !rf) throw new Error('2 層輸送: 反復が 1 回も走らなかった');
+  if (passes > maxPasses) passes = maxPasses;
+  const waterMm = new Float32Array(N);
+  const condensationMm = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    waterMm[i] = (rb.waterMm[i] ?? 0) + (rf.waterMm[i] ?? 0);
+    condensationMm[i] = (rb.condensationMm[i] ?? 0) + (rf.condensationMm[i] ?? 0);
+  }
+  return {
+    waterMm,
+    waterBoundaryMm: rb.waterMm,
+    waterFreeMm: rf.waterMm,
+    condensationMm,
+    condensationBoundaryMm: rb.condensationMm,
+    condensationFreeMm: rf.condensationMm,
+    exchangeUpMm: rb.exportedMm,
+    exchangeDownMm: rf.exportedMm,
+    passes,
+    converged,
+    nonConvergedSolves: nonConverged,
+    worstResidual: worst,
+    iterations,
+  };
+}
