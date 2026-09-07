@@ -1028,8 +1028,20 @@ export function solveTwoLayerTransport(
       verticalExportRatePerMonth: sigmaUpPerMonth,
       ...(prevB ? { initialGuessMm: prevB } : {}),
     });
+    // 自由対流圏の収束判定は「残差 / その層の平均源」で、源 X_up は境界層の源より 1 桁小さい。
+    // そのままだと絶対の残差で境界層の 10 倍厳しくなり、反復が単層の 12〜24 倍に膨れた
+    // (2026-09-07 の実測)。許容を平均源の比で掛けて**境界層と同じ絶対尺**にする(不動点は同じ)。
+    let meanB = 0;
+    let meanF = 0;
+    for (let i = 0; i < N; i++) {
+      meanB += Math.max(0, srcB[i] ?? 0);
+      meanF += Math.max(0, rb.exportedMm[i] ?? 0);
+    }
+    const baseTol = options.tolerance ?? 1e-5;
+    const tolFree = Math.min(0.05, (baseTol * Math.max(1e-9, meanB)) / Math.max(1e-9, meanF));
     rf = solveMoistureTransport(grid, radiusKm, windFree.u, windFree.v, rb.exportedMm, closureFree.condensationRatePerMonth, {
       ...common,
+      tolerance: tolFree,
       ...closureOpts(closureFree),
       verticalExportRatePerMonth: sigmaDownPerMonth,
       ...(prevF ? { initialGuessMm: prevF } : {}),
