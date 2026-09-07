@@ -12,7 +12,7 @@ import { EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
 import { CONSERVATIVE_STATS } from '../src/sim/step06_precipitation';
 import { evaluateNumericalSoundness } from './validate_criteria';
 
-export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
+const FULL_SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // ---- 保存型への移行(段 6、2026-08-09)----
   // 消した定数と理由:
   //   precipScaleMmPerUnit  保存則の中に置き場所が無い(降水量は収支が決める)
@@ -247,6 +247,43 @@ export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // ['westerlyWindMs', 6.5, 9],
 ];
 
+
+/**
+ * **部分較正の口**(2026-09-07、2 層化 L-2 用)。環境変数 OPTIMIZE_SPACE_KEYS=名前,名前,… を
+ * 与えると、探索空間をその定数だけに絞る。来歴の指紋は絞った空間から計算されるので、
+ * 全空間の較正とは別の較正として記録される(再開の混線は指紋が止める)。
+ * 親・子プロセス・worker_threads の全経路がこのモジュールを読むので、環境変数は継承させること。
+ * **diag_dead_constants --write はこの環境変数の下では使わない**(全空間の生存性の記録を部分で
+ * 上書きしてしまう)。部分空間の生存性は --write なしで印字だけ見る。
+ */
+/**
+ * **部分較正でだけ選べる定数**(全空間の指紋を変えない)。2 層化(段 L-1、2026-09-07)の定数は
+ * 既定 moistureLayerSplit = 0 では答えに効かない(生存性が「死」と出る)ので、全空間には
+ * 入れず、OPTIMIZE_SPACE_KEYS で名指しされたときだけ探索空間に加わる。範囲の根拠は
+ * docs/実験記録_2層化の段L-1_2026-09-07.md(k は 0.3〜10 で単調、ε は 0〜1 で単調、satFrac は無感)。
+ */
+const EXTRA_SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
+  ['layerExchangeUpPerConv', 0, 10],
+  ['layerExchangeDownPerDiv', 0, 10],
+  ['layerBackgroundMixPerMonth', 0, 3],
+  ['boundaryLayerSatFrac', 0.4, 0.8],
+];
+const SPACE_KEYS_ENV = (process.env['OPTIMIZE_SPACE_KEYS'] ?? '')
+  .split(',')
+  .map((k) => k.trim())
+  .filter(Boolean);
+export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> =
+  SPACE_KEYS_ENV.length > 0
+    ? (() => {
+        const keep = new Set(SPACE_KEYS_ENV);
+        const sub = [...FULL_SPACE, ...EXTRA_SPACE].filter(([k]) => keep.has(k as string));
+        const missing = SPACE_KEYS_ENV.filter((k) => !sub.some(([n]) => n === k));
+        if (missing.length > 0) {
+          throw new Error(`OPTIMIZE_SPACE_KEYS に SPACE 外の名前: ${missing.join(', ')}`);
+        }
+        return sub;
+      })()
+    : FULL_SPACE;
 /**
  * 数値的に解けなかった評価に与える不適合度。
  * 較正が「収束しない領域」へ逃げ込むのを防ぐ(未収束は歴史的に成績を
