@@ -1664,9 +1664,13 @@ export async function computePrecipitation(
       const conv = moistureConvergenceIndex(grid, ctx.params.body.radiusKm, ones, uq, vq);
       const sigmaUp = new Float32Array(N);
       const sigmaDn = new Float32Array(N);
+      // 段 L-1c の門: 持ち上げ G が強い所(深い対流)では収束した水はその場で降り、G が弱い
+      // 沈降域(cap の下の浅い循環)でだけ境界層から上へ抜ける。gateG = 0 で門なし(従来と一致)
+      const gateG = Math.max(0, K.layerExchangeLiftGateG as number);
       for (let i = 0; i < N; i++) {
         const c = conv[i] ?? 0;
-        sigmaUp[i] = kUp * Math.max(0, c) + eps;
+        const gate = gateG > 0 ? Math.exp(-(G[i] ?? 0) / gateG) : 1;
+        sigmaUp[i] = (kUp * Math.max(0, c) + eps) * gate;
         sigmaDn[i] = kDn * Math.max(0, -c) + eps;
       }
       const scaled = (a: Float32Array | null, f: number): Float32Array | undefined => {

@@ -1207,6 +1207,12 @@ export const MODEL_CONSTANTS = {
   boundaryLayerSatFrac: 0.6,
   /** 自由対流圏の線形(層状)凝結率 = 境界層の線形率 × この値。0 = 自由対流圏は対流項でだけ降る */
   freeLayerLinearRateFrac: 0,
+  /**
+   * 上向き交換の門(段 L-1c、2026-09-07): σ_up に exp(−G / この値) を掛ける。持ち上げ G が強い所
+   * (深い対流)では収束した水はその場で降り、G が弱い沈降域(cap の下の浅い循環)でだけ
+   * 境界層から自由対流圏へ輸出される。0 = 門なし(従来と一致)。G の尺: 帯平均 3.1/1.0/3.2、沈降域 0.3〜0.5
+   */
+  layerExchangeLiftGateG: 0,
 } as const;
 
 export type ModelConstants = typeof MODEL_CONSTANTS;
