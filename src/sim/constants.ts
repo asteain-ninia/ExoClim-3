@@ -1195,11 +1195,11 @@ export const MODEL_CONSTANTS = {
   /** 2 層化のフラグ。0 = 単層(従来とビット一致)、1 = 2 層。**v50 部分較正のため 1 に既定化(2026-09-07)。不採用なら 0 へ戻す** */
   moistureLayerSplit: 1,
   /** 地表収束 1 単位(収束指標、無次元)あたりの上向き交換率 k_up [1/月]。収束域で境界層の水が上へ */
-  layerExchangeUpPerConv: 0,
+  layerExchangeUpPerConv: 3,
   /** 地表発散 1 単位あたりの下向き交換率 k_dn [1/月]。発散域で自由対流圏の(乾いた)空気が下へ */
-  layerExchangeDownPerDiv: 0,
+  layerExchangeDownPerDiv: 3,
   /** cap(逆転層)越しの背景混合 ε [1/月]。両方向に同じだけ掛かる */
-  layerBackgroundMixPerMonth: 0,
+  layerBackgroundMixPerMonth: 1,
   /**
    * 境界層が持てる飽和水の割合(cap・床を W_sat のこの割合で縮める)。水蒸気のスケール高
    * 2〜2.5km に対し境界層 1〜1.5km で 0.5〜0.7。自由対流圏の cap は残り (1 − この値)
