@@ -126,7 +126,8 @@ describe('水蒸気の 2 層化(段 L-0)', () => {
         boundaryLayerSatFrac: K['boundaryLayerSatFrac'] ?? 0.6,
       };
       try {
-        expect(saved.moistureLayerSplit).toBe(0);
+        // 2026-09-08 の v50 採用で既定が 2 層(split 1)になったので、基準は単層を明示する
+        K['moistureLayerSplit'] = 0;
         const base = await runPipeline(P2);
         K['moistureLayerSplit'] = 1;
         K['layerExchangeUpPerConv'] = 0;

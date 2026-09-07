@@ -12,7 +12,7 @@ import { EBM_SOLVER_STATS } from '../src/sim/step05_temperature';
 import { CONSERVATIVE_STATS } from '../src/sim/step06_precipitation';
 import { evaluateNumericalSoundness } from './validate_criteria';
 
-const FULL_SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
+export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   // ---- 保存型への移行(段 6、2026-08-09)----
   // 消した定数と理由:
   //   precipScaleMmPerUnit  保存則の中に置き場所が無い(降水量は収支が決める)
@@ -272,18 +272,17 @@ const SPACE_KEYS_ENV = (process.env['OPTIMIZE_SPACE_KEYS'] ?? '')
   .split(',')
   .map((k) => k.trim())
   .filter(Boolean);
-export const SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> =
-  SPACE_KEYS_ENV.length > 0
-    ? (() => {
-        const keep = new Set(SPACE_KEYS_ENV);
-        const sub = [...FULL_SPACE, ...EXTRA_SPACE].filter(([k]) => keep.has(k as string));
-        const missing = SPACE_KEYS_ENV.filter((k) => !sub.some(([n]) => n === k));
-        if (missing.length > 0) {
-          throw new Error(`OPTIMIZE_SPACE_KEYS に SPACE 外の名前: ${missing.join(', ')}`);
-        }
-        return sub;
-      })()
-    : FULL_SPACE;
+if (SPACE_KEYS_ENV.length > 0) {
+  // **配列を差し替えるのではなく中身を入れ替える**: parseSpace とテストは
+  // 'export const SPACE = [' の字面(全空間)を読み、実行時の読み手は同じ配列を参照する。
+  const keep = new Set(SPACE_KEYS_ENV);
+  const sub = [...SPACE, ...EXTRA_SPACE].filter(([k]) => keep.has(k as string));
+  const missing = SPACE_KEYS_ENV.filter((k) => !sub.some(([name]) => name === k));
+  if (missing.length > 0) {
+    throw new Error(`OPTIMIZE_SPACE_KEYS に SPACE 外の名前: ${missing.join(', ')}`);
+  }
+  SPACE.splice(0, SPACE.length, ...sub);
+}
 /**
  * 数値的に解けなかった評価に与える不適合度。
  * 較正が「収束しない領域」へ逃げ込むのを防ぐ(未収束は歴史的に成績を

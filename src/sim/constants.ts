@@ -263,7 +263,7 @@ export const MODEL_CONSTANTS = {
    * 凝結の時定数を作る基準風速(m/s)。λ = U_ref / L で、L は既存の
    * moistureDecay*Km。**「水が消える距離」を「凝結寿命」として写す**ための係数。
    */
-  condensationRefWindMs: 7.62446579349041,
+  condensationRefWindMs: 8.42446579349041,
   /**
    * 水蒸気の渦拡散係数(m²/s)。**移動性低気圧による輸送**をここで表す。
    *
@@ -659,7 +659,7 @@ export const MODEL_CONSTANTS = {
    * 蒸発・G 判定・v7 の風採点は V_10m のまま。
    * **1 = 従来とビット一致(気柱風の配列も作らない)。**
    */
-  moistureWindSurfaceBlend: 0.85312,
+  moistureWindSurfaceBlend: 0.74512,
   /**
    * 診断的境界層温 T_bl の緩和時間(日)(2026-08-25、海気分離 段 B 改。
    * docs/事前登録_境界層温による蒸発_2026-08-25.md)。
@@ -744,7 +744,7 @@ export const MODEL_CONSTANTS = {
   olrWaterTrapWm2: 0,
   /** ln の基準水蒸気量 mm(全球平均 W 程度。固定・掃引しない) */
   olrWaterRefMm: 8,
-  condensationClosureBlend: 0.132,
+  condensationClosureBlend: 0,
   /**
    * W の熱力学係留(2026-09-02)。線形凝結の床: lin·W → lin·(W − floor)⁺、
    * floor = rhFloor × W_sat(T)。凝結を駆動するのは W の量ではなく
@@ -775,7 +775,7 @@ export const MODEL_CONSTANTS = {
    * 下げる)。既定 0 = 従来の除算形 RHcrit·W_sat/G(G 形状に過敏だった)。
    * 事前登録_Wの熱力学係留_2026-09-02.md 追加登録 3(予測 96-99)。
    */
-  capLiftSubtractGamma: 0,
+  capLiftSubtractGamma: 0.14400000000000002,
   /**
    * 台帳 27(2026-09-03): 沈降抑制の非線形化 residual = (1 − c·subs)^p。
    * 1 = 従来と厳密一致。実測: サバナの乾季は W が雨季と同じで G だけが 0.52 に
@@ -796,7 +796,7 @@ export const MODEL_CONSTANTS = {
   /** 湿潤対流の発火する臨界柱相対湿度(cap = これ × W_sat / G) */
   criticalColumnRelativeHumidity: 0.73564,
   /** 対流調整の時定数 日 */
-  convectiveAdjustmentDays: 0.6841599999999999,
+  convectiveAdjustmentDays: 0.9081599999999999,
 
   // ---- Step 6 降水 (docs/spec/06_降水.md) ----
   /**
@@ -835,7 +835,7 @@ export const MODEL_CONSTANTS = {
   /** 水蒸気供給の海上減衰距離(km) */
   moistureDecayOceanKm: 1500,
   /** 陸上減衰距離(km、再循環なしの素の値) */
-  moistureDecayLandKm: 1887.5482424630225,
+  moistureDecayLandKm: 1783.5482424630225,
   /** 陸面再蒸発の強さ(0〜1、二回目のパスで局所降水に比例) */
   landRecyclingStrength: 0.30447434489689773,
   /**
@@ -941,7 +941,7 @@ export const MODEL_CONSTANTS = {
   /** 亜熱帯高圧帯(沈降域)の抑制率(0〜1)。下降枝全域(リッジ−16°〜+5°)に適用 */
   subsidenceSuppression: 0.98,
   /** 沈降抑制に対する ITCZ 影響の防護係数(1 = 完全防護) */
-  subsidenceItczProtection: 0.95,
+  subsidenceItczProtection: 0.91,
   /**
    * 亜熱帯高気圧の西翼(大陸東岸側)の湿潤化: 順行自転では東に海が近いセルほど
    * 沈降抑制を緩める(バミューダ高気圧西縁の湿潤流の相当物)。減衰距離 km。
@@ -1195,16 +1195,16 @@ export const MODEL_CONSTANTS = {
   /** 2 層化のフラグ。0 = 単層(従来とビット一致)、1 = 2 層。**v50 部分較正のため 1 に既定化(2026-09-07)。不採用なら 0 へ戻す** */
   moistureLayerSplit: 1,
   /** 地表収束 1 単位(収束指標、無次元)あたりの上向き交換率 k_up [1/月]。収束域で境界層の水が上へ */
-  layerExchangeUpPerConv: 3,
+  layerExchangeUpPerConv: 5.88,
   /** 地表発散 1 単位あたりの下向き交換率 k_dn [1/月]。発散域で自由対流圏の(乾いた)空気が下へ */
   layerExchangeDownPerDiv: 3,
   /** cap(逆転層)越しの背景混合 ε [1/月]。両方向に同じだけ掛かる */
-  layerBackgroundMixPerMonth: 1,
+  layerBackgroundMixPerMonth: 0.13599999999999995,
   /**
    * 境界層が持てる飽和水の割合(cap・床を W_sat のこの割合で縮める)。水蒸気のスケール高
    * 2〜2.5km に対し境界層 1〜1.5km で 0.5〜0.7。自由対流圏の cap は残り (1 − この値)
    */
-  boundaryLayerSatFrac: 0.6,
+  boundaryLayerSatFrac: 0.632,
   /** 自由対流圏の線形(層状)凝結率 = 境界層の線形率 × この値。0 = 自由対流圏は対流項でだけ降る */
   freeLayerLinearRateFrac: 0,
   /**

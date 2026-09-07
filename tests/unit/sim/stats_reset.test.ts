@@ -67,6 +67,9 @@ describe('診断の積算器はリセットで完全に初期化される', () =
         virgaNonConverged: 0,
         meanWaterMm: 0,
         waterSamples: 0,
+        meanWaterBoundaryMm: 0,
+        layerNonConverged: 0,
+        layerPasses: 0,
       },
     );
   });
@@ -82,6 +85,10 @@ describe('診断の積算器はリセットで完全に初期化される', () =
         'virgaNonConverged',
         'waterSamples',
         'worstResidual',
+        // 2 層化(2026-09-07)
+        'meanWaterBoundaryMm',
+        'layerNonConverged',
+        'layerPasses',
       ].sort(),
     );
   });

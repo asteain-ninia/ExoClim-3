@@ -34,10 +34,15 @@ const SHARPNESS = 2;
 
 let run: { result: PipelineResult; precipDiag: PrecipDiagnostics };
 let baseSharpness = 0;
+let baseSplit = 0;
 
 beforeAll(async () => {
   baseSharpness = K['crhSuppressionSharpness'] ?? 0;
   K['crhSuppressionSharpness'] = SHARPNESS;
+  // CRH を輸送の内部で解く経路は**単層の輸送解にしか無い**(2 層化 L-0 の制限、2026-09-07)。
+  // v50(2026-09-08)で既定が 2 層になったので、このテストは単層を明示して回す
+  baseSplit = K['moistureLayerSplit'] ?? 0;
+  K['moistureLayerSplit'] = 0;
   CRH_INNER.enabled = true;
   run = await runPipelineWithPrecipDiag(P2);
 }, 600_000);
@@ -46,6 +51,7 @@ afterAll(() => {
   // **必ず戻す。** モジュール全体の可変状態なので、漏らすと他のテストが汚れる
   CRH_INNER.enabled = false;
   K['crhSuppressionSharpness'] = baseSharpness;
+  K['moistureLayerSplit'] = baseSplit;
 });
 
 describe('CRH を輸送の内部で解く(段 25)', () => {
