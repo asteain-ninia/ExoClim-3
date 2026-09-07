@@ -388,6 +388,12 @@ export interface PrecipDiagnostics {
    * 見ないと先へ進めない。非保存のときは空配列。
    */
   waterMm: Float32Array[];
+  /** 2 層化のときだけ(単層では空配列): 層ごとの W・自由対流圏の凝結・層間交換 mm/月 */
+  waterBoundaryMm: Float32Array[];
+  waterFreeMm: Float32Array[];
+  condensationFreeMm: Float32Array[];
+  exchangeUpMm: Float32Array[];
+  exchangeDownMm: Float32Array[];
   /** 床再配分・月ブレンド前の降水 mm/月 */
   preAdjustMm: Float32Array[];
   /**
@@ -916,6 +922,12 @@ interface PrecipDiagMonth {
   condRateG: Float32Array;
   /** 保存型の可降水量 W mm(非保存では埋めない) */
   waterMm: Float32Array;
+  /** 2 層化(moistureLayerSplit > 0)のときだけ埋まる。単層では 0 のまま */
+  waterBoundaryMm: Float32Array;
+  waterFreeMm: Float32Array;
+  condensationFreeMm: Float32Array;
+  exchangeUpMm: Float32Array;
+  exchangeDownMm: Float32Array;
   preAdjustMm: Float32Array;
 }
 
@@ -936,6 +948,11 @@ function newDiagMonth(n: number): PrecipDiagMonth {
     crhSuppression: new Float32Array(n),
     condRateG: new Float32Array(n),
     waterMm: new Float32Array(n),
+    waterBoundaryMm: new Float32Array(n),
+    waterFreeMm: new Float32Array(n),
+    condensationFreeMm: new Float32Array(n),
+    exchangeUpMm: new Float32Array(n),
+    exchangeDownMm: new Float32Array(n),
     preAdjustMm: new Float32Array(n),
   };
 }
@@ -973,6 +990,11 @@ export async function computePrecipitation(
         crhSuppression: [],
         condRateG: [],
         waterMm: [],
+        waterBoundaryMm: [],
+        waterFreeMm: [],
+        condensationFreeMm: [],
+        exchangeUpMm: [],
+        exchangeDownMm: [],
         preAdjustMm: [],
         postAdjustDeltaMm: [],
         mmPerSupplyUnit:
@@ -1642,9 +1664,13 @@ export async function computePrecipitation(
       const conv = moistureConvergenceIndex(grid, ctx.params.body.radiusKm, ones, uq, vq);
       const sigmaUp = new Float32Array(N);
       const sigmaDn = new Float32Array(N);
+      // 段 L-1c の門: 持ち上げ G が強い所(深い対流)では収束した水はその場で降り、G が弱い
+      // 沈降域(cap の下の浅い循環)でだけ境界層から上へ抜ける。gateG = 0 で門なし(従来と一致)
+      const gateG = Math.max(0, K.layerExchangeLiftGateG as number);
       for (let i = 0; i < N; i++) {
         const c = conv[i] ?? 0;
-        sigmaUp[i] = kUp * Math.max(0, c) + eps;
+        const gate = gateG > 0 ? Math.exp(-(G[i] ?? 0) / gateG) : 1;
+        sigmaUp[i] = (kUp * Math.max(0, c) + eps) * gate;
         sigmaDn[i] = kDn * Math.max(0, -c) + eps;
       }
       const scaled = (a: Float32Array | null, f: number): Float32Array | undefined => {
@@ -1718,7 +1744,14 @@ export async function computePrecipitation(
       CONSERVATIVE_STATS.iterations += two.iterations;
       if (!two.converged) CONSERVATIVE_STATS.layerNonConverged++;
       CONSERVATIVE_STATS.layerPasses += two.passes;
-      if (diagM) diagM.waterMm.set(two.waterMm);
+      if (diagM) {
+        diagM.waterMm.set(two.waterMm);
+        diagM.waterBoundaryMm.set(two.waterBoundaryMm);
+        diagM.waterFreeMm.set(two.waterFreeMm);
+        diagM.condensationFreeMm.set(two.condensationFreeMm);
+        diagM.exchangeUpMm.set(two.exchangeUpMm);
+        diagM.exchangeDownMm.set(two.exchangeDownMm);
+      }
       return two.condensationMm;
     }
 
@@ -2302,6 +2335,13 @@ export async function computePrecipitation(
       if (K.conservativeMoisture > 0) {
         diag.condRateG.push(diagM.condRateG);
         diag.waterMm.push(diagM.waterMm);
+        if ((K.moistureLayerSplit as number) > 0) {
+          diag.waterBoundaryMm.push(diagM.waterBoundaryMm);
+          diag.waterFreeMm.push(diagM.waterFreeMm);
+          diag.condensationFreeMm.push(diagM.condensationFreeMm);
+          diag.exchangeUpMm.push(diagM.exchangeUpMm);
+          diag.exchangeDownMm.push(diagM.exchangeDownMm);
+        }
       }
       diag.preAdjustMm.push(diagM.preAdjustMm);
     }
