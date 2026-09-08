@@ -331,7 +331,7 @@ export const MODEL_CONSTANTS = {
    * より強くトラフを北上させる(WL#27/#32: 高所加熱)。標高 1.5→4km で
    * 0→1 に立ち上がり、高原の帯内占有率で重み付け
    */
-  itczPlateauPullDeg: 26.92,
+  itczPlateauPullDeg: 25,
   /**
    * 件 2(v31): 湿った陸の対流源への一般化吸引の上限(度)。
    * 経度列の熱帯〜亜熱帯帯(|lat| ≤ 35°)にある「低平で海に近い陸」
@@ -343,7 +343,7 @@ export const MODEL_CONSTANTS = {
    * SPACE 非投入。**0 = 無効(従来とビット一致)。**
    * docs/事前登録_v31物理バッチ_2026-08-21.md 件 2
    */
-  itczMoistLandPullDeg: 2.7399999999999998,
+  itczMoistLandPullDeg: 3.6399999999999997,
   /** 経度平滑化後に混ぜ戻す生値の割合(0 = 完全平滑)。モンスーンの経度局所性を保つ */
   itczSmoothLocalBlend: 0.25,
   /** ITCZ 影響帯の半幅(度) */
@@ -358,7 +358,7 @@ export const MODEL_CONSTANTS = {
    * 赤道常湿帯: 年平均 ITCZ 線の残留影響(0〜1)。実物の熱赤道近傍は年 2 回の
    * 通過と近接で乾季にも雨が残る(赤道 = 雨林の定量化)。幅は半幅 ×0.7
    */
-  equatorialItczResidual: 0.33999999999999997,
+  equatorialItczResidual: 0.3,
   /** 経度方向平滑化の半幅(度)。広すぎるとモンスーンの経度応答が希釈される */
   itczSmoothingHalfWidthDeg: 12,
 
@@ -429,7 +429,7 @@ export const MODEL_CONSTANTS = {
    * 0 = 従来とビット一致(パス 1 は常に素通し、2 パス目だけが読む)。
    * 事前登録: docs/事前登録_熱風リンク_2026-09-01.md(予測 72-75)
    */
-  thermalWindFactor: 0.162,
+  thermalWindFactor: 0,
   /**
    * 熱的低気圧の「厚み」の下限(0〜1)。**乾いた柱ほど浅い。**
    *
@@ -818,7 +818,7 @@ export const MODEL_CONSTANTS = {
    * 45b-2 の分解で、+5 のリテラルはゴビ(40°N)まで給水帯を延ばして B→D を
    * 作った。地域名指しの手直しはせず、定数化して較正に決めさせる(v27 候補)
    */
-  conveyorLatPolewardDeg: 7.2,
+  conveyorLatPolewardDeg: 8.16,
   /** コンベアの緯度窓の縁の減衰幅(度)。窓の外は線形にこの幅で 0 へ */
   conveyorLatSoftDeg: 3,
   /** コンベアの給水帯の奥行き(km)。東海岸からの減衰距離。SPACE 非投入 */
@@ -831,13 +831,13 @@ export const MODEL_CONSTANTS = {
    * 亜熱帯の冬雨(地中海型)を作る機構 — モデルは G が平坦で冬雨を持たない。
    * **0 = 無効(従来とビット一致)。**
    */
-  winterStormEquatorwardReachDeg: 6.559999999999999,
+  winterStormEquatorwardReachDeg: 7.199999999999998,
   /** 水蒸気供給の海上減衰距離(km) */
   moistureDecayOceanKm: 1500,
   /** 陸上減衰距離(km、再循環なしの素の値) */
   moistureDecayLandKm: 1783.5482424630225,
   /** 陸面再蒸発の強さ(0〜1、二回目のパスで局所降水に比例) */
-  landRecyclingStrength: 0.30447434489689773,
+  landRecyclingStrength: 0.33647434489689776,
   /**
    * 柱相対湿度による指数抑制の鋭さ。降水倍率 = exp(sharpness × (CRH − 1))。
    * **0 で無効**(倍率 1、従来と厳密に一致)。
@@ -929,7 +929,7 @@ export const MODEL_CONSTANTS = {
    * ITCZ 傘の海洋性ゲート: 供給(無次元)がこの値で傘が全開。乾燥内陸の
    * トラフ直下(アラビア型)では傘が開かず、湿潤収束(ベンガル型)では開く
    */
-  itczLiftSupplyNorm: 9.824,
+  itczLiftSupplyNorm: 9.334,
   /** ストームトラック(温帯低気圧帯)の増幅 */
   stormTrackBoost: 0.4,
   /** 寒候期のストームトラック追加増幅 */
@@ -937,7 +937,7 @@ export const MODEL_CONSTANTS = {
   /** 地形性上昇の増幅(基準勾配あたり) */
   orographicBoost: 1.44016,
   /** 風下雨陰の最大抑制(0〜1 が残存率の下限) */
-  rainShadowFloor: 0.2,
+  rainShadowFloor: 0.263,
   /** 亜熱帯高圧帯(沈降域)の抑制率(0〜1)。下降枝全域(リッジ−16°〜+5°)に適用 */
   subsidenceSuppression: 0.98,
   /** 沈降抑制に対する ITCZ 影響の防護係数(1 = 完全防護) */
@@ -946,7 +946,7 @@ export const MODEL_CONSTANTS = {
    * 亜熱帯高気圧の西翼(大陸東岸側)の湿潤化: 順行自転では東に海が近いセルほど
    * 沈降抑制を緩める(バミューダ高気圧西縁の湿潤流の相当物)。減衰距離 km。
    */
-  eastCoastSubsidenceRelief: 0.7632800000000002,
+  eastCoastSubsidenceRelief: 0.7272800000000001,
   eastCoastSubsidenceDecayKm: 600,
   /** \u6771\u5cb8\u7de9\u548c\u306e\u4f9b\u7d66\u5b9f\u7e3e\u30b2\u30fc\u30c8(\u3053\u306e\u4f9b\u7d66\u3067\u5168\u958b\u3002\u4e7e\u3044\u305f\u6d41\u5165\u306e\u6d77\u3092\u9664\u5916) */
   eastReliefSupplyNorm: 0.51072,
@@ -1065,7 +1065,7 @@ export const MODEL_CONSTANTS = {
   upwindBlockScanKm: 900,
   upwindBlockFloor: 1,
   /** 寒流沿岸の追加抑制率 */
-  coldCoastSuppression: 0.376,
+  coldCoastSuppression: 0.313,
   /** 全球スケール係数(供給×持ち上げ → mm/月) */
   precipScaleMmPerUnit: 8.2,
 
