@@ -93,7 +93,7 @@ export const MODEL_CONSTANTS = {
    * 直すなら熱容量ではなく移流結合の側で、両者は対で動かす必要がある
    * (片方だけ動かすと必ず悪化するので座標降下では谷を渡れない)。
    */
-  landEffectiveWaterDepthM: 3.2600000000000002,
+  landEffectiveWaterDepthM: 3.8600000000000003,
   /**
    * 陸が**完全に乾いたとき**の実効熱容量の、湿潤時に対する比(0〜1)。
    * 実効深さ = landEffectiveWaterDepthM × (frac + (1 − frac) × 年平均湿り具合)。
@@ -189,7 +189,7 @@ export const MODEL_CONSTANTS = {
    * 冬の接地逆転層は移流だけでなく拡散(自由大気との混合)も絶縁する。
    * 内陸度 1 の冬に拡散をこの係数まで低減(シベリア・南極内陸の冬の冷え込み)
    */
-  winterInversionDiffusionFactor: 0.80968,
+  winterInversionDiffusionFactor: 0.83768,
   /** 周極海峡行の海洋混合層の増深倍率(遮られない流路の深い鉛直混合) */
   channelMixedLayerBoost: 3.0,
   /** 気温減率(°C/km、標高降尺度と OLR 標高補正に使用) */
@@ -225,7 +225,7 @@ export const MODEL_CONSTANTS = {
    * 結線そのものではなく代用した物理量だったという読みに至り、
    * 実蒸発散へ繋ぎ替えた(types.ts の LandSurfaceState を参照)。
    */
-  evapCoolingWm2PerMmDay: 0.96,
+  evapCoolingWm2PerMmDay: 1.92,
   /**
    * 潜熱の物理定数(W/m² per mm/日) = ρ_w·L_v/86400。**較正しない。**
    * 蒸発帰還の大きさを理論値から起こすために置く。
@@ -318,7 +318,7 @@ export const MODEL_CONSTANTS = {
   /**
    * 海上の季節追従の減衰(Log/Pasta: ITCZ は海上でほとんど動かない)。
    * 経度列の帯内陸率 0 のときの追従率倍率(1 = 減衰なし) */
-  itczOceanFollowDamp: 1,
+  itczOceanFollowDamp: 0.948,
   /** 大陸モンスーンによる追加引き寄せ(度、夏半球の陸割合 1.0 のとき) */
   itczMonsoonPullDeg: 4,
   /**
@@ -451,7 +451,7 @@ export const MODEL_CONSTANTS = {
    * 半永続低気圧 — アリューシャン/アイスランド低相当)。海氷は後段のため
    * 極前線相対で配置。回転成分を通じて冬の西岸への暖気移流を生む
    */
-  subpolarWinterLowHpa: 5.736000000000001,
+  subpolarWinterLowHpa: 5.416,
   /**
    * 亜熱帯高気圧の離散セル化(WL#29): 帯ではなく海盆ごとのセルで、
    * 「自転方向の東」に大陸が近い側(= 寒流の流れる海盆東縁)ほど強い。
@@ -728,7 +728,7 @@ export const MODEL_CONSTANTS = {
    * **1 = 不発・従来とビット一致。**係数は各ステップ入口の T^n で評価
    * (半陰的 — 反復内では固定)。
    */
-  snowGripFactor: 0.46919999999999995,
+  snowGripFactor: 0.39719999999999994,
   /**
    * 段 C-2(2026-08-31、docs/事前登録_段C2_二温度場)。完全 2 温度場:
    * T_s(表面 = 現行 T の後継。放射・海氷・蒸発帰還・下流の読者はこちら)と
@@ -738,7 +738,7 @@ export const MODEL_CONSTANTS = {
    */
   twoTemperatureMode: 1,
   /** T_s↔T_a の交換係数 W/m²/K(SPACE 候補。雪 grip で変調 = 段 C-1 の転用) */
-  airSurfaceExchangeWm2PerK: 21.16,
+  airSurfaceExchangeWm2PerK: 16.759999999999998,
   /** 大気柱の熱容量 J/m²/K(c_p·p/g の算術 ≈ 1.0e7。物理定数 — 掃引しない) */
   atmosColumnHeatCapJm2K: 1.0e7,
   olrWaterTrapWm2: 0,
