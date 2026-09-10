@@ -1681,13 +1681,55 @@ export async function computePrecipitation(
       };
       // 自由対流圏の対流項: 閉包が二成分なら同じ対流率(cap は残りの割合)、
       // 単成分(c = 0)なら rate × freeLinFrac(0 なら自由対流圏は降らず、運ばれて戻るだけ)
-      const rateFree = capField ? rate : (scaled(rate, freeLinFrac) as Float32Array);
+      let rateFree = capField ? rate : (scaled(rate, freeLinFrac) as Float32Array);
       const linFree = scaled(linRate, freeLinFrac);
+      // 段 L-3(2026-09-10): 自由対流圏の飽和上限 cap_f = rhCap·(1 − satFrac)·W_sat(T_s)。閉包の二成分 c に
+      // 依らず常に効く。c = 0 で cap も線形項も無い「降らない貯水槽」を、温度で縛る。超過分は対流率
+      // (30.44 / convectiveAdjustmentDays)で降る。rhCap = 0 で従来どおり(ビット一致)。
+      const rhCapFree = Math.max(0, K.freeLayerRhCap as number);
+      let capFree: Float32Array | undefined = capField
+        ? (scaled(capField, 1 - satFrac) as Float32Array)
+        : undefined;
+      if (rhCapFree > 0) {
+        const pHpaFree = ctx.params.atmosphere.surfacePressureBar * 1013.25;
+        const convRateFree = MONTH_DAYS / Math.max(0.05, K.convectiveAdjustmentDays);
+        const capT = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+          const c = rhCapFree * (1 - satFrac) * saturatedColumnMm(tField[i] ?? 0, pHpaFree);
+          capT[i] = capFree ? Math.min(capFree[i] ?? c, c) : c;
+        }
+        capFree = capT;
+        if (!capField) {
+          // c = 0 のとき rate は境界層の λG(線形)なので、自由対流圏の対流率は別に持つ
+          const rf = new Float32Array(N);
+          rf.fill(convRateFree);
+          rateFree = rf;
+        }
+      }
+      // 段 L-3b(2026-09-10): 自由対流圏の風。既定 0 = 気柱輸送風。1 = ハドレー帯(|緯度| < リッジ)で
+      // 南北成分を逆向き(極向き = 上層の戻り流)にする。東西成分とリッジの外は気柱輸送風のまま。
+      let uFree: Float32Array = colU ?? uq;
+      let vFree: Float32Array = colV ?? vq;
+      if ((K.freeLayerWindMode as number) > 0) {
+        const ridgeN = Math.abs(windBelt.monthlyRidgeLatNDeg[m] ?? 31);
+        const ridgeS = Math.abs(windBelt.monthlyRidgeLatSDeg[m] ?? -31);
+        const vSrc = vFree;
+        vFree = new Float32Array(N);
+        for (let row = 0; row < grid.heightCells; row++) {
+          const lat = latDegOfRow(grid, row);
+          const inHadley = lat >= 0 ? lat < ridgeN : -lat < ridgeS;
+          for (let col = 0; col < grid.widthCells; col++) {
+            const i = row * grid.widthCells + col;
+            vFree[i] = inHadley ? -(vSrc[i] ?? 0) : (vSrc[i] ?? 0);
+          }
+        }
+        uFree = colU ?? uq;
+      }
       const two = solveTwoLayerTransport(
         grid,
         ctx.params.body.radiusKm,
         { u: uq, v: vq },
-        { u: colU ?? uq, v: colV ?? vq },
+        { u: uFree, v: vFree },
         src,
         {
           condensationRatePerMonth: rate,
@@ -1698,7 +1740,7 @@ export async function computePrecipitation(
         {
           condensationRatePerMonth: rateFree,
           ...(linFree ? { linearRatePerMonth: linFree } : {}),
-          ...(capField ? { holdingCapacityMm: scaled(capField, 1 - satFrac) as Float32Array } : {}),
+          ...(capFree ? { holdingCapacityMm: capFree } : {}),
           ...(linFloorField && linFree
             ? { linearFloorMm: scaled(linFloorField, 1 - satFrac) as Float32Array }
             : {}),
