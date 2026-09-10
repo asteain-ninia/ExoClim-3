@@ -267,6 +267,11 @@ const EXTRA_SPACE: Array<[keyof typeof MODEL_CONSTANTS, number, number]> = [
   ['layerExchangeDownPerDiv', 0, 10],
   ['layerBackgroundMixPerMonth', 0, 3],
   ['boundaryLayerSatFrac', 0.4, 0.8],
+  // 段 L-4a(2026-09-10、docs/事前登録_2層化の段L-4a_ハドレー戻り流の帯の型_2026-09-10.md): 自由対流圏の
+  // 戻り流の振幅・帯の端・温度の上限。単独掃引では振幅 0.3〜2 で効きが飽和、上限 0.6〜1.6 で分布の形が観測に寄る。
+  ['freeLayerHadleyReturnMs', 0, 2],
+  ['freeLayerHadleyEdgeScale', 0.7, 1.5],
+  ['freeLayerRhCap', 0.3, 2],
 ];
 const SPACE_KEYS_ENV = (process.env['OPTIMIZE_SPACE_KEYS'] ?? '')
   .split(',')
