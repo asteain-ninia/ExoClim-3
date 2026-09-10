@@ -141,7 +141,7 @@ export const MODEL_CONSTANTS = {
    * 周極海峡行の海上の雲増強(実在の南大洋は惑星で最も雲が多い海域。
    * 遮られない西風の吹送距離 → 常時ストーム雲。トポロジー判定で地理中立)
    */
-  channelCloudBoost: 0.36116,
+  channelCloudBoost: 0.35,
   /**
    * 陸の対流・前線雲の強さ。0 = 無効(従来と厳密一致)。
    *
@@ -178,7 +178,7 @@ export const MODEL_CONSTANTS = {
   stormTrackCloudBoost: 0.4,
   cloudAlbedoMax: 0.42808,
   /** 夏半球のストーム雲の海上残存率(陸側ジェットは弱まるが海は夏も曇天) */
-  stormCloudSummerOcean: 0.5,
+  stormCloudSummerOcean: 0.528,
   /** 雲変調に使う ITCZ 幅の倍率(実物の雲帯は降水影響圏より狭い) */
   itczCloudWidthFactor: 1.1,
   /** 寒流(SST 負偏差)上の層積雲デッキ: 偏差 -2°C で雲 +この比率 */
@@ -212,7 +212,7 @@ export const MODEL_CONSTANTS = {
    */
   boundaryCurrentCoastSlipCells: 2,
   /** 海流 SST 偏差を EBM に注入する結合係数(W/m²/K) */
-  sstAnomalyCouplingWm2PerK: 19.313599999999997,
+  sstAnomalyCouplingWm2PerK: 18.193599999999996,
   /**
    * 蒸発冷却の係数(W/m² per mm/日)。**実蒸発散の陸平均偏差**に掛ける。
    * 潜熱の物理値は λρ = 28.4 W/m² per mm/日。地表から出た潜熱の一部は
@@ -451,7 +451,7 @@ export const MODEL_CONSTANTS = {
    * 半永続低気圧 — アリューシャン/アイスランド低相当)。海氷は後段のため
    * 極前線相対で配置。回転成分を通じて冬の西岸への暖気移流を生む
    */
-  subpolarWinterLowHpa: 5.416,
+  subpolarWinterLowHpa: 5.736000000000001,
   /**
    * 亜熱帯高気圧の離散セル化(WL#29): 帯ではなく海盆ごとのセルで、
    * 「自転方向の東」に大陸が近い側(= 寒流の流れる海盆東縁)ほど強い。
