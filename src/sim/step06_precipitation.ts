@@ -343,6 +343,34 @@ export function saturationVaporPressureHpa(tempC: number): number {
 //   まとめ、preAdjustMm = 供給和 × upwindBlock × liftItcz × liftFrontal ×
 //   liftOrographic × subsidenceResidual × liftOther × 変換係数 で厳密再構成できる。
 //   最終降水との差は床再配分・月ブレンド(陸のみ)による。
+/**
+ * 段 L-4a: 自由対流圏の南北風を、リッジより赤道側で**極向きの帯の型** A·sin(π·|φ|/φ_H) に置き換える。
+ * φ_H(半球ごと)より極側は与えられた風 vCol のまま。A = 0 なら vCol をそのまま返す。純粋関数。
+ */
+export function hadleyReturnMeridionalWind(
+  grid: Grid,
+  edgeNDeg: number,
+  edgeSDeg: number,
+  amplitudeMs: number,
+  vCol: Float32Array,
+): Float32Array {
+  if (!(amplitudeMs > 0)) return vCol;
+  const out = new Float32Array(vCol.length);
+  for (let row = 0; row < grid.heightCells; row++) {
+    const lat = latDegOfRow(grid, row);
+    const a = Math.abs(lat);
+    const edge = lat >= 0 ? edgeNDeg : edgeSDeg;
+    const inside = edge > 0 && a < edge;
+    // 北半球は北向き(正)、南半球は南向き(負)が極向き
+    const vBand = inside ? (lat >= 0 ? 1 : -1) * amplitudeMs * Math.sin((Math.PI * a) / edge) : 0;
+    for (let col = 0; col < grid.widthCells; col++) {
+      const i = row * grid.widthCells + col;
+      out[i] = inside ? vBand : (vCol[i] ?? 0);
+    }
+  }
+  return out;
+}
+
 export interface PrecipDiagnostics {
   /** [month][cell] 海洋由来供給(無次元供給量) */
   supplyOcean: Float32Array[];
@@ -1724,6 +1752,20 @@ export async function computePrecipitation(
           }
         }
         uFree = colU ?? uq;
+      }
+      // 段 L-4a(2026-09-10): ハドレー戻り流の帯の型。既定 0 で vFree は触らない(ビット一致)
+      {
+        const aH = Math.max(0, K.freeLayerHadleyReturnMs as number);
+        if (aH > 0) {
+          const edge = Math.max(0.1, K.freeLayerHadleyEdgeScale as number);
+          vFree = hadleyReturnMeridionalWind(
+            grid,
+            Math.abs(windBelt.monthlyRidgeLatNDeg[m] ?? 31) * edge,
+            Math.abs(windBelt.monthlyRidgeLatSDeg[m] ?? -31) * edge,
+            aH,
+            vFree,
+          );
+        }
       }
       const two = solveTwoLayerTransport(
         grid,
