@@ -50,12 +50,19 @@
 
 ## ライセンスと出典の扱い
 
-各データセットのライセンス・引用要件は**原典に従います**。ここに複製したのは
-利用のためであって再配布のためではありません。公開時は原典の表記を確認すること。
+`processed/` と `raw/` の地球のデータは、下の原典を 1° などへ集約・加工したもの。
+ライセンスと引用の求めは原典に従う(2026-11-05 の公開にあたり確認)。
 
-- ETOPO 2022: NOAA NCEI
-- Köppen-Geiger 1991–2020: Beck, H.E. et al. (2023), *Scientific Data*
-- Natural Earth: public domain
+- **ETOPO 2022**: NOAA National Centers for Environmental Information (2022).
+  *ETOPO 2022 15 Arc-Second Global Relief Model.* doi:10.25921/fd45-gt74
+  (米国政府の作成物。引用を求めている)
+- **Köppen-Geiger 1991–2020**: Beck, H.E., McVicar, T.R., Vergopolan, N. et al. (2023).
+  *High-resolution (1 km) Köppen-Geiger maps for 1901–2099 based on constrained CMIP6 projections.*
+  Scientific Data 10, 724. doi:10.1038/s41597-023-02549-6
+  (データは CC BY 4.0。配布元 https://www.gloh2o.org/koppen/)
+- **Natural Earth**: public domain(https://www.naturalearthdata.com/)
+
+`shukkai_*` と `config/` は出界(作者の架空世界)の値で、上の原典とは関係ない。
 
 ## 変更したスクリプト(2026-08-08)
 
